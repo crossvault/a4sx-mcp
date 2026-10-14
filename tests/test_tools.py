@@ -250,7 +250,7 @@ def test_publish_saves_privately(client, stub):
     assert "separate, reviewed step" in s["next"]
     assert len(stub.calls("POST", "/library/ensure")) == 1
     (push,) = stub.pushed
-    assert push.query == {"label": "lab", "title": "T", "parent": "p1", "client_scrub": "secrets-only"}
+    assert push.query == {"label": "lab", "title": "T", "parent": "p1", "client_scrub": "full"}
     assert push.headers["idempotency-key"] == "key-1"
     assert push.headers["x-content-sha256"] == hashlib.sha256(push.body).hexdigest()
     assert "visibility" not in push.query  # there is no way to ask for anything but private

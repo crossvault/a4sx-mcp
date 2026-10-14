@@ -30,6 +30,8 @@ First release candidate.
 - `fetch_session_context` still loads a session when the library listing can't be read (it is then
   treated as another author's).
 - Uploads ride out a busy server scrub pool (from the `a4sx` SDK).
+- The local scrub of `publish_session` (transcript, title, label) is the `a4sx` SDK's, which applies the
+  a4sx CLI's rules: secrets and personal data (`client_scrub=full`).
 
 ### Added
 

@@ -9,6 +9,13 @@ It runs on your machine over stdio. Your a4sx token stays in the a4sx config dir
 ever sent to the server that issued it: pointing the server elsewhere with `--base` never sends it a
 token from another server.
 
+**Private library**: the sessions saved under your a4sx account on session-exchange.com. Its entries
+are not listed in the marketplace and not returned by public search; they are listed, fetched,
+versioned and deleted through the a4sx API with your own sign-in (or an agent key you create). Listing
+a session in the marketplace is a separate step in the web app, with a review. "Private" describes who
+can list and fetch an entry through a4sx; the server stores the bytes you upload, after scrubbing them
+again.
+
 ## Tools
 
 The names, input schemas and limits are the same as the hosted a4sx MCP server's.
@@ -34,9 +41,10 @@ Safety rules:
 - **`publish_session` only saves privately.** `visibility` accepts only `"private"`; listing a session
   publicly is a separate, reviewed step in the web app. It accepts only Claude Code or Codex CLI JSONL
   (every line a record with a `type`; a Claude Code user or assistant turn with a session id, or a Codex
-  CLI `session_meta` record first), so it can't be used to upload an arbitrary file. The transcript, its title and its label are pre-scrubbed on your machine
-  (the `a4sx` SDK's rules) and scrubbed again by the server. Scrubbing removes token-shaped secrets; it
-  is a backstop, not a guarantee, and it does not remove names, paths or e-mail addresses. A session
+  CLI `session_meta` record first), so it can't be used to upload an arbitrary file. The transcript, its title and its label are
+  scrubbed on your machine with the `a4sx` SDK, which applies the a4sx CLI's rules (secrets, command-line
+  passwords, Sheet ids, and personal data: e-mail and IP addresses, home-directory user names, hosts,
+  key-file paths), and scrubbed again by the server. Scrubbing is a backstop, not a guarantee. A session
   that continues someone else's (its `parent`, or the session it was resumed from, was acquired) stays
   marked as untrusted (`untrusted: true`).
 - **Neither tool asks for confirmation inside the protocol.** Like the hosted server, it relies on the
@@ -142,7 +150,9 @@ Everything is optional. Don't put your token into an MCP client config file: sig
 ## Local server or remote `/mcp`?
 
 a4sx also runs a hosted MCP server at `https://session-exchange.com/mcp`, with browser sign-in over
-OAuth (scopes such as `library:read`); public search there works without signing in. Clients that
+OAuth: it advertises the scope `library:read` (search your library, summaries, loading sessions as
+context). Public search there works without signing in; acquiring or saving sessions needs a credential with
+`library:acquire` or `library:publish`, for example an agent key created in your a4sx account. Clients that
 support remote MCP servers with OAuth can connect to it directly and need nothing installed:
 
 ```sh
@@ -169,8 +179,8 @@ Same in both:
 Differences of this local server:
 
 - **Sign-in.** It uses your `a4sx login` session, so it can do everything your account can in your own
-  library. The hosted server takes scoped, short-lived OAuth tokens (`library:read`, `library:acquire`,
-  `library:publish`) per client. With no sign-in at all, local tools return `not_signed_in`; the hosted
+  library. The hosted server takes a scoped OAuth token (it advertises `library:read`) or an agent key
+  with the scopes you gave it (`library:read`, `library:acquire`, `library:publish`). With no sign-in at all, local tools return `not_signed_in`; the hosted
   server answers with an OAuth challenge instead. The `credential_not_accepted` message says to run
   `a4sx login` rather than to get a scoped token.
 - **Rate limits.** They are counted per process, not per account. There is no failed-sign-in limit,
@@ -184,7 +194,7 @@ Differences of this local server:
     The hosted server sends a key only if you pass one.
   - Uploads are retried twice, with that same key, on network errors, 429 and 502-504; when the
     server is busy scrubbing other uploads, up to 6 attempts, each after the wait it asks for.
-  - The body, title and label are pre-scrubbed locally, so the `X-Content-SHA256` sent to the API
+  - The body, title and label are scrubbed locally, so the `X-Content-SHA256` sent to the API
     covers the scrubbed bytes.
   - The content check is stricter: every line must be a JSON record with a `type`, and the file a
     Claude Code or Codex CLI session.
