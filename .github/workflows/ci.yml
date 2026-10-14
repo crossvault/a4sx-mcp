@@ -1,0 +1,99 @@
+# SPDX-FileCopyrightText: 2026 crossVault GmbH
+# SPDX-License-Identifier: Apache-2.0
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      # `a4sx` (the SDK this server is built on) is a normal PyPI dependency. Until a release that
+      # satisfies the pin is on PyPI, CI tests against crossvault/a4sx main instead. release.yml never
+      # does this: a release is tested against a4sx from PyPI only.
+      - name: Install
+        run: |
+          if ! python -m pip download --quiet --no-deps --dest "$RUNNER_TEMP/a4sx-probe" 'a4sx>=0.11.0,<0.12'; then
+            echo "::notice::a4sx>=0.11.0,<0.12 is not on PyPI yet; testing against crossvault/a4sx main"
+            python -m pip install 'a4sx @ git+https://github.com/crossvault/a4sx@main'
+          fi
+          python -m pip install -e '.[test]'
+      - name: Test (offline)
+        run: python -m pytest -q
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: python -m pip install 'ruff>=0.5' 'reuse[charset-normalizer]>=4'
+      - name: ruff
+        run: ruff check .
+      - name: REUSE / licence headers
+        run: reuse lint
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install build
+          python -m build
+      - name: Smoke-test the wheel
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel-venv"
+          pip="$RUNNER_TEMP/wheel-venv/bin/pip"
+          if ! "$pip" download --quiet --no-deps --dest "$RUNNER_TEMP/a4sx-probe" 'a4sx>=0.11.0,<0.12'; then
+            "$pip" install 'a4sx @ git+https://github.com/crossvault/a4sx@main'   # not on PyPI yet, as above
+          fi
+          "$pip" install dist/*.whl
+          "$RUNNER_TEMP/wheel-venv/bin/a4sx-mcp" --version
+
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Every commit is signed off (Developer Certificate of Origin)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          for c in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            if ! git show -s --format=%B "$c" | grep -q '^Signed-off-by: '; then
+              echo "::error::commit $c has no Signed-off-by line (use git commit -s)"
+              missing=1
+            fi
+          done
+          exit $missing
