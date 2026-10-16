@@ -76,6 +76,26 @@ jobs:
           "$pip" install dist/*.whl
           "$RUNNER_TEMP/wheel-venv/bin/a4sx-mcp" --version
 
+  # The VS Code extension in vscode/: compile and unit-test only. Nothing here packages or publishes it.
+  vscode:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vscode
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - name: Install
+        run: npm ci --ignore-scripts
+      - name: Compile
+        run: npm run compile
+      - name: Unit tests
+        run: npm test
+
   dco:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest

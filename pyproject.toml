@@ -51,6 +51,8 @@ packages = ["src/a4sx_mcp"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src", "tests", "LICENSES", "LICENSE", "NOTICE", "README.md", "CHANGELOG.md", "REUSE.toml"]
+# The VS Code extension is not part of the Python package (the patterns above would also match vscode/src etc.).
+exclude = ["/vscode"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
