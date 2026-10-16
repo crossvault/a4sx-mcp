@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "a4sx-mcp"
-version = "0.1.0rc1"
+version = "0.1.0rc2"
 description = "Local MCP server (stdio) for a4sx: search, load and save coding-agent sessions from any MCP client."
 readme = "README.md"
 requires-python = ">=3.10"

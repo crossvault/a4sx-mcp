@@ -5,4 +5,4 @@
 Run it with ``uvx a4sx-mcp``; see :mod:`a4sx_mcp.server` and :mod:`a4sx_mcp.tools`.
 """
 
-__version__ = "0.1.0rc1"
+__version__ = "0.1.0rc2"
