@@ -6,7 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.1.0rc1] - unreleased
+## [0.1.0rc2] - 2026-10-16
+
+### Added
+
+- The VS Code extension in `vscode/` and a `server.json` for the MCP Registry.
+- The README carries the MCP Registry ownership marker for `com.session-exchange/sessions`.
+
+## [0.1.0rc1] - 2026-10-16
 
 First release candidate.
 

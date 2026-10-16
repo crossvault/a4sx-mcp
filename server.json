@@ -21,7 +21,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "a4sx-mcp",
-      "version": "0.1.0rc1",
+      "version": "0.1.0rc2",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
