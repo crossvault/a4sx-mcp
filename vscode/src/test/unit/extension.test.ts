@@ -72,13 +72,16 @@ describe("activate: wiring", () => {
     assert.strictEqual(pkg.contributes.configuration.properties["a4sx.cliPath"].scope, "machine");
   });
 
-  it("the listing never names the internal brand", () => {
+  it("the listing names the product a4sx and links only public places", () => {
     const listing = ["package.json", "README.md", "CHANGELOG.md"].map((f) =>
       fs.readFileSync(path.join(__dirname, "..", "..", "..", f), "utf8"));
     for (const text of listing) {
-      const withoutRepoUrl = text.replace(/github\.com\/dropdeadfu\/agent-mdx[^\s")]*/g, "");
-      assert.ok(!/agent-mdx|amdx|polaris/i.test(withoutRepoUrl), "internal name in public text");
+      for (const url of text.match(/https?:\/\/[^\s")\]]+/g) ?? []) {
+        assert.ok(/^https:\/\/(session-exchange\.com|github\.com\/crossvault\/|code\.visualstudio\.com|modelcontextprotocol\.io)/.test(url),
+          `unexpected link in public text: ${url}`);
+      }
     }
+    assert.ok(listing[1].includes("a4sx"), "README names the product");
   });
 });
 
