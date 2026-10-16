@@ -1,0 +1,99 @@
+{
+  "name": "a4sx",
+  "displayName": "a4sx",
+  "description": "Use a4sx from VS Code: adds the a4sx MCP server for agent mode and saves your latest Claude Code session to your a4sx library.",
+  "version": "0.1.0",
+  "publisher": "a4sx",
+  "license": "Apache-2.0",
+  "homepage": "https://session-exchange.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/crossvault/a4sx-mcp.git",
+    "directory": "vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/crossvault/a4sx-mcp/issues"
+  },
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
+  },
+  "pricing": "Free",
+  "engines": {
+    "vscode": "^1.101.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "keywords": [
+    "a4sx",
+    "mcp",
+    "agent sessions",
+    "claude code",
+    "copilot"
+  ],
+  "main": "./out/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": {
+      "supported": "limited",
+      "description": "Saving a session runs the a4sx CLI in a local terminal, which needs a local workspace."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "a4sx.saveSession",
+        "title": "Save this session",
+        "category": "a4sx"
+      },
+      {
+        "command": "a4sx.openLibrary",
+        "title": "Open my library",
+        "category": "a4sx"
+      }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "a4sx.mcpServers",
+        "label": "a4sx"
+      }
+    ],
+    "configuration": {
+      "title": "a4sx",
+      "properties": {
+        "a4sx.cliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Full path to the `a4sx` command. Leave empty to find `a4sx` on your `PATH`."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "mocha --require ./out/test/fakeVscode.js \"out/test/unit/**/*.test.js\"",
+    "test:integration": "npm run compile && vscode-test",
+    "package": "vsce package --no-dependencies",
+    "ls": "vsce ls --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.18.0",
+    "@types/vscode": "1.101.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.6.0",
+    "mocha": "^11.7.0",
+    "typescript": "^5.9.2"
+  }
+}

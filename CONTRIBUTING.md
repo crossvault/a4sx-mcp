@@ -41,6 +41,15 @@ A DCO check runs on every pull request. To fix a missing sign-off on your last c
 
   If you prefer to keep your own copyright line, add it below; the sign-off is what matters.
 
+## VS Code extension
+
+The extension lives in `vscode/` (TypeScript, Node.js 22). Before pushing a change to it, run
+`npm install`, `npm run compile` and `npm test` in that directory; CI runs the same. Don't commit
+`node_modules/`, `out/` or `.vsix` files.
+
+The `publisher` in `vscode/package.json` is a placeholder (`a4sx`) until the Visual Studio Marketplace
+publisher id is set. Nothing in this repository packages or publishes the extension.
+
 ## AI-assisted contributions
 
 You may use AI tools. You are still the author: you must understand and be able to explain every line,

@@ -207,6 +207,32 @@ Differences of this local server:
   store.
 - **Server name.** It is `a4sx-mcp` in the MCP handshake (hosted: `com.session-exchange/sessions`).
 
+## VS Code extension
+
+The [`vscode/`](vscode/) directory holds the a4sx extension for VS Code 1.101 or later. It adds the
+hosted a4sx MCP servers to agent mode in VS Code chat; VS Code runs the sign-in. Its command
+**a4sx: Save this session** runs `a4sx push --latest` in a terminal, which saves your most recently
+changed local Claude Code session to your a4sx library. To continue a saved session, use Claude Code;
+other harnesses can't resume sessions today.
+
+The extension is not on the Visual Studio Marketplace yet. To build and test it from source:
+
+```sh
+cd vscode
+npm install
+npm run compile
+npm test
+```
+
+## MCP registry
+
+[`server.json`](server.json) describes this server for the
+[MCP Registry](https://registry.modelcontextprotocol.io): the hosted server at
+`https://session-exchange.com/mcp` (Streamable HTTP) and this package on PyPI (`a4sx-mcp`, stdio).
+It uses the name `com.session-exchange/sessions`, under which the hosted server is already listed.
+
+<!-- mcp-name: com.session-exchange/sessions -->
+
 ## Development
 
 ```sh

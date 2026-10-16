@@ -8,3 +8,8 @@ dist/
 .venv/
 venv/
 .coverage
+# VS Code extension (vscode/): dependencies, build output, test downloads, packages
+node_modules/
+vscode/out/
+.vscode-test/
+*.vsix
