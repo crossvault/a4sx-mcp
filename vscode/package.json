@@ -3,7 +3,7 @@
   "displayName": "a4sx",
   "description": "Use a4sx from VS Code: adds the a4sx MCP server for agent mode and saves your latest Claude Code session to your a4sx library.",
   "version": "0.1.0",
-  "publisher": "a4sx",
+  "publisher": "crossvaultGmbH",
   "license": "Apache-2.0",
   "homepage": "https://session-exchange.com",
   "repository": {
@@ -14,7 +14,7 @@
   "bugs": {
     "url": "https://github.com/crossvault/a4sx-mcp/issues"
   },
-  "icon": "media/icon.png",
+  "icon": "images/icon.png",
   "galleryBanner": {
     "color": "#1e1e1e",
     "theme": "dark"

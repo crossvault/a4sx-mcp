@@ -2,6 +2,7 @@ src/**
 out/test/**
 out/**/*.map
 scripts/**
+media/**
 node_modules/**
 .vscode-test/**
 .vscode-test.mjs

@@ -8,7 +8,7 @@ SPDX-License-Identifier = "Apache-2.0"
 
 # The VS Code extension (vscode/): files that can't carry a comment header. Its .ts/.mjs sources have one.
 [[annotations]]
-path = ["vscode/README.md", "vscode/CHANGELOG.md", "vscode/LICENSE", "vscode/package.json", "vscode/package-lock.json", "vscode/tsconfig.json", "vscode/media/icon.png", "vscode/.gitignore", "vscode/.vscodeignore"]
+path = ["vscode/README.md", "vscode/CHANGELOG.md", "vscode/LICENSE", "vscode/package.json", "vscode/package-lock.json", "vscode/tsconfig.json", "vscode/media/icon.png", "vscode/images/icon.png", "vscode/.gitignore", "vscode/.vscodeignore"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 crossVault GmbH"
 SPDX-License-Identifier = "Apache-2.0"

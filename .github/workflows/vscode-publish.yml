@@ -1,0 +1,128 @@
+# SPDX-FileCopyrightText: 2026 crossVault GmbH
+# SPDX-License-Identifier: Apache-2.0
+#
+# Packages the VS Code extension in vscode/ and publishes it to the Visual Studio Marketplace as
+# crossvaultGmbH.a4sx. It signs in with workload identity federation (OIDC); no PAT or other secret is
+# stored anywhere. The `publish` job runs only in the `marketplace` environment, which needs the owner's
+# approval, so neither a tag nor a manual run can publish on its own.
+#
+#   workflow_dispatch, mode=verify (default): package, then `vsce verify-pat` proves the identity may
+#                                             publish for crossvaultGmbH. Nothing is published.
+#   workflow_dispatch, mode=publish, or a `vscode-v<version>` tag: package, then publish that exact .vsix.
+#
+# Every action is pinned to a full commit SHA; vsce is pinned to an exact version and installed from
+# vscode/package-lock.json.
+name: VS Code extension publish
+
+on:
+  push:
+    tags: ["vscode-v*"]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "verify: check publish rights only. publish: publish to the Marketplace."
+        type: choice
+        options: [verify, publish]
+        default: verify
+
+permissions:
+  contents: read
+
+env:
+  VSCE_VERSION: "3.9.2"
+  PUBLISHER: crossvaultGmbH
+  # A tag push always publishes; a manual run does what its `mode` input says.
+  MODE: ${{ github.event_name == 'push' && 'publish' || inputs.mode }}
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vscode
+    outputs:
+      vsix: ${{ steps.pack.outputs.vsix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - name: Publish only from main or a vscode-v* tag
+        if: env.MODE == 'publish'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          case "$REF" in
+            refs/heads/main|refs/tags/vscode-v*) ;;
+            *) echo "::error::publish runs only from main or a vscode-v* tag, not $REF"; exit 1 ;;
+          esac
+      - name: Tag version matches package.json
+        if: startsWith(github.ref, 'refs/tags/vscode-v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "${TAG#vscode-v}" != "$version" ]; then
+            echo "::error::tag $TAG does not match package.json version $version"; exit 1
+          fi
+      - name: Install
+        run: npm ci --ignore-scripts
+      - name: vsce is the pinned version
+        run: test "$(npx --no-install vsce --version)" = "$VSCE_VERSION"
+      - name: Unit tests
+        run: npm test
+      - name: Package
+        id: pack
+        run: |
+          vsix="a4sx-$(node -p "require('./package.json').version").vsix"
+          npx "@vscode/vsce@$VSCE_VERSION" package --out "$vsix"
+          npx "@vscode/vsce@$VSCE_VERSION" ls
+          echo "vsix=$vsix" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vsix
+          path: vscode/${{ steps.pack.outputs.vsix }}
+          if-no-files-found: error
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    environment: marketplace
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: vscode
+    steps:
+      # Checked out only for package-lock.json, so vsce comes from the lockfile, not a fresh resolve.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - name: Install
+        run: npm ci --ignore-scripts
+      - name: vsce is the pinned version
+        run: test "$(npx --no-install vsce --version)" = "$VSCE_VERSION"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: env.MODE == 'publish'
+        with:
+          name: vsix
+          path: ${{ runner.temp }}/vsix
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Verify publish rights (publishes nothing)
+        if: env.MODE == 'verify'
+        run: npx "@vscode/vsce@$VSCE_VERSION" verify-pat "$PUBLISHER" --azure-credential
+      - name: Publish
+        if: env.MODE == 'publish'
+        env:
+          VSIX: ${{ runner.temp }}/vsix/${{ needs.package.outputs.vsix }}
+        run: npx "@vscode/vsce@$VSCE_VERSION" publish --packagePath "$VSIX" --azure-credential

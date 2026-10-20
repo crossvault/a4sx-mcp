@@ -72,6 +72,13 @@ describe("activate: wiring", () => {
     assert.strictEqual(pkg.contributes.configuration.properties["a4sx.cliPath"].scope, "machine");
   });
 
+  it("the manifest names the Marketplace publisher and a PNG icon of at least 128x128", () => {
+    assert.strictEqual(pkg.publisher, "crossvaultGmbH");
+    const icon = fs.readFileSync(path.join(__dirname, "..", "..", "..", pkg.icon));
+    assert.ok(icon.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), "icon is a PNG");
+    assert.ok(icon.readUInt32BE(16) >= 128 && icon.readUInt32BE(20) >= 128, "icon is at least 128x128");
+  });
+
   it("the listing names the product a4sx and links only public places", () => {
     const listing = ["package.json", "README.md", "CHANGELOG.md"].map((f) =>
       fs.readFileSync(path.join(__dirname, "..", "..", "..", f), "utf8"));

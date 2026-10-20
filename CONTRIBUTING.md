@@ -47,8 +47,9 @@ The extension lives in `vscode/` (TypeScript, Node.js 22). Before pushing a chan
 `npm install`, `npm run compile` and `npm test` in that directory; CI runs the same. Don't commit
 `node_modules/`, `out/` or `.vsix` files.
 
-The `publisher` in `vscode/package.json` is a placeholder (`a4sx`) until the Visual Studio Marketplace
-publisher id is set. Nothing in this repository packages or publishes the extension.
+The extension is published to the Visual Studio Marketplace as `crossvaultGmbH.a4sx` by
+`.github/workflows/vscode-publish.yml`, only from a `vscode-v*` tag or a manual run, and only after the
+owner approves the `marketplace` environment. Pushes and pull requests never package or publish it.
 
 ## AI-assisted contributions
 
