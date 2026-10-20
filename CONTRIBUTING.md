@@ -49,7 +49,7 @@ The extension lives in `vscode/` (TypeScript, Node.js 22). Before pushing a chan
 
 The extension is published to the Visual Studio Marketplace as `crossvaultGmbH.a4sx` by
 `.github/workflows/vscode-publish.yml`, only from a `vscode-v*` tag or a manual run, and only after the
-owner approves the `marketplace` environment. Pushes and pull requests never package or publish it.
+owner approves the `marketplace` environment. Branch pushes and pull requests never package or publish it.
 
 ## AI-assisted contributions
 
