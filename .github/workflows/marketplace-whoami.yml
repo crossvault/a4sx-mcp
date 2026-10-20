@@ -4,7 +4,7 @@
 # One-off, manual: prints the Visual Studio Marketplace profile id of the Entra app that will publish the
 # VS Code extension, so the owner can add that id as a Contributor member of the Marketplace publisher.
 # It signs in with workload identity federation (OIDC); no secret is stored anywhere. The id it prints is
-# an identifier, not a credential. Runs only in the `visual-studio-marketplace` environment, which needs
+# an identifier, not a credential. Runs only in the `marketplace` environment, which needs
 # the owner's approval. Every action is pinned to a full commit SHA.
 name: Marketplace whoami
 
@@ -17,7 +17,7 @@ permissions:
 jobs:
   whoami:
     runs-on: ubuntu-latest
-    environment: visual-studio-marketplace
+    environment: marketplace
     permissions:
       id-token: write
       contents: read
