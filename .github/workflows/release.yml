@@ -9,7 +9,9 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    # PyPI tags are v<digit>... (v0.1.0rc1). Not plain "v*": that also matches vscode-v* (the VS Code
+    # extension's tags, see vscode-publish.yml), and a PyPI upload can never be replaced.
+    tags: ["v[0-9]*"]
 
 permissions:
   contents: read
