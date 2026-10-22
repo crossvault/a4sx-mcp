@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Adds **Resume in Claude Code** to the sessions in **My sessions**. It copies the session into Claude Code's local history for the open folder and opens it in the Claude Code extension. It needs the Claude Code extension and the a4sx CLI 0.10.77 or later.
+- Finds the a4sx CLI in `~/.local/bin`, `/usr/local/bin` and `/opt/homebrew/bin` when it isn't on the `PATH` that VS Code sees. This fixes "The a4sx command was not found on your PATH" when VS Code was started from the dock or a menu.
+
 ## 0.2.0
 
 - Adds the a4sx sidebar to the activity bar.

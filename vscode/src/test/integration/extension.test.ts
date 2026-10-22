@@ -12,7 +12,7 @@ suite("a4sx extension (in VS Code)", () => {
     await ext.activate();
     const commands = await vscode.commands.getCommands(true);
     for (const id of ["a4sx.saveSession", "a4sx.openLibrary", "a4sx.signIn", "a4sx.signOut", "a4sx.refreshSessions",
-      "a4sx.resumeSession", "a4sx.openSessionOnWeb", "a4sx.copySessionId", "a4sx.searchMarketplace", "a4sx.openListing"]) {
+      "a4sx.resumeSession", "a4sx.resumeInClaude", "a4sx.openSessionOnWeb", "a4sx.copySessionId", "a4sx.searchMarketplace", "a4sx.openListing"]) {
       assert.ok(commands.includes(id), id);
     }
   });
