@@ -61,6 +61,9 @@ describe("Resume in Claude Code: helpers", () => {
     assert.strictEqual(cr.isOldCli(1, argparse), false);
     assert.strictEqual(cr.isOldCli(2, "a4sx: error: no session named x\n"), false);
     assert.strictEqual(cr.isOldCli(null, argparse), false);
+    // A newer CLI that fails for another reason and merely mentions the flag is not "old".
+    assert.strictEqual(cr.isOldCli(2, "a4sx: error: --seed-only needs a saved session\n"), false);
+    assert.strictEqual(cr.isOldCli(2, "a4sx: error: unrecognized arguments: --other\n"), false);
   });
 
   it("the error detail is the last stderr line, one line, no escapes, capped", () => {
@@ -85,6 +88,7 @@ describe("Resume in Claude Code: seedSession", () => {
     assert.deepStrictEqual(f.seen[0].args, ["launch", "--a4sx-session=my base; rm x", "--seed-only"]);
     assert.strictEqual(f.seen[0].options.cwd, "/w/proj");
     assert.strictEqual(f.seen[0].options.timeout, cr.SEED_TIMEOUT_MS);
+    assert.strictEqual(f.seen[0].options.maxBuffer, 64 * 1024);
     assert.ok(f.seen[0].stdinEnded, "stdin is closed so a question can't hang it");
   });
 
@@ -98,6 +102,17 @@ describe("Resume in Claude Code: seedSession", () => {
     assert.deepStrictEqual(await run({ error: exitError(null as any, { killed: true, signal: "SIGTERM" }) }), { kind: "timeout" });
     const abortErr = Object.assign(new Error("aborted"), { name: "AbortError", code: "ABORT_ERR" });
     assert.deepStrictEqual(await run({ error: abortErr }), { kind: "cancelled" });
+    const tooMuch = Object.assign(new Error("stdout maxBuffer length exceeded"), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" });
+    assert.deepStrictEqual(await run({ error: tooMuch, stderr: "partial note\n" }), { kind: "failed", exitCode: null, detail: "" });
+    assert.deepStrictEqual(await run({ error: exitError(2), stderr: "a4sx: error: --seed-only needs a saved session\n" }),
+      { kind: "failed", exitCode: 2, detail: "a4sx: error: --seed-only needs a saved session" });
+  });
+
+  it("a synchronous throw from execFile is an ordinary failure", async () => {
+    const throwing: cr.ExecFileLike = () => { throw new TypeError("The argument 'args[1]' must be a string without null bytes"); };
+    assert.deepStrictEqual(await cr.seedSession(CLI, "n", "/w", throwing), { kind: "failed", exitCode: null, detail: "" });
+    // The real execFile throws synchronously for a NUL byte in an argument.
+    assert.deepStrictEqual(await cr.seedSession(process.execPath, "bad\0name", os.tmpdir()), { kind: "failed", exitCode: null, detail: "" });
   });
 
   // The real child_process.execFile, against a small script: arguments arrive verbatim (no shell)
@@ -119,6 +134,14 @@ describe("Resume in Claude Code: seedSession", () => {
       assert.deepStrictEqual(lines.slice(1, 4), ["launch", "--a4sx-session=x $(touch pwned); `id`", "--seed-only"]);
       assert.ok(!fs.existsSync(path.join(dir, "pwned")), "no shell ran the name");
       assert.deepStrictEqual(await cr.seedSession(old, "x", dir), { kind: "old-cli" });
+      const chatty = path.join(dir, "chatty-a4sx");
+      fs.writeFileSync(chatty, "#!/bin/sh\nhead -c 200000 /dev/zero | tr '\\0' x\n");
+      fs.chmodSync(chatty, 0o755);
+      try {
+        assert.deepStrictEqual(await cr.seedSession(chatty, "x", dir), { kind: "failed", exitCode: null, detail: "" });
+      } finally {
+        fs.unlinkSync(chatty);
+      }
     } finally {
       fs.unlinkSync(out);
       fs.unlinkSync(script);
@@ -241,6 +264,16 @@ describe("a4sx.resumeInClaude", () => {
     assert.deepStrictEqual(calls.opened, []);
   });
 
+  it("a synchronous throw from execFile shows the error with the terminal fallback", async () => {
+    const throwing: cr.ExecFileLike = () => { throw new Error("spawn EINVAL"); };
+    calls.nextErrorChoice = ext.RESUME_IN_TERMINAL;
+    await ext.resumeInClaude(item, found, throwing);
+    assert.deepStrictEqual(calls.errors, [{ message: ext.CLAUDE_MESSAGES.failed, items: [ext.RESUME_IN_TERMINAL] }]);
+    assert.strictEqual(calls.terminals.length, 1, "the fallback runs the terminal resume");
+    assert.deepStrictEqual(calls.opened, []);
+    assert.strictEqual(calls.cancelDisposed, 1, "the cancellation listener is disposed");
+  });
+
   it("cancelling the progress notification shows nothing", async () => {
     calls.cancelProgress = true;
     let signal: AbortSignal | undefined;
@@ -250,6 +283,7 @@ describe("a4sx.resumeInClaude", () => {
     };
     await ext.resumeInClaude(item, found, exec);
     assert.ok(signal?.aborted, "the child is aborted");
+    assert.strictEqual(calls.cancelDisposed, 1);
     assert.deepStrictEqual(calls.errors, []);
     assert.deepStrictEqual(calls.opened, []);
   });

@@ -37,6 +37,8 @@ export interface Calls {
   openResult: boolean;
   /** Set true to make withProgress's cancellation token fire right away. */
   cancelProgress: boolean;
+  /** How many cancellation listeners were disposed. */
+  cancelDisposed: number;
 }
 
 export const calls: Calls = {
@@ -64,6 +66,7 @@ export const calls: Calls = {
   uriScheme: "vscode",
   openResult: true,
   cancelProgress: false,
+  cancelDisposed: 0,
 };
 
 export function resetCalls(): void {
@@ -91,6 +94,7 @@ export function resetCalls(): void {
   calls.uriScheme = "vscode";
   calls.openResult = true;
   calls.cancelProgress = false;
+  calls.cancelDisposed = 0;
 }
 
 /** An in-memory `context.secrets` that records what was stored. */
@@ -217,7 +221,7 @@ const fake = {
           if (calls.cancelProgress) {
             listener();
           }
-          return { dispose: () => undefined };
+          return { dispose: () => { calls.cancelDisposed++; } };
         },
       };
       return task({ report: (v: { message: string }) => rec.messages.push(v.message) }, token);

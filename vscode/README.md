@@ -8,7 +8,7 @@ This extension connects VS Code to a4sx. It adds:
   - **Sign in to a4sx.** Your browser opens the a4sx sign-in page. Check that it shows the same code as VS Code, then confirm. VS Code keeps the resulting key in its secret storage. The key can only read your library.
   - **My sessions** lists the sessions in your library, newest first, with their date and size. For each session you can:
     - **Resume in terminal**, which runs `a4sx launch --a4sx-session=NAME` and continues the session in Claude Code.
-    - **Resume in Claude Code**, which copies the session into the open folder and opens it in the Claude Code extension's panel. If more than one folder is open, VS Code asks which one.
+    - **Resume in Claude Code**, which copies the session into Claude Code's local history for the open folder and opens it in the Claude Code extension's panel. If more than one folder is open, VS Code asks which one.
     - **Open on the web**.
     - **Copy session id**.
   - **Marketplace** searches the sessions that others publish. A result opens on session-exchange.com. You don't need to sign in to search.

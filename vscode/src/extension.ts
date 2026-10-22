@@ -220,8 +220,8 @@ export async function resumeInClaude(
     { location: vscode.ProgressLocation.Notification, title: CLAUDE_MESSAGES.progress, cancellable: true },
     (_progress, token) => {
       const abort = new AbortController();
-      token.onCancellationRequested(() => abort.abort());
-      return seedSession(cli.path, launchName(item.row), folder.uri.fsPath, exec, abort.signal);
+      const cancel = token.onCancellationRequested(() => abort.abort());
+      return seedSession(cli.path, launchName(item.row), folder.uri.fsPath, exec, abort.signal).finally(() => cancel.dispose());
     },
   );
   if (result.kind === "cancelled") {
