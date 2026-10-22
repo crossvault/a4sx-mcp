@@ -23,7 +23,20 @@ export interface Calls {
   context: Record<string, unknown>;
   authProviders: Map<string, { label: string; provider: any; options: any }>;
   treeProviders: Map<string, any>;
-  progress: { title: string; messages: string[] }[];
+  progress: { title: string; messages: string[]; options: any }[];
+  /** Commands run through executeCommand (other than setContext). */
+  executed: { id: string; args: unknown[] }[];
+  /** Extension ids getExtension finds. */
+  extensions: Set<string>;
+  workspaceFolders: { name: string; uri: { scheme: string; fsPath: string } }[] | undefined;
+  /** What the next showQuickPick resolves to: an index into its items (undefined = Esc). */
+  nextPick: number | undefined;
+  quickPicks: { items: any[]; options: any }[];
+  uriScheme: string;
+  /** What the next openExternal resolves to. */
+  openResult: boolean;
+  /** Set true to make withProgress's cancellation token fire right away. */
+  cancelProgress: boolean;
 }
 
 export const calls: Calls = {
@@ -43,6 +56,14 @@ export const calls: Calls = {
   authProviders: new Map(),
   treeProviders: new Map(),
   progress: [],
+  executed: [],
+  extensions: new Set(),
+  workspaceFolders: undefined,
+  nextPick: undefined,
+  quickPicks: [],
+  uriScheme: "vscode",
+  openResult: true,
+  cancelProgress: false,
 };
 
 export function resetCalls(): void {
@@ -62,6 +83,14 @@ export function resetCalls(): void {
   calls.authProviders.clear();
   calls.treeProviders.clear();
   calls.progress.length = 0;
+  calls.executed.length = 0;
+  calls.extensions.clear();
+  calls.workspaceFolders = undefined;
+  calls.nextPick = undefined;
+  calls.quickPicks.length = 0;
+  calls.uriScheme = "vscode";
+  calls.openResult = true;
+  calls.cancelProgress = false;
 }
 
 /** An in-memory `context.secrets` that records what was stored. */
@@ -136,6 +165,8 @@ const fake = {
     async executeCommand(id: string, ...args: unknown[]) {
       if (id === "setContext") {
         calls.context[args[0] as string] = args[1];
+      } else {
+        calls.executed.push({ id, args });
       }
     },
   },
@@ -178,15 +209,31 @@ const fake = {
       return { dispose: () => calls.treeProviders.delete(id) };
     },
     async withProgress(options: { title: string }, task: (p: unknown, c: unknown) => Promise<unknown>) {
-      const rec = { title: options.title, messages: [] as string[] };
+      const rec = { title: options.title, messages: [] as string[], options };
       calls.progress.push(rec);
-      return task({ report: (v: { message: string }) => rec.messages.push(v.message) }, { isCancellationRequested: false });
+      const token = {
+        isCancellationRequested: calls.cancelProgress,
+        onCancellationRequested(listener: () => void) {
+          if (calls.cancelProgress) {
+            listener();
+          }
+          return { dispose: () => undefined };
+        },
+      };
+      return task({ report: (v: { message: string }) => rec.messages.push(v.message) }, token);
+    },
+    async showQuickPick(items: any[], options: unknown) {
+      calls.quickPicks.push({ items, options });
+      return calls.nextPick === undefined ? undefined : items[calls.nextPick];
     },
   },
   env: {
     async openExternal(uri: Uri) {
       calls.opened.push(uri.toString());
-      return true;
+      return calls.openResult;
+    },
+    get uriScheme() {
+      return calls.uriScheme;
     },
     clipboard: {
       async writeText(text: string) {
@@ -194,7 +241,15 @@ const fake = {
       },
     },
   },
+  extensions: {
+    getExtension(id: string) {
+      return calls.extensions.has(id) ? { id } : undefined;
+    },
+  },
   workspace: {
+    get workspaceFolders() {
+      return calls.workspaceFolders;
+    },
     getConfiguration(section: string) {
       return {
         get<T>(key: string): T | undefined {

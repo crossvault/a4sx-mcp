@@ -7,6 +7,7 @@
 import * as vscode from "vscode";
 import { Client, FetchLike, listingWebUrl, normalizeServerUrl, sessionWebUrl } from "./api";
 import { A4sxAuthProvider, AUTH_ID, AUTH_LABEL, LoginCancelled, SECRET_KEY, vscodeLogin } from "./auth";
+import { CLAUDE_EXTENSION_ID, claudeResumeUri, defaultExecFile, ExecFileLike, SeedResult, seedSession } from "./claudeResume";
 import { CLI_NAME, findCli, CliLookup } from "./cli";
 import { CMD_OPEN_LISTING, ListingItem, MarketplaceProvider } from "./marketplaceView";
 import { launchName, SessionItem, SessionsProvider, ViewState } from "./sessionsView";
@@ -24,6 +25,7 @@ export const CMD_SIGN_IN = "a4sx.signIn";
 export const CMD_SIGN_OUT = "a4sx.signOut";
 export const CMD_REFRESH = "a4sx.refreshSessions";
 export const CMD_RESUME = "a4sx.resumeSession";
+export const CMD_RESUME_CLAUDE = "a4sx.resumeInClaude";
 export const CMD_OPEN_SESSION = "a4sx.openSessionOnWeb";
 export const CMD_COPY_ID = "a4sx.copySessionId";
 export const CMD_SEARCH = "a4sx.searchMarketplace";
@@ -53,7 +55,7 @@ export async function reportMissingCli(result: Exclude<CliLookup, { found: true 
   const message =
     result.reason === "configured-path-invalid"
       ? `The a4sx.cliPath setting points to "${result.configured}", which is not an executable file. Fix the setting, or clear it to use ${CLI_NAME} from your PATH.`
-      : `The ${CLI_NAME} command was not found on your PATH. Install the ${CLI_NAME} CLI to save and resume sessions from VS Code.`;
+      : `The ${CLI_NAME} command was not found. Install the ${CLI_NAME} CLI to save and resume sessions from VS Code, or set a4sx.cliPath to its full path.`;
   const install = "How to install";
   const choice = await vscode.window.showErrorMessage(message, install);
   if (choice === install) {
@@ -134,6 +136,109 @@ export async function resumeSession(item: SessionItem | undefined, lookup: (conf
   });
   terminal.show();
   return terminal;
+}
+
+export const RESUME_IN_TERMINAL = "Resume in terminal";
+export const SHOW_EXTENSION = "Show extension";
+export const CLAUDE_MESSAGES = {
+  noClaude: "Resume in Claude Code needs the Claude Code extension.",
+  noFolder: "Open a folder first. Claude Code resumes the session in that folder.",
+  pickFolder: "Choose the folder to resume the session in",
+  progress: "Copying the session for Claude Code…",
+  oldCli: 'Your a4sx CLI is too old for Resume in Claude Code. Run "a4sx update", then try again.',
+  timeout: "Copying the session for Claude Code took longer than 2 minutes and was stopped.",
+  badOutput: "a4sx did not return a Claude Code session id.",
+  failed: "Could not copy the session for Claude Code.",
+  failedWith: (detail: string) => `Could not copy the session for Claude Code: ${detail}`,
+  failedCode: (code: number) => `Could not copy the session for Claude Code. a4sx exited with code ${code}.`,
+  openFailed: "Could not open Claude Code.",
+};
+
+function seedFailureMessage(r: Exclude<SeedResult, { kind: "ok" } | { kind: "cancelled" }>): string {
+  switch (r.kind) {
+    case "old-cli":
+      return CLAUDE_MESSAGES.oldCli;
+    case "timeout":
+      return CLAUDE_MESSAGES.timeout;
+    case "bad-output":
+      return CLAUDE_MESSAGES.badOutput;
+    case "failed":
+      if (r.detail) {
+        return CLAUDE_MESSAGES.failedWith(r.detail);
+      }
+      return r.exitCode !== null ? CLAUDE_MESSAGES.failedCode(r.exitCode) : CLAUDE_MESSAGES.failed;
+  }
+}
+
+async function pickFolder(folders: readonly vscode.WorkspaceFolder[]): Promise<vscode.WorkspaceFolder | undefined> {
+  if (folders.length === 1) {
+    return folders[0];
+  }
+  const picked = await vscode.window.showQuickPick(
+    folders.map((folder) => ({ label: folder.name, description: folder.uri.fsPath, folder })),
+    { placeHolder: CLAUDE_MESSAGES.pickFolder },
+  );
+  return picked?.folder;
+}
+
+/**
+ * Copies the saved session into the local Claude Code history for a workspace folder
+ * (`a4sx launch --a4sx-session=NAME --seed-only`, run directly, no shell) and opens it in the
+ * Claude Code extension. Only a validated session id goes into the link.
+ */
+export async function resumeInClaude(
+  item: SessionItem | undefined,
+  lookup: (configured: string | undefined) => CliLookup = findCli,
+  exec: ExecFileLike = defaultExecFile,
+): Promise<void> {
+  if (!item) {
+    return;
+  }
+  if (!vscode.extensions.getExtension(CLAUDE_EXTENSION_ID)) {
+    const choice = await vscode.window.showErrorMessage(CLAUDE_MESSAGES.noClaude, SHOW_EXTENSION);
+    if (choice === SHOW_EXTENSION) {
+      await vscode.commands.executeCommand("workbench.extensions.search", `@id:${CLAUDE_EXTENSION_ID}`);
+    }
+    return;
+  }
+  // The CLI writes into the local Claude Code history, so only local folders count.
+  const folders = (vscode.workspace.workspaceFolders ?? []).filter((f) => f.uri.scheme === "file");
+  if (folders.length === 0) {
+    await vscode.window.showErrorMessage(CLAUDE_MESSAGES.noFolder);
+    return;
+  }
+  const cli = lookupCli(lookup);
+  if (!cli.found) {
+    await reportMissingCli(cli);
+    return;
+  }
+  const folder = await pickFolder(folders);
+  if (!folder) {
+    return;
+  }
+  const result = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: CLAUDE_MESSAGES.progress, cancellable: true },
+    (_progress, token) => {
+      const abort = new AbortController();
+      token.onCancellationRequested(() => abort.abort());
+      return seedSession(cli.path, launchName(item.row), folder.uri.fsPath, exec, abort.signal);
+    },
+  );
+  if (result.kind === "cancelled") {
+    return;
+  }
+  if (result.kind === "ok") {
+    const opened = await vscode.env.openExternal(vscode.Uri.parse(claudeResumeUri(vscode.env.uriScheme, result.sessionId)));
+    if (opened) {
+      return;
+    }
+    await vscode.window.showErrorMessage(CLAUDE_MESSAGES.openFailed);
+    return;
+  }
+  const choice = await vscode.window.showErrorMessage(seedFailureMessage(result), RESUME_IN_TERMINAL);
+  if (choice === RESUME_IN_TERMINAL) {
+    await resumeSession(item, lookup);
+  }
 }
 
 export async function openSessionOnWeb(item: SessionItem | undefined): Promise<void> {
@@ -238,6 +343,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_SIGN_OUT, () => signOut(auth)),
     vscode.commands.registerCommand(CMD_REFRESH, () => sessions.refresh()),
     vscode.commands.registerCommand(CMD_RESUME, (item?: SessionItem) => resumeSession(item)),
+    vscode.commands.registerCommand(CMD_RESUME_CLAUDE, (item?: SessionItem) => resumeInClaude(item)),
     vscode.commands.registerCommand(CMD_OPEN_SESSION, (item?: SessionItem) => openSessionOnWeb(item)),
     vscode.commands.registerCommand(CMD_COPY_ID, (item?: SessionItem) => copySessionId(item)),
     vscode.commands.registerCommand(CMD_SEARCH, () => searchMarketplace(market)),

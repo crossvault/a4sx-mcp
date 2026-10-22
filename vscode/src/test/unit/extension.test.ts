@@ -20,7 +20,7 @@ describe("activate: wiring", () => {
     ext.activate(ctx as any);
     const contributed = pkg.contributes.commands.map((c: { command: string }) => c.command).sort();
     assert.deepStrictEqual(contributed, [
-      ext.CMD_OPEN_LIBRARY, ext.CMD_SAVE, ext.CMD_SIGN_IN, ext.CMD_SIGN_OUT, ext.CMD_REFRESH, ext.CMD_RESUME,
+      ext.CMD_OPEN_LIBRARY, ext.CMD_SAVE, ext.CMD_SIGN_IN, ext.CMD_SIGN_OUT, ext.CMD_REFRESH, ext.CMD_RESUME, ext.CMD_RESUME_CLAUDE,
       ext.CMD_OPEN_SESSION, ext.CMD_COPY_ID, ext.CMD_SEARCH, ext.CMD_OPEN_LISTING].sort());
     assert.deepStrictEqual([...calls.commands.keys()].sort(), contributed);
   });
@@ -125,7 +125,7 @@ describe("a4sx.saveSession", () => {
     await ext.saveSession(missing);
     assert.strictEqual(calls.terminals.length, 0, "nothing is run or installed");
     assert.strictEqual(calls.errors.length, 1);
-    assert.match(calls.errors[0].message, /a4sx command was not found on your PATH\. Install the a4sx CLI to save and resume sessions/);
+    assert.match(calls.errors[0].message, /a4sx command was not found\. Install the a4sx CLI to save and resume sessions from VS Code, or set a4sx\.cliPath to its full path\./);
     assert.deepStrictEqual(calls.errors[0].items, ["How to install"]);
     assert.deepStrictEqual(calls.opened, []);
   });

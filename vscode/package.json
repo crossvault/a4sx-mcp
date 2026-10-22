@@ -2,7 +2,7 @@
   "name": "a4sx",
   "displayName": "a4sx",
   "description": "Use a4sx from VS Code: sign in, browse and resume your saved sessions, search the marketplace, and add the a4sx MCP servers for agent mode.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "crossvaultGmbH",
   "license": "Apache-2.0",
   "homepage": "https://session-exchange.com",
@@ -80,6 +80,12 @@
         "title": "Resume in terminal",
         "category": "a4sx",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "a4sx.resumeInClaude",
+        "title": "Resume in Claude Code",
+        "category": "a4sx",
+        "icon": "$(sparkle)"
       },
       {
         "command": "a4sx.openSessionOnWeb",
@@ -179,9 +185,14 @@
           "group": "inline@1"
         },
         {
-          "command": "a4sx.openSessionOnWeb",
+          "command": "a4sx.resumeInClaude",
           "when": "view == a4sx.sessions && viewItem == a4sx.session",
           "group": "inline@2"
+        },
+        {
+          "command": "a4sx.openSessionOnWeb",
+          "when": "view == a4sx.sessions && viewItem == a4sx.session",
+          "group": "inline@3"
         },
         {
           "command": "a4sx.resumeSession",
@@ -189,14 +200,19 @@
           "group": "1_session@1"
         },
         {
-          "command": "a4sx.openSessionOnWeb",
+          "command": "a4sx.resumeInClaude",
           "when": "view == a4sx.sessions && viewItem == a4sx.session",
           "group": "1_session@2"
         },
         {
-          "command": "a4sx.copySessionId",
+          "command": "a4sx.openSessionOnWeb",
           "when": "view == a4sx.sessions && viewItem == a4sx.session",
           "group": "1_session@3"
+        },
+        {
+          "command": "a4sx.copySessionId",
+          "when": "view == a4sx.sessions && viewItem == a4sx.session",
+          "group": "1_session@4"
         },
         {
           "command": "a4sx.openListing",
@@ -219,6 +235,10 @@
         },
         {
           "command": "a4sx.resumeSession",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.resumeInClaude",
           "when": "false"
         },
         {
@@ -254,7 +274,7 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "markdownDescription": "Full path to the `a4sx` command. Leave empty to find `a4sx` on your `PATH`."
+          "markdownDescription": "Full path to the `a4sx` command. Leave empty to find `a4sx` on your `PATH`, then in `~/.local/bin`, `/usr/local/bin` and `/opt/homebrew/bin`."
         },
         "a4sx.serverUrl": {
           "type": "string",
