@@ -2,27 +2,37 @@
 
 [a4sx](https://session-exchange.com) is an exchange for AI coding-agent sessions. You can save your sessions to your a4sx library and find sessions that others publish on the a4sx marketplace.
 
-This extension connects VS Code to a4sx. It adds three things:
+This extension connects VS Code to a4sx. It adds:
 
+- **The a4sx sidebar.** Click the a4sx icon in the activity bar.
+  - **Sign in to a4sx.** Your browser opens the a4sx sign-in page. Check that it shows the same code as VS Code, then confirm. VS Code keeps the resulting key in its secret storage. The key can only read your library.
+  - **My sessions** lists the sessions in your library, newest first, with their date and size. For each session you can:
+    - **Resume in terminal**, which runs `a4sx launch --a4sx-session=NAME` and continues the session in Claude Code.
+    - **Open on the web**.
+    - **Copy session id**.
+  - **Marketplace** searches the sessions that others publish. A result opens on session-exchange.com. You don't need to sign in to search.
 - **The a4sx MCP servers for agent mode.** The a4sx tools show up in the tools list of agent mode in VS Code chat.
   - **a4sx** works without an account. You can search sessions and read their summaries.
-  - **a4sx library** works with your a4sx account. VS Code asks you to sign in the first time it connects, and VS Code handles the sign-in. The extension does not store any tokens.
+  - **a4sx library** works with your a4sx account. VS Code asks you to sign in the first time it connects, and VS Code handles that sign-in itself.
 - **a4sx: Save this session.** This command runs `a4sx push --latest` in a terminal. It saves your most recently changed local Claude Code session to your a4sx library. The CLI's output and questions appear in the terminal.
 - **a4sx: Open my library.** This command opens your library on session-exchange.com in your browser.
+
+To sign out, run **a4sx: Sign out**. This removes the key from VS Code. The key stays valid until it expires or you revoke it on session-exchange.com under Account › Agent keys.
 
 ## Requirements
 
 - VS Code 1.101 or later. The MCP servers are used by agent mode in VS Code chat.
-- For **Save this session**: the a4sx command-line tool, installed and signed in with `a4sx login`. See the [install guide](https://session-exchange.com/guide/cli). The extension does not install it for you. If it can't find `a4sx`, it tells you and links to the guide.
+- For **Save this session** and **Resume in terminal**: the a4sx command-line tool, installed and signed in with `a4sx login`. See the [install guide](https://session-exchange.com/guide/cli). The extension does not install it for you. If it can't find `a4sx`, it tells you and links to the guide.
 
-Saving works for Claude Code sessions. To continue a saved session, use Claude Code: `a4sx launch --a4sx-session=NAME`.
+Saving and resuming work for Claude Code sessions.
 
 ## Settings
 
 | Setting | Description |
 |---|---|
 | `a4sx.cliPath` | Full path to the `a4sx` command, if it isn't on your `PATH`. Can only be set in your user settings. |
+| `a4sx.serverUrl` | The a4sx server the sidebar signs in to. The default is session-exchange.com. Can only be set in your user settings. |
 
 ## Network use
 
-The extension itself makes no network requests and sends no telemetry. VS Code connects to session-exchange.com when agent mode uses the a4sx MCP servers. **Save this session** runs the a4sx command-line tool, which uploads the session to your a4sx library.
+The sidebar connects to session-exchange.com (or your `a4sx.serverUrl`) to sign you in, list your sessions and search the marketplace. It sends no telemetry. VS Code connects to session-exchange.com when agent mode uses the a4sx MCP servers. **Save this session** and **Resume in terminal** run the a4sx command-line tool, which uses its own sign-in.

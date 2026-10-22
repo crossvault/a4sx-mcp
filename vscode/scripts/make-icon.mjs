@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 crossVault GmbH
-// Legacy: the extension's icon is now images/icon.png, the session-exchange.com logo (128x128 PNG).
-// This script still renders the older media/icon.png, which the manifest and the package no longer use.
+// The extension's Marketplace icon is images/icon.png, the session-exchange.com logo (128x128 PNG).
+// This script renders media/icon.png, the a4sx mark on a transparent background: the activity-bar icon.
 // Renders media/icon.png (128x128) from the a4sx mark in ui/public/favicon.svg, with no image tools needed.
 // Run: node scripts/make-icon.mjs. Even-odd fill over all three sub-paths, 4x4 supersampling.
 import { writeFileSync, mkdirSync } from "node:fs";

@@ -210,7 +210,9 @@ Differences of this local server:
 ## VS Code extension
 
 The [`vscode/`](vscode/) directory holds the a4sx extension for VS Code 1.101 or later. It adds the
-hosted a4sx MCP servers to agent mode in VS Code chat; VS Code runs the sign-in. Its command
+hosted a4sx MCP servers to agent mode in VS Code chat; VS Code runs the sign-in. Its sidebar signs
+you in to a4sx, lists the sessions in your library (resume one in a terminal, or open it on the web)
+and searches the marketplace. Its command
 **a4sx: Save this session** runs `a4sx push --latest` in a terminal, which saves your most recently
 changed local Claude Code session to your a4sx library. To continue a saved session, use Claude Code;
 other harnesses can't resume sessions today.

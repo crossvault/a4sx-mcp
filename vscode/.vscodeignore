@@ -3,6 +3,7 @@ out/test/**
 out/**/*.map
 scripts/**
 media/**
+!media/icon.png
 node_modules/**
 .vscode-test/**
 .vscode-test.mjs
