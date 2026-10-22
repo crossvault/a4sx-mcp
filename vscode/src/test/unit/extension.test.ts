@@ -3,23 +3,25 @@
 import * as assert from "assert";
 import * as fs from "fs";
 import * as path from "path";
-import { calls, resetCalls } from "../fakeVscode";
+import { calls, fakeSecrets, resetCalls } from "../fakeVscode";
 import * as ext from "../../extension";
 import type { CliLookup } from "../../cli";
 
 const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "package.json"), "utf8"));
-const fakeContext = () => ({ subscriptions: [] as { dispose(): unknown }[] });
+const fakeContext = () => ({ subscriptions: [] as { dispose(): unknown }[], secrets: fakeSecrets() });
 const found = (p: string) => (): CliLookup => ({ found: true, path: p });
 const missing = (): CliLookup => ({ found: false, reason: "not-on-path" });
 
 describe("activate: wiring", () => {
   beforeEach(resetCalls);
 
-  it("registers both commands under the ids package.json contributes", () => {
+  it("registers every command under the ids package.json contributes", () => {
     const ctx = fakeContext();
     ext.activate(ctx as any);
     const contributed = pkg.contributes.commands.map((c: { command: string }) => c.command).sort();
-    assert.deepStrictEqual(contributed, [ext.CMD_OPEN_LIBRARY, ext.CMD_SAVE].sort());
+    assert.deepStrictEqual(contributed, [
+      ext.CMD_OPEN_LIBRARY, ext.CMD_SAVE, ext.CMD_SIGN_IN, ext.CMD_SIGN_OUT, ext.CMD_REFRESH, ext.CMD_RESUME,
+      ext.CMD_OPEN_SESSION, ext.CMD_COPY_ID, ext.CMD_SEARCH, ext.CMD_OPEN_LISTING].sort());
     assert.deepStrictEqual([...calls.commands.keys()].sort(), contributed);
   });
 
@@ -30,7 +32,7 @@ describe("activate: wiring", () => {
     assert.ok(calls.mcpProviders.has(ext.MCP_PROVIDER_ID));
   });
 
-  it("an editor without the MCP provider API still gets both commands", () => {
+  it("an editor without the MCP provider API still gets every command", () => {
     const vscodeFake = require("vscode");
     const saved = vscodeFake.lm;
     vscodeFake.lm = undefined;
@@ -40,7 +42,7 @@ describe("activate: wiring", () => {
       vscodeFake.lm = saved;
     }
     assert.strictEqual(calls.mcpProviders.size, 0);
-    assert.deepStrictEqual([...calls.commands.keys()].sort(), [ext.CMD_OPEN_LIBRARY, ext.CMD_SAVE].sort());
+    assert.strictEqual(calls.commands.size, pkg.contributes.commands.length);
   });
 
   it("disposes everything it registered", () => {
@@ -49,6 +51,8 @@ describe("activate: wiring", () => {
     ctx.subscriptions.forEach((d) => d.dispose());
     assert.strictEqual(calls.commands.size, 0);
     assert.strictEqual(calls.mcpProviders.size, 0);
+    assert.strictEqual(calls.authProviders.size, 0);
+    assert.strictEqual(calls.treeProviders.size, 0);
   });
 
   it("the MCP provider offers the public and the library server, HTTP only, no headers/tokens", async () => {
@@ -66,10 +70,13 @@ describe("activate: wiring", () => {
     assert.strictEqual(await provider.resolveMcpServerDefinition(server), server);
   });
 
-  it("only cliPath is configurable, machine-scoped, no secret-shaped settings", () => {
-    const props = Object.keys(pkg.contributes.configuration.properties);
-    assert.deepStrictEqual(props, ["a4sx.cliPath"]);
-    assert.strictEqual(pkg.contributes.configuration.properties["a4sx.cliPath"].scope, "machine");
+  it("settings: cliPath (machine) and serverUrl (user only), no secret-shaped settings", () => {
+    const props = pkg.contributes.configuration.properties;
+    assert.deepStrictEqual(Object.keys(props), ["a4sx.cliPath", "a4sx.serverUrl"]);
+    assert.strictEqual(props["a4sx.cliPath"].scope, "machine");
+    // "application": a workspace's settings can't point the sign-in at another server.
+    assert.strictEqual(props["a4sx.serverUrl"].scope, "application");
+    assert.strictEqual(props["a4sx.serverUrl"].default, "https://session-exchange.com");
   });
 
   it("the manifest names the Marketplace publisher and a PNG icon of at least 128x128", () => {
@@ -118,7 +125,7 @@ describe("a4sx.saveSession", () => {
     await ext.saveSession(missing);
     assert.strictEqual(calls.terminals.length, 0, "nothing is run or installed");
     assert.strictEqual(calls.errors.length, 1);
-    assert.match(calls.errors[0].message, /a4sx command was not found on your PATH/);
+    assert.match(calls.errors[0].message, /a4sx command was not found on your PATH\. Install the a4sx CLI to save and resume sessions/);
     assert.deepStrictEqual(calls.errors[0].items, ["How to install"]);
     assert.deepStrictEqual(calls.opened, []);
   });

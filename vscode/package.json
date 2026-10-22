@@ -1,8 +1,8 @@
 {
   "name": "a4sx",
   "displayName": "a4sx",
-  "description": "Use a4sx from VS Code: adds the a4sx MCP server for agent mode and saves your latest Claude Code session to your a4sx library.",
-  "version": "0.1.0",
+  "description": "Use a4sx from VS Code: sign in, browse and resume your saved sessions, search the marketplace, and add the a4sx MCP servers for agent mode.",
+  "version": "0.2.0",
   "publisher": "crossvaultGmbH",
   "license": "Apache-2.0",
   "homepage": "https://session-exchange.com",
@@ -50,12 +50,195 @@
       {
         "command": "a4sx.saveSession",
         "title": "Save this session",
-        "category": "a4sx"
+        "category": "a4sx",
+        "icon": "$(cloud-upload)"
       },
       {
         "command": "a4sx.openLibrary",
         "title": "Open my library",
+        "category": "a4sx",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "a4sx.signIn",
+        "title": "Sign in",
         "category": "a4sx"
+      },
+      {
+        "command": "a4sx.signOut",
+        "title": "Sign out",
+        "category": "a4sx"
+      },
+      {
+        "command": "a4sx.refreshSessions",
+        "title": "Refresh",
+        "category": "a4sx",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "a4sx.resumeSession",
+        "title": "Resume in terminal",
+        "category": "a4sx",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "a4sx.openSessionOnWeb",
+        "title": "Open on the web",
+        "category": "a4sx",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "a4sx.copySessionId",
+        "title": "Copy session id",
+        "category": "a4sx"
+      },
+      {
+        "command": "a4sx.searchMarketplace",
+        "title": "Search the marketplace",
+        "category": "a4sx",
+        "icon": "$(search)"
+      },
+      {
+        "command": "a4sx.openListing",
+        "title": "Open on the web",
+        "category": "a4sx",
+        "icon": "$(globe)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "a4sx",
+          "title": "a4sx",
+          "icon": "media/icon.png"
+        }
+      ]
+    },
+    "views": {
+      "a4sx": [
+        {
+          "id": "a4sx.sessions",
+          "name": "My sessions",
+          "icon": "media/icon.png"
+        },
+        {
+          "id": "a4sx.marketplace",
+          "name": "Marketplace",
+          "icon": "media/icon.png"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "a4sx.sessions",
+        "contents": "Sign in to a4sx to see the sessions in your library.\n[Sign in to a4sx](command:a4sx.signIn)",
+        "when": "!a4sx.signedIn"
+      },
+      {
+        "view": "a4sx.sessions",
+        "contents": "Your library has no sessions yet. Save your latest Claude Code session to add one.\n[Save this session](command:a4sx.saveSession)",
+        "when": "a4sx.signedIn && a4sx.sessionsEmpty"
+      },
+      {
+        "view": "a4sx.marketplace",
+        "contents": "Find sessions that others publish on the a4sx marketplace.\n[Search the marketplace](command:a4sx.searchMarketplace)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "a4sx.saveSession",
+          "when": "view == a4sx.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "a4sx.refreshSessions",
+          "when": "view == a4sx.sessions && a4sx.signedIn",
+          "group": "navigation@2"
+        },
+        {
+          "command": "a4sx.openLibrary",
+          "when": "view == a4sx.sessions",
+          "group": "more@1"
+        },
+        {
+          "command": "a4sx.signOut",
+          "when": "view == a4sx.sessions && a4sx.signedIn",
+          "group": "more@2"
+        },
+        {
+          "command": "a4sx.searchMarketplace",
+          "when": "view == a4sx.marketplace",
+          "group": "navigation@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "a4sx.resumeSession",
+          "when": "view == a4sx.sessions && viewItem == a4sx.session",
+          "group": "inline@1"
+        },
+        {
+          "command": "a4sx.openSessionOnWeb",
+          "when": "view == a4sx.sessions && viewItem == a4sx.session",
+          "group": "inline@2"
+        },
+        {
+          "command": "a4sx.resumeSession",
+          "when": "view == a4sx.sessions && viewItem == a4sx.session",
+          "group": "1_session@1"
+        },
+        {
+          "command": "a4sx.openSessionOnWeb",
+          "when": "view == a4sx.sessions && viewItem == a4sx.session",
+          "group": "1_session@2"
+        },
+        {
+          "command": "a4sx.copySessionId",
+          "when": "view == a4sx.sessions && viewItem == a4sx.session",
+          "group": "1_session@3"
+        },
+        {
+          "command": "a4sx.openListing",
+          "when": "view == a4sx.marketplace && viewItem == a4sx.listing",
+          "group": "inline@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "a4sx.signIn",
+          "when": "!a4sx.signedIn"
+        },
+        {
+          "command": "a4sx.signOut",
+          "when": "a4sx.signedIn"
+        },
+        {
+          "command": "a4sx.refreshSessions",
+          "when": "a4sx.signedIn"
+        },
+        {
+          "command": "a4sx.resumeSession",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.openSessionOnWeb",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.copySessionId",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.openListing",
+          "when": "false"
+        }
+      ]
+    },
+    "authentication": [
+      {
+        "id": "a4sx",
+        "label": "a4sx"
       }
     ],
     "mcpServerDefinitionProviders": [
@@ -72,6 +255,12 @@
           "default": "",
           "scope": "machine",
           "markdownDescription": "Full path to the `a4sx` command. Leave empty to find `a4sx` on your `PATH`."
+        },
+        "a4sx.serverUrl": {
+          "type": "string",
+          "default": "https://session-exchange.com",
+          "scope": "application",
+          "markdownDescription": "The a4sx server the sidebar signs in to and lists sessions from. Change it only if you use a different a4sx server. It must be an HTTPS address."
         }
       }
     }
