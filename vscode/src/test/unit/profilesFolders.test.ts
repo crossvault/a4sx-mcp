@@ -12,7 +12,7 @@ import {
   buildFolderTree, FILTER_MESSAGE, FolderItem, matchesFilter, NO_MATCH, normalizeFolder, SessionItem,
 } from "../../sessionsView";
 import { FOLDER_TEXTS } from "../../folderCommands";
-import { ALLOW_SCOPE_ITEM, displayAddress, NO_PROFILES, ProfileItem } from "../../profilesView";
+import { ALLOW_SCOPE_ITEM, displayAddress, HIDDEN_FIELDS, NO_PROFILES, ProfileItem } from "../../profilesView";
 import { PROFILE_TEXTS, validateBaseUrl, validateFlags, validateProfileId, withField } from "../../profileCommands";
 import { offerStepUp, STEP_UP, STEP_UP_SCOPES } from "../../stepUp";
 import type { CliLookup } from "../../cli";
@@ -802,5 +802,67 @@ describe("review follow-ups", () => {
     calls.nextPick = 0;
     await ext.resumeSession(new SessionItem({ id: "c-1", label: "x" }), () => ({ found: true, path: "/usr/local/bin/a4sx" }));
     assert.deepStrictEqual(calls.progress.map((p) => p.title), [PROFILE_TEXTS.loadingProfiles]);
+  });
+});
+
+describe("server-hidden profile values (hidden_fields, credential_in_profile)", () => {
+  beforeEach(resetCalls);
+
+  const hiddenBody = (n: number) => ({ profiles: { work: { name: "Work", model: "m", flags: ["--verbose"], hidden_fields: n } }, default: "work" });
+
+  it("shows the hidden count in the tooltip and the edit pick, and never sends hidden_fields back", async () => {
+    const { sb, net } = await activateWith({
+      "GET /library/profiles": [{ status: 200, body: hiddenBody(2) }],
+      "PUT /library/profiles/work": [{ status: 200, body: hiddenBody(2) }],
+    }, [...ALL, "profiles:write"]);
+    const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
+    assert.ok(String(work.tooltip).endsWith(HIDDEN_FIELDS(2)));
+    assert.strictEqual(HIDDEN_FIELDS(2), "2 values that look like keys are hidden and stay as they are.");
+    assert.strictEqual(HIDDEN_FIELDS(1), "1 value that looks like a key is hidden and stays as it is.");
+    calls.nextPick = 1;
+    calls.nextInput = "m2";
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+    assert.ok(calls.quickPicks[0].options.placeHolder.includes(HIDDEN_FIELDS(2)));
+    const put = net.seen.find((r) => r.method === "PUT")!;
+    assert.deepStrictEqual(put.body, { name: "Work", model: "m2", flags: ["--verbose"] });
+    const plain = new ProfileItem("p", { model: "m" }, false);
+    assert.ok(!String(plain.tooltip).includes("hidden"));
+  });
+
+  it("400 credential_in_profile keeps the edit open with the server's one-line message, prefilled with the stored value", async () => {
+    const SUBMITTED = "--x-custom=supersecretvalue";
+    const { sb, net } = await activateWith({
+      "GET /library/profiles": [{ status: 200, body: hiddenBody(0) }],
+      "PUT /library/profiles/work": [
+        { status: 400, body: { error: { code: "credential_in_profile", message: "Keep keys out of launch profiles; use a4sx launch --set-api-key.\nDetails follow." } } },
+        { status: 200, body: hiddenBody(0) },
+      ],
+    }, [...ALL, "profiles:write"]);
+    const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
+    calls.nextPick = 4;
+    calls.inputQueue.push(`--verbose ${SUBMITTED}`, "--verbose --debug");
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+    assert.strictEqual(calls.inputs.length, 2, "the edit stays open");
+    assert.strictEqual(calls.inputs[1].prompt, "Keep keys out of launch profiles; use a4sx launch --set-api-key.");
+    assert.strictEqual(calls.inputs[1].value, "--verbose", "the stored value, not what was sent");
+    const shown = JSON.stringify([calls.errors, calls.infos, calls.warnings, calls.modals, calls.inputs.map((i) => [i.prompt, i.value])]);
+    assert.ok(!shown.includes("supersecretvalue"));
+    assert.deepStrictEqual(net.seen.filter((r) => r.method === "PUT").map((r) => r.body.flags), [["--verbose", SUBMITTED], ["--verbose", "--debug"]]);
+  });
+
+  it("the server's message is capped to one line, and replaced if it echoes a submitted value or is missing", () => {
+    const err = (message?: unknown) => ({ error: { code: "credential_in_profile", message } });
+    assert.strictEqual(api.credentialMessage(err("x".repeat(500)), []).length, 200);
+    assert.strictEqual(api.credentialMessage(err("bad flag --tok=abcd1234 found"), ["--tok=abcd1234"]), api.MESSAGES.credentialInProfile);
+    assert.strictEqual(api.credentialMessage(err(undefined), []), api.MESSAGES.credentialInProfile);
+    assert.strictEqual(api.credentialMessage(err("  \n second"), []), api.MESSAGES.credentialInProfile);
+  });
+
+  it("a masked •••• is never sent: refused before any request, and refused as typed input", async () => {
+    const net = fakeFetch({});
+    await assert.rejects(api.putProfile(clientWith(net.fetch), TOKEN, "work", { flags: ["--key=••••"] }), (e: any) => e.code === "rejected");
+    await assert.rejects(api.putProfile(clientWith(net.fetch), TOKEN, "work", { headers: { "X-K": "••••" } }), (e: any) => e.code === "rejected");
+    assert.strictEqual(net.seen.length, 0);
+    assert.strictEqual(validateFlags("--x=••••"), PROFILE_TEXTS.maskTyped);
   });
 });

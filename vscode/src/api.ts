@@ -12,7 +12,8 @@ export type FetchLike = (url: string, init?: { method?: string; headers?: Record
 export type ApiErrorCode =
   | "bad-server-url" | "unreachable" | "unauthorized" | "busy" | "expired" | "too-many-tokens"
   | "bad-login-url" | "bad-response" | "http"
-  | "bad-scopes" | "insufficient-scope" | "not-supported" | "rejected" | "profile-limit" | "not-found";
+  | "bad-scopes" | "insufficient-scope" | "not-supported" | "rejected" | "profile-limit" | "not-found"
+  | "credential-in-profile";
 
 export class ApiError extends Error {
   constructor(
@@ -40,6 +41,7 @@ export const MESSAGES = {
   profilesNotSupported: "Launch profiles need a newer a4sx server.",
   foldersNotSupported: "Folders need a newer a4sx server.",
   profileRejected: "a4sx did not accept this launch profile.",
+  credentialInProfile: "Keep keys out of launch profiles. Use a4sx launch --set-api-key instead.",
   folderRejected: "a4sx did not accept this folder name.",
   profileLimit: "You have the maximum number of launch profiles. Delete one first.",
   profileGone: "This launch profile no longer exists. Refresh the list.",
@@ -275,7 +277,48 @@ export interface Profile {
   model?: string;
   base_url?: string;
   flags?: string[];
+  /** Newer servers: how many credential-like header entries and flags were left out of this answer. */
+  hidden_fields?: number;
   [field: string]: unknown;
+}
+
+/** Stands for a hidden value on screen; it is never sent. */
+export const MASK = "••••";
+const SERVER_MESSAGE_MAX = 200;
+
+/**
+ * The server's refusal text for a credential in a profile, as one short line. If it is missing, or
+ * contains any value that was submitted, the fixed text is used instead, so a key is never echoed.
+ */
+export function credentialMessage(data: any, submitted: readonly string[]): string {
+  const raw = data?.error?.message;
+  if (typeof raw !== "string") {
+    return MESSAGES.credentialInProfile;
+  }
+  let line = raw.split(/\r?\n/)[0].replace(/\s+/g, " ").trim();
+  if (!line || submitted.some((v) => v.length >= 4 && raw.includes(v))) {
+    return MESSAGES.credentialInProfile;
+  }
+  if (line.length > SERVER_MESSAGE_MAX) {
+    line = `${line.slice(0, SERVER_MESSAGE_MAX - 1)}…`;
+  }
+  return line;
+}
+
+/** Every string value a profile body carries (flags, header values, fields), for the echo check. */
+function submittedValues(p: Profile): string[] {
+  const out: string[] = [];
+  const walk = (v: unknown) => {
+    if (typeof v === "string") {
+      out.push(v);
+    } else if (Array.isArray(v)) {
+      v.forEach(walk);
+    } else if (v && typeof v === "object") {
+      Object.values(v).forEach(walk);
+    }
+  };
+  walk(p);
+  return out;
 }
 
 export interface ProfilesState {
@@ -325,8 +368,11 @@ export async function listProfiles(c: Client, token: string): Promise<ProfilesSt
   return profilesState(status, data);
 }
 
-function profileWriteFail(status: number, data: any): never {
+function profileWriteFail(status: number, data: any, submitted: readonly string[] = []): never {
   const code = errorCode(data);
+  if (status === 400 && code === "credential_in_profile") {
+    throw new ApiError("credential-in-profile", credentialMessage(data, submitted), status);
+  }
   if (status === 429 && code === "profile_limit") {
     throw new ApiError("profile-limit", MESSAGES.profileLimit, status);
   }
@@ -347,9 +393,15 @@ function profilePath(id: string, suffix = ""): string {
 }
 
 export async function putProfile(c: Client, token: string, id: string, profile: Profile): Promise<ProfilesState> {
-  const { status, data } = await call(c, profilePath(id), { method: "PUT", token, body: profile });
+  // `hidden_fields` is the server's count, not a field; the server keeps the hidden entries itself.
+  const { hidden_fields: _hidden, ...body } = profile;
+  const values = submittedValues(body);
+  if (values.some((v) => v.includes(MASK))) {
+    throw new ApiError("rejected", MESSAGES.profileRejected);   // a masked value is never written back
+  }
+  const { status, data } = await call(c, profilePath(id), { method: "PUT", token, body });
   if (status !== 200) {
-    profileWriteFail(status, data);
+    profileWriteFail(status, data, values);
   }
   return profilesState(status, data);
 }

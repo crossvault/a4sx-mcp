@@ -16,7 +16,17 @@ export const NOT_SET = "not set";
 
 export type ProfilesViewState = "signed-out" | "ok" | "empty" | "needs-scope" | "unsupported" | "error";
 
-export const MASK = "••••";
+export { MASK } from "./api";
+import { MASK } from "./api";
+
+export const HIDDEN_FIELDS = (n: number) =>
+  n === 1 ? "1 value that looks like a key is hidden and stays as it is." : `${n} values that look like keys are hidden and stay as they are.`;
+
+/** The server's count of left-out credential-like entries (newer servers only). */
+export function hiddenCount(p: Profile): number {
+  const n = p.hidden_fields;
+  return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : 0;
+}
 
 /** Flag text that looks like a credential (the server drops such header values too). */
 export const SECRET_FLAG = /(^|[=\s:])(bearer\b|basic\s|sk-|sk_live|sk_test|ghp_|github_pat_|xox[baprs]-|ya29\.)|authorization|(api[-_]?key|token|secret|password)(=|$)/i;
@@ -100,6 +110,7 @@ export class ProfileItem extends vscode.TreeItem {
       `Server address: ${address ?? NOT_SET}`,
       `Harness: ${typeof profile.harness === "string" && profile.harness ? profile.harness : NOT_SET}`,
       `Flags: ${flags || NOT_SET}`,
+      ...(hiddenCount(profile) ? [HIDDEN_FIELDS(hiddenCount(profile))] : []),
     ].join("\n");
     this.contextValue = isDefault ? DEFAULT_PROFILE_CONTEXT : PROFILE_CONTEXT;
     this.iconPath = new vscode.ThemeIcon(isDefault ? "star-full" : "rocket");

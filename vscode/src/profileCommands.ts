@@ -10,7 +10,8 @@ import {
   SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, setDefaultProfile,
 } from "./api";
 import {
-  DEFAULT_MARK, displayAddress, NOT_SET, ProfileItem, profileName, ProfilesProvider, SECRET_FLAG, secretFlags, shownFlags, sortedProfiles,
+  DEFAULT_MARK, displayAddress, HIDDEN_FIELDS, hiddenCount, MASK, NOT_SET, ProfileItem, profileName, ProfilesProvider, SECRET_FLAG, secretFlags,
+  shownFlags, sortedProfiles,
 } from "./profilesView";
 import { callWithScope, ensureScope, errorText, ScopedAuth } from "./stepUp";
 
@@ -35,6 +36,7 @@ export const PROFILE_TEXTS = {
   tooLong: (max: number) => `Use at most ${max} characters.`,
   flagsSecret: "Flags can't contain an API key or token.",
   flagsTooMany: "Use at most 20 flags of up to 128 characters each.",
+  maskTyped: "Type the whole value instead of ••••.",
   cliDefaultAddress: "the CLI's default server address",
   confirmBaseUrl: (name: string, address: string) => `Launches with "${name}" will send their requests to ${address}. Change the server address?`,
   changeAddress: "Change address",
@@ -99,6 +101,9 @@ export function validateFlags(raw: string, kept = 0): string | undefined {
   const flags = parseFlags(raw);
   if (flags.length + kept > 20 || flags.some((f) => f.length > 128)) {
     return PROFILE_TEXTS.flagsTooMany;
+  }
+  if (flags.some((f) => f.includes(MASK))) {
+    return PROFILE_TEXTS.maskTyped;
   }
   return flags.some((f) => SECRET_FLAG.test(f)) ? PROFILE_TEXTS.flagsSecret : undefined;
 }
@@ -174,7 +179,14 @@ async function input(title: string, prompt: string, value: string, validate: (v:
 }
 
 /** Runs one profile write with a key holding profiles:write, and shows the list it returns. */
-async function write(deps: ProfileDeps, token: string, call: (c: Client, token: string) => Promise<ProfilesState>): Promise<void> {
+/**
+ * Runs one profile write with a key holding profiles:write, and shows the list it returns. A 400
+ * `credential_in_profile` is returned (not shown) when `credentialRetry` is set, so the caller can
+ * keep the edit open with the server's message.
+ */
+async function write(
+  deps: ProfileDeps, token: string, call: (c: Client, token: string) => Promise<ProfilesState>, credentialRetry = false,
+): Promise<ApiError | undefined> {
   try {
     const client = deps.client();
     const done = await callWithScope(deps.auth, token, (t) => call(client, t));
@@ -182,11 +194,15 @@ async function write(deps: ProfileDeps, token: string, call: (c: Client, token: 
       deps.view.show(done.value);
     }
   } catch (e) {
+    if (credentialRetry && e instanceof ApiError && e.code === "credential-in-profile") {
+      return e;
+    }
     await vscode.window.showErrorMessage(errorText(e));
     if (e instanceof ApiError && e.code === "not-found") {
       deps.view.refresh();
     }
   }
+  return undefined;
 }
 
 export async function createProfile(deps: ProfileDeps): Promise<void> {
@@ -263,42 +279,53 @@ export async function editProfile(deps: ProfileDeps, item: ProfileItem | undefin
   }
   const t = PROFILE_TEXTS;
   const name = profileName(item.id, item.profile);
+  const hiddenOnServer = hiddenCount(item.profile);
   const picked = await vscode.window.showQuickPick(
     FIELD_ORDER.map((field) => ({ label: t.fields[field], description: shownText(item.profile, field) || NOT_SET, field })),
-    { title: t.editTitle(name), placeHolder: t.pickField },
+    { title: t.editTitle(name), placeHolder: hiddenOnServer ? `${t.pickField}. ${HIDDEN_FIELDS(hiddenOnServer)}` : t.pickField },
   );
   if (!picked) {
     return;
   }
   const field = picked.field;
-  let next: Profile;
-  if (field === "flags") {
-    // Flags with a key or token are never prefilled; they are kept as they are.
-    const { visible, hidden } = splitFlags(item.profile);
-    const prompt = hidden.length ? `${t.prompts.flags} ${t.flagsHiddenKept}` : t.prompts.flags;
-    const value = await input(t.editTitle(name), prompt, visible.join(" "), (v) => validateFlags(v, hidden.length));
-    if (value === undefined) {
+  // A 400 credential_in_profile keeps the edit open: the box opens again with the server's message.
+  // It is prefilled with the stored value, never with what was just sent.
+  let notice: string | undefined;
+  for (;;) {
+    let next: Profile;
+    if (field === "flags") {
+      // Flags with a key or token are never prefilled; they are kept as they are.
+      const { visible, hidden } = splitFlags(item.profile);
+      const prompt = notice ?? (hidden.length ? `${t.prompts.flags} ${t.flagsHiddenKept}` : t.prompts.flags);
+      const value = await input(t.editTitle(name), prompt, visible.join(" "), (v) => validateFlags(v, hidden.length));
+      if (value === undefined) {
+        return;
+      }
+      if (JSON.stringify(parseFlags(value)) === JSON.stringify(visible)) {
+        return;   // unchanged: the stored order (hidden flags included) stays as it is
+      }
+      next = withField(item.profile, "flags", [...parseFlags(value), ...hidden].join(" "));
+    } else {
+      const before = shownText(item.profile, field);
+      const value = await input(t.editTitle(name), notice ?? t.prompts[field], before, (v) => validateField(field, v));
+      if (value === undefined) {
+        return;
+      }
+      next = withField(item.profile, field, value);
+      if (shownText(next, field) === before) {
+        return;
+      }
+    }
+    if (field === "base_url" && !(await confirm(t.confirmBaseUrl(profileName(item.id, next), addressOf(next)), t.changeAddress))) {
       return;
     }
-    if (JSON.stringify(parseFlags(value)) === JSON.stringify(visible)) {
-      return;   // unchanged: the stored order (hidden flags included) stays as it is
-    }
-    next = withField(item.profile, "flags", [...parseFlags(value), ...hidden].join(" "));
-  } else {
-    const before = shownText(item.profile, field);
-    const value = await input(t.editTitle(name), t.prompts[field], before, (v) => validateField(field, v));
-    if (value === undefined) {
+    const profile = next;
+    const refused = await write(deps, token, (c, tok) => putProfile(c, tok, item.id, profile), true);
+    if (!refused) {
       return;
     }
-    next = withField(item.profile, field, value);
-    if (shownText(next, field) === before) {
-      return;
-    }
+    notice = refused.message;
   }
-  if (field === "base_url" && !(await confirm(t.confirmBaseUrl(profileName(item.id, next), addressOf(next)), t.changeAddress))) {
-    return;
-  }
-  await write(deps, token, (c, tok) => putProfile(c, tok, item.id, next));
 }
 
 export async function setDefault(deps: ProfileDeps, item: ProfileItem | undefined): Promise<void> {

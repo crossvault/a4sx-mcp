@@ -32,7 +32,7 @@ Folders need a newer a4sx server. On an older server, all sessions appear at the
 
 ## Launch profiles
 
-A launch profile says how `a4sx launch` starts a session: the model, the server address (`base_url`), the harness and extra flags. The extension never shows or stores an API key; keep keys out of profile flags and headers. In the list and in **Edit**, flags that look like a key or token are shown as `••••`, and **Edit** keeps them as they are.
+A launch profile says how `a4sx launch` starts a session: the model, the server address (`base_url`), the harness and extra flags. The extension never shows or stores an API key; keep keys out of profile flags and headers. In the list and in **Edit**, flags that look like a key or token are shown as `••••`, and **Edit** keeps them as they are. Newer a4sx servers leave such values out of the list. The tooltip and **Edit** then say how many are hidden, and they stay as they are. If a change contains a key, a4sx refuses it and **Edit** stays open with the server's message.
 
 - **Create launch profile** (the + button) asks for an id, a model and a server address.
 - **Edit** asks which field to change.
