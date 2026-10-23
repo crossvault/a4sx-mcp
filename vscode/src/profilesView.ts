@@ -9,7 +9,7 @@ import { MessageItem } from "./sessionsView";
 
 export const PROFILE_CONTEXT = "a4sx.profile";
 export const DEFAULT_PROFILE_CONTEXT = "a4sx.profile.default";
-/** A profile with hidden settings: a key may not delete it. */
+/** A profile a key may not delete (hidden settings, or anything besides a name and a model). */
 export const LOCKED_PROFILE_CONTEXT = "a4sx.profile.locked";
 export const DELETE_ELSEWHERE = "Delete it with the a4sx CLI or on the website.";
 export const DEFAULT_MARK = "default";
@@ -100,9 +100,19 @@ export function displayAddress(raw: string | undefined): string | undefined {
   }
 }
 
-/** A key may delete a profile only if it is not the default and has no hidden settings. */
+const blank = (v: unknown) =>
+  v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0)
+  || (typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v).length === 0);
+
+/**
+ * A key may delete a profile only if it is not the default, has no hidden settings, and holds
+ * nothing but a name and/or a model (no flags, address, harness, headers or router setting).
+ */
 export function deletable(isDefault: boolean, p: Profile): boolean {
-  return !isDefault && hiddenCount(p) === 0;
+  if (isDefault || hiddenCount(p) > 0) {
+    return false;
+  }
+  return Object.entries(p).every(([k, v]) => k === "name" || k === "model" || k === "hidden_fields" || blank(v));
 }
 
 export function profileName(id: string, p: Profile): string {
@@ -125,7 +135,7 @@ export class ProfileItem extends vscode.TreeItem {
       ...(hiddenCount(profile) ? [HIDDEN_FIELDS(hiddenCount(profile))] : []),
       ...(deletable(isDefault, profile) ? [] : [DELETE_ELSEWHERE]),
     ].join("\n");
-    this.contextValue = isDefault ? DEFAULT_PROFILE_CONTEXT : hiddenCount(profile) ? LOCKED_PROFILE_CONTEXT : PROFILE_CONTEXT;
+    this.contextValue = isDefault ? DEFAULT_PROFILE_CONTEXT : deletable(false, profile) ? PROFILE_CONTEXT : LOCKED_PROFILE_CONTEXT;
     this.iconPath = new vscode.ThemeIcon(isDefault ? "star-full" : "rocket");
   }
 }

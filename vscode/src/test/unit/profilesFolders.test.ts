@@ -382,8 +382,8 @@ describe("Launch profiles view", () => {
     const items = (await sb.profiles.getChildren()) as ProfileItem[];
     assert.deepStrictEqual(items.map((i) => [i.label, i.description, i.contextValue]), [
       ["home", "default · model-b", "a4sx.profile.default"],
-      ["Lab", "http://localhost:8080", "a4sx.profile"],
-      ["Work", "model-a · https://proxy.example.com", "a4sx.profile"],
+      ["Lab", "http://localhost:8080", "a4sx.profile.locked"],
+      ["Work", "model-a · https://proxy.example.com", "a4sx.profile.locked"],
     ]);
     assert.ok(!JSON.stringify(items.map((i) => [i.label, i.description, i.tooltip])).includes("blue"), "header values are not shown");
     assert.strictEqual(bearer(net.seen[0]), `Bearer ${TOKEN}`);
@@ -480,18 +480,30 @@ describe("Launch profile actions", () => {
     assert.strictEqual(pkg.contributes.commands.find((c: any) => c.command === ext.CMD_CHANGE_DEFAULT).title, "Change default with the a4sx CLI or on the website");
   });
 
-  it("Delete asks first for a deletable profile; the default and profiles with hidden settings are deleted only elsewhere", async () => {
-    const lockedBody = { profiles: { ...profiles.profiles, secret: { name: "Secret", hidden_fields: 2 } }, default: "home" };
+  it("Delete is offered only for a profile with nothing but a name and/or a model; anything else is deleted only elsewhere", async () => {
+    const lockedBody = { profiles: {
+      ...profiles.profiles,
+      secret: { name: "Secret", hidden_fields: 2 },
+      plain: { name: "Plain", model: "m", flags: [], hidden_fields: 0 },
+      bare: {},
+      router: { name: "R", use_router: false },
+      hdr: { name: "H", headers: { "X-A": "1" } },
+    }, default: "home" };
     const { sb, net } = await activateWith({
       "GET /library/profiles": [{ status: 200, body: lockedBody }],
-      "DELETE /library/profiles/lab": [after({})],
+      "DELETE /library/profiles/plain": [after({})],
     }, [...ALL, "profiles:write"]);
     const items = (await sb.profiles.getChildren()) as ProfileItem[];
     const by = Object.fromEntries(items.map((i) => [i.id, i]));
-    assert.deepStrictEqual([by.home.contextValue, by.secret.contextValue, by.lab.contextValue], ["a4sx.profile.default", "a4sx.profile.locked", "a4sx.profile"]);
-    assert.ok(String(by.home.tooltip).endsWith(PROFILE_TEXTS.deleteElsewhere));
-    assert.ok(String(by.secret.tooltip).endsWith(PROFILE_TEXTS.deleteElsewhere));
-    assert.ok(!String(by.lab.tooltip).includes(PROFILE_TEXTS.deleteElsewhere));
+    const ctx = (id: string) => by[id].contextValue;
+    assert.deepStrictEqual(["home", "secret", "lab", "work", "router", "hdr", "plain", "bare"].map(ctx), [
+      "a4sx.profile.default", "a4sx.profile.locked", "a4sx.profile.locked", "a4sx.profile.locked", "a4sx.profile.locked", "a4sx.profile.locked",
+      "a4sx.profile", "a4sx.profile",
+    ], "the default, hidden settings, an address, flags, a router setting or headers: no Delete");
+    for (const id of ["home", "secret", "lab", "work", "router", "hdr"]) {
+      assert.ok(String(by[id].tooltip).endsWith(PROFILE_TEXTS.deleteElsewhere), id);
+    }
+    assert.ok(!String(by.plain.tooltip).includes(PROFILE_TEXTS.deleteElsewhere));
     assert.strictEqual(PROFILE_TEXTS.deleteElsewhere, "Delete it with the a4sx CLI or on the website.");
     const fake = require("vscode");
     const savedInfo = fake.window.showInformationMessage;
@@ -499,21 +511,21 @@ describe("Launch profile actions", () => {
     fake.window.showInformationMessage = async (message: string, ...buttons: string[]) => { asked.push(`${message}|${buttons.join(",")}`); return undefined; };
     try {
       calls.modalChoices.push(undefined, PROFILE_TEXTS.delete);
-      await calls.commands.get(ext.CMD_DELETE_PROFILE)!(by.lab);
-      await calls.commands.get(ext.CMD_DELETE_PROFILE)!(by.lab);
+      await calls.commands.get(ext.CMD_DELETE_PROFILE)!(by.plain);
+      await calls.commands.get(ext.CMD_DELETE_PROFILE)!(by.plain);
       await calls.commands.get(ext.CMD_DELETE_PROFILE)!(by.home);
       await calls.commands.get(ext.CMD_DELETE_PROFILE)!(by.secret);
+      await calls.commands.get(ext.CMD_DELETE_PROFILE)!(by.lab);
     } finally {
       fake.window.showInformationMessage = savedInfo;
     }
-    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmDelete("Lab"), PROFILE_TEXTS.confirmDelete("Lab")]);
-    assert.deepStrictEqual(asked, Array(2).fill(`${PROFILE_TEXTS.deleteElsewhere}|${PROFILE_TEXTS.runCli},${PROFILE_TEXTS.openWebsite}`));
-    assert.deepStrictEqual(net.seen.filter((r) => r.method === "DELETE").map((r) => new URL(r.url).pathname), ["/library/profiles/lab"]);
+    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmDelete("Plain"), PROFILE_TEXTS.confirmDelete("Plain")]);
+    assert.deepStrictEqual(asked, Array(3).fill(`${PROFILE_TEXTS.deleteElsewhere}|${PROFILE_TEXTS.runCli},${PROFILE_TEXTS.openWebsite}`));
+    assert.deepStrictEqual(net.seen.filter((r) => r.method === "DELETE").map((r) => new URL(r.url).pathname), ["/library/profiles/plain"]);
     const pkg = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "..", "..", "..", "package.json"), "utf8"));
     const del = pkg.contributes.menus["view/item/context"].filter((m: any) => m.command === ext.CMD_DELETE_PROFILE);
     assert.deepStrictEqual(del.map((m: any) => m.when), ["view == a4sx.profiles && viewItem == a4sx.profile"], "the menu hides Delete for the default and locked profiles");
   });
-
   it("Create asks for id, name and model only; the first profile becomes the default, so the modal names the address", async () => {
     const { sb, net } = await activateWith({
       "GET /library/profiles": [{ status: 200, body: { profiles: {}, default: null } }],
@@ -931,6 +943,7 @@ describe("read-only fields beyond the address; set-default and delete refusals",
 
   const body = { profiles: {
     home: { name: "Home", model: "m" },
+    plain: { name: "Plain", model: "p" },
     work: { name: "Work", base_url: "https://proxy.example.com", harness: "codex", use_router: true, router_tenant: "acme", headers: { "X-Team": "blue", "X-Org": "red" } },
   }, default: "home" };
 
@@ -976,11 +989,11 @@ describe("read-only fields beyond the address; set-default and delete refusals",
     it(`delete: a 409 ${code} shows the server's line and changes nothing here`, async () => {
       const { sb, net } = await activateWith({
         "GET /library/profiles": [{ status: 200, body }],
-        "DELETE /library/profiles/work": [{ status: 409, body: { error: { code, message: "Delete it with the a4sx CLI or on the website, please.\nmore" } } }],
+        "DELETE /library/profiles/plain": [{ status: 409, body: { error: { code, message: "Delete it with the a4sx CLI or on the website, please.\nmore" } } }],
       }, [...ALL, "profiles:write"]);
       const items = (await sb.profiles.getChildren()) as ProfileItem[];
       calls.modalChoices.push(PROFILE_TEXTS.delete);
-      await calls.commands.get(ext.CMD_DELETE_PROFILE)!(items.find((i) => i.id === "work")!);
+      await calls.commands.get(ext.CMD_DELETE_PROFILE)!(items.find((i) => i.id === "plain")!);
       assert.strictEqual(net.seen.filter((r) => r.method === "DELETE").length, 1);
       assert.deepStrictEqual(calls.errors.map((e) => e.message), ["Delete it with the a4sx CLI or on the website, please."]);
       assert.deepStrictEqual(sb.profiles.data, { profiles: Object.entries(body.profiles), default: "home" }, "the local list is unchanged");

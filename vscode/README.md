@@ -37,7 +37,7 @@ A launch profile says how `a4sx launch` starts a session: the model, the server 
 - **Create launch profile** (the + button) asks for an id, a name and a model. The new profile has no flags.
 - **Edit** can change the name and the model. The flags, the server address (shown as `scheme://host[:port]`), harness, router and headers are shown but can't be changed here. Choose one of them to run `a4sx profile` in a terminal or open the launch profiles page on the website. Header names and values are not shown, only how many there are.
 - The default can only be changed with the a4sx CLI or on the website. **Change default with the a4sx CLI or on the website** offers both.
-- **Delete** asks you to confirm first. The default profile, and profiles with hidden settings, can only be deleted with the a4sx CLI or on the website; their tooltip says so.
+- **Delete** asks you to confirm first. It is offered only for a profile that holds nothing but a name and a model and isn't the default. Other profiles can only be deleted with the a4sx CLI or on the website; their tooltip says so.
 - If a4sx refuses a change, the extension shows the server's message and changes nothing.
 
 The first time you change a profile, the extension asks for one more permission (`profiles:write`). Your browser opens a new sign-in that names it. The extension keeps using your current key until the new one arrives. Then it replaces the old key and asks the a4sx server to revoke it.
