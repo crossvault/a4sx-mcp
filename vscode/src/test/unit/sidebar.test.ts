@@ -124,7 +124,7 @@ describe("device login (same protocol as `a4sx login`)", () => {
     };
   };
 
-  it("asks for a read-only library token, opens the link, shows the code, polls until ok", async () => {
+  it("asks for library:read + profiles:read + library:organize, opens the link, shows the code, polls until ok", async () => {
     const net = fakeFetch({
       "POST /auth/cli/start": [start],
       "GET /auth/cli/poll": [
@@ -136,7 +136,7 @@ describe("device login (same protocol as `a4sx login`)", () => {
     });
     const h = hooks();
     const got = await deviceLogin(clientWith(net.fetch), h.hooks);
-    assert.deepStrictEqual(net.seen[0].body, { token_type: "library", scopes: ["library:read"], label: "a4sx for VS Code" });
+    assert.deepStrictEqual(net.seen[0].body, { token_type: "library", scopes: ["library:read", "profiles:read", "library:organize"], label: "a4sx for VS Code" });
     assert.deepStrictEqual(h.log.opened, [`${BASE}/auth/cli/choose?code=PAIR`]);
     assert.ok(h.log.reports.every((r) => r.includes("ABCD-EFGH")));
     assert.deepStrictEqual(got, { token: TOKEN, server: BASE, id: "tok_9", scopes: ["library:read"], expiresAt: "2099-01-01T00:00:00Z" });

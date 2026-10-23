@@ -1,8 +1,8 @@
 {
   "name": "a4sx",
   "displayName": "a4sx",
-  "description": "Use a4sx from VS Code: sign in, browse and resume your saved sessions, search the marketplace, and add the a4sx MCP servers for agent mode.",
-  "version": "0.2.2",
+  "description": "Use a4sx from VS Code: sign in, browse, filter, file and resume your saved sessions, manage your launch profiles, search the marketplace, and add the a4sx MCP servers for agent mode.",
+  "version": "0.3.0",
   "publisher": "crossvaultGmbH",
   "license": "Apache-2.0",
   "homepage": "https://session-exchange.com",
@@ -109,6 +109,63 @@
         "title": "Open on the web",
         "category": "a4sx",
         "icon": "$(globe)"
+      },
+      {
+        "command": "a4sx.filterSessions",
+        "title": "Filter",
+        "category": "a4sx",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "a4sx.clearSessionFilter",
+        "title": "Clear filter",
+        "category": "a4sx",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "a4sx.moveToFolder",
+        "title": "Move to folder…",
+        "category": "a4sx"
+      },
+      {
+        "command": "a4sx.removeFromFolder",
+        "title": "Remove from folder",
+        "category": "a4sx"
+      },
+      {
+        "command": "a4sx.refreshProfiles",
+        "title": "Refresh launch profiles",
+        "category": "a4sx",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "a4sx.createProfile",
+        "title": "Create launch profile",
+        "category": "a4sx",
+        "icon": "$(add)"
+      },
+      {
+        "command": "a4sx.editProfile",
+        "title": "Edit",
+        "category": "a4sx",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "a4sx.setDefaultProfile",
+        "title": "Set as default",
+        "category": "a4sx",
+        "icon": "$(star-empty)"
+      },
+      {
+        "command": "a4sx.deleteProfile",
+        "title": "Delete",
+        "category": "a4sx",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "a4sx.allowScope",
+        "title": "Allow a permission",
+        "category": "a4sx"
       }
     ],
     "viewsContainers": {
@@ -125,6 +182,11 @@
         {
           "id": "a4sx.sessions",
           "name": "My sessions",
+          "icon": "media/icon.png"
+        },
+        {
+          "id": "a4sx.profiles",
+          "name": "Launch profiles",
           "icon": "media/icon.png"
         },
         {
@@ -146,6 +208,11 @@
         "when": "a4sx.signedIn && a4sx.sessionsEmpty"
       },
       {
+        "view": "a4sx.profiles",
+        "contents": "Sign in to a4sx to see your launch profiles.\n[Sign in to a4sx](command:a4sx.signIn)",
+        "when": "!a4sx.signedIn"
+      },
+      {
         "view": "a4sx.marketplace",
         "contents": "Find sessions that others publish on the a4sx marketplace.\n[Search the marketplace](command:a4sx.searchMarketplace)"
       }
@@ -163,6 +230,16 @@
           "group": "navigation@2"
         },
         {
+          "command": "a4sx.filterSessions",
+          "when": "view == a4sx.sessions && a4sx.signedIn",
+          "group": "navigation@3"
+        },
+        {
+          "command": "a4sx.clearSessionFilter",
+          "when": "view == a4sx.sessions && a4sx.sessionsFiltered",
+          "group": "navigation@4"
+        },
+        {
           "command": "a4sx.openLibrary",
           "when": "view == a4sx.sessions",
           "group": "more@1"
@@ -173,6 +250,16 @@
           "group": "more@2"
         },
         {
+          "command": "a4sx.createProfile",
+          "when": "view == a4sx.profiles && a4sx.signedIn && a4sx.profilesAvailable",
+          "group": "navigation@1"
+        },
+        {
+          "command": "a4sx.refreshProfiles",
+          "when": "view == a4sx.profiles && a4sx.signedIn",
+          "group": "navigation@2"
+        },
+        {
           "command": "a4sx.searchMarketplace",
           "when": "view == a4sx.marketplace",
           "group": "navigation@1"
@@ -181,38 +268,73 @@
       "view/item/context": [
         {
           "command": "a4sx.resumeSession",
-          "when": "view == a4sx.sessions && viewItem == a4sx.session",
+          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/",
           "group": "inline@1"
         },
         {
           "command": "a4sx.resumeInClaude",
-          "when": "view == a4sx.sessions && viewItem == a4sx.session",
+          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/",
           "group": "inline@2"
         },
         {
           "command": "a4sx.openSessionOnWeb",
-          "when": "view == a4sx.sessions && viewItem == a4sx.session",
+          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/",
           "group": "inline@3"
         },
         {
           "command": "a4sx.resumeSession",
-          "when": "view == a4sx.sessions && viewItem == a4sx.session",
+          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/",
           "group": "1_session@1"
         },
         {
           "command": "a4sx.resumeInClaude",
-          "when": "view == a4sx.sessions && viewItem == a4sx.session",
+          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/",
           "group": "1_session@2"
         },
         {
           "command": "a4sx.openSessionOnWeb",
-          "when": "view == a4sx.sessions && viewItem == a4sx.session",
+          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/",
           "group": "1_session@3"
         },
         {
           "command": "a4sx.copySessionId",
-          "when": "view == a4sx.sessions && viewItem == a4sx.session",
+          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/",
           "group": "1_session@4"
+        },
+        {
+          "command": "a4sx.moveToFolder",
+          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/ && a4sx.foldersSupported",
+          "group": "2_folder@1"
+        },
+        {
+          "command": "a4sx.removeFromFolder",
+          "when": "view == a4sx.sessions && viewItem == a4sx.session.filed && a4sx.foldersSupported",
+          "group": "2_folder@2"
+        },
+        {
+          "command": "a4sx.setDefaultProfile",
+          "when": "view == a4sx.profiles && viewItem == a4sx.profile",
+          "group": "inline@1"
+        },
+        {
+          "command": "a4sx.editProfile",
+          "when": "view == a4sx.profiles && viewItem =~ /^a4sx\\.profile(\\.default)?$/",
+          "group": "inline@2"
+        },
+        {
+          "command": "a4sx.editProfile",
+          "when": "view == a4sx.profiles && viewItem =~ /^a4sx\\.profile(\\.default)?$/",
+          "group": "1_profile@1"
+        },
+        {
+          "command": "a4sx.setDefaultProfile",
+          "when": "view == a4sx.profiles && viewItem == a4sx.profile",
+          "group": "1_profile@2"
+        },
+        {
+          "command": "a4sx.deleteProfile",
+          "when": "view == a4sx.profiles && viewItem =~ /^a4sx\\.profile(\\.default)?$/",
+          "group": "2_danger@1"
         },
         {
           "command": "a4sx.openListing",
@@ -251,6 +373,46 @@
         },
         {
           "command": "a4sx.openListing",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.filterSessions",
+          "when": "a4sx.signedIn"
+        },
+        {
+          "command": "a4sx.clearSessionFilter",
+          "when": "a4sx.sessionsFiltered"
+        },
+        {
+          "command": "a4sx.moveToFolder",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.removeFromFolder",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.refreshProfiles",
+          "when": "a4sx.signedIn"
+        },
+        {
+          "command": "a4sx.createProfile",
+          "when": "a4sx.signedIn && a4sx.profilesAvailable"
+        },
+        {
+          "command": "a4sx.editProfile",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.setDefaultProfile",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.deleteProfile",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.allowScope",
           "when": "false"
         }
       ]

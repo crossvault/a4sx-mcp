@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0
+
+- **My sessions** shows folders. Sessions in a folder appear under it, and folders can be nested. Sessions without a folder stay at the top level.
+- New actions on a session: **Move to folder…** and **Remove from folder**.
+- **Filter** in the **My sessions** title bar shows only the sessions that match what you type (title, name, id, tags or folder). **Clear filter** shows all of them again.
+- New view **Launch profiles**: lists your launch profiles and marks the default. You can create, edit and delete profiles and set the default. Setting the default or changing a server address asks you to confirm and names the address.
+- **Resume in terminal** asks which launch profile to use when you have more than one, and passes it to `a4sx launch` as `--profile`.
+- Sign-in now also asks for `profiles:read` and `library:organize`. The first change to a launch profile asks for `profiles:write` with a new browser sign-in. On an older a4sx server, sign-in asks for `library:read` only, and the folder and profile actions are hidden.
+
 ## 0.2.2
 
 - Remote windows (SSH, WSL, dev containers, Codespaces): if the a4sx extension runs on this computer while the folder is on a remote machine, the resume and save commands now explain how to install a4sx in the remote window.

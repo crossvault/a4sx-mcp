@@ -5,18 +5,45 @@
 This extension connects VS Code to a4sx. It adds:
 
 - **The a4sx sidebar.** Click the a4sx icon in the activity bar.
-  - **Sign in to a4sx.** Your browser opens the a4sx sign-in page. Check that it shows the same code as VS Code, then confirm. VS Code keeps the resulting key in its secret storage. The key can only read your library.
-  - **My sessions** lists the sessions in your library, newest first, with their date and size. For each session you can:
-    - **Resume in terminal**, which runs `a4sx launch --a4sx-session=NAME` and continues the session in Claude Code.
+  - **Sign in to a4sx.** Your browser opens the a4sx sign-in page. Check that it shows the same code as VS Code, then confirm. VS Code keeps the resulting key in its secret storage. The key can read your library and your launch profiles, and move sessions between folders.
+  - **My sessions** lists the sessions in your library, newest first, with their date and size, in folders. For each session you can:
+    - **Resume in terminal**, which runs `a4sx launch --a4sx-session=NAME` and continues the session in Claude Code. If you have more than one launch profile, VS Code asks which one to use.
     - **Resume in Claude Code**, which copies the session into Claude Code's local history for the open folder and opens it in the Claude Code extension's panel. If more than one folder is open, VS Code asks which one.
     - **Open on the web**.
     - **Copy session id**.
+    - **Move to folder…** and **Remove from folder**.
+  - **Launch profiles** lists your launch profiles. The default one is marked. You can create, edit and delete profiles, and set the default.
   - **Marketplace** searches the sessions that others publish. A result opens on session-exchange.com. You don't need to sign in to search.
 - **The a4sx MCP servers for agent mode.** The a4sx tools show up in the tools list of agent mode in VS Code chat.
   - **a4sx** works without an account. You can search sessions and read their summaries.
   - **a4sx library** works with your a4sx account. VS Code asks you to sign in the first time it connects, and VS Code handles that sign-in itself.
 - **a4sx: Save this session.** This command runs `a4sx push --latest` in a terminal. It saves your most recently changed local Claude Code session to your a4sx library. The CLI's output and questions appear in the terminal.
 - **a4sx: Open my library.** This command opens your library on session-exchange.com in your browser.
+
+## Folders and the filter
+
+In **My sessions**, sessions that are in a folder appear under that folder. Folders can have sub-folders, up to 4 levels, for example `work/a4sx`. Sessions without a folder appear at the top level.
+
+- **Move to folder…** puts a session in a folder. Pick an existing folder, or choose **New folder…** and type a path.
+- **Remove from folder** moves the session back to the top level.
+- **Filter** (in the view's title bar) shows only the sessions whose title, name, id, tags or folder contain the text you type. Upper and lower case don't matter. The results are a flat list, and each session shows its folder. **Clear filter** shows all sessions again.
+
+Folders need a newer a4sx server. On an older server, all sessions appear at the top level and the folder actions are hidden.
+
+## Launch profiles
+
+A launch profile says how `a4sx launch` starts a session: the model, the server address (`base_url`), the harness and extra flags. A profile never holds an API key, and the extension never asks for one.
+
+- **Create launch profile** (the + button) asks for an id, a model and a server address.
+- **Edit** asks which field to change.
+- **Set as default** and changing a server address ask you to confirm first. The message names the address that launches will send their requests to.
+- **Delete** asks you to confirm first.
+
+The first time you change a profile, the extension asks for one more permission (`profiles:write`). Your browser opens a new sign-in that names it. The extension keeps using your current key until the new one arrives, and then replaces it.
+
+On an older a4sx server, the view shows "Launch profiles needs a newer a4sx server." and the profile actions are hidden.
+
+## Signing out
 
 To sign out, run **a4sx: Sign out**. This removes the key from VS Code. The key stays valid until it expires or you revoke it on session-exchange.com under Account › Agent keys.
 
@@ -39,4 +66,4 @@ In a remote window (SSH, WSL, dev containers, Codespaces), the a4sx extension us
 
 ## Network use
 
-The sidebar connects to session-exchange.com (or your `a4sx.serverUrl`) to sign you in, list your sessions and search the marketplace. It sends no telemetry. VS Code connects to session-exchange.com when agent mode uses the a4sx MCP servers. **Save this session**, **Resume in terminal** and **Resume in Claude Code** run the a4sx command-line tool, which uses its own sign-in.
+The sidebar connects to session-exchange.com (or your `a4sx.serverUrl`) to sign you in, list and file your sessions, manage your launch profiles and search the marketplace. It sends no telemetry. VS Code connects to session-exchange.com when agent mode uses the a4sx MCP servers. **Save this session**, **Resume in terminal** and **Resume in Claude Code** run the a4sx command-line tool, which uses its own sign-in.

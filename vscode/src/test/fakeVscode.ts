@@ -43,6 +43,16 @@ export interface Calls {
   extensionKind: number;
   /** How many cancellation listeners were disposed. */
   cancelDisposed: number;
+  /** Modal information/warning messages (`{ modal: true }`), in order. */
+  modals: { kind: "info" | "warning"; message: string; items: string[] }[];
+  /** What the next modals resolve to, in order (a button label, or undefined = Cancel). Empty = Cancel. */
+  modalChoices: (string | undefined)[];
+  /** What the next input boxes resolve to, in order; when empty, `nextInput` answers. */
+  inputQueue: (string | undefined)[];
+  /** What the next quick picks resolve to (indexes), in order; when empty, `nextPick` answers. */
+  pickQueue: (number | undefined)[];
+  /** Tree views made with createTreeView, by view id. */
+  treeViews: Map<string, { message?: string; description?: string }>;
 }
 
 export const calls: Calls = {
@@ -73,6 +83,11 @@ export const calls: Calls = {
   cancelDisposed: 0,
   remoteName: undefined,
   extensionKind: 1,
+  modals: [],
+  modalChoices: [],
+  inputQueue: [],
+  pickQueue: [],
+  treeViews: new Map(),
 };
 
 export function resetCalls(): void {
@@ -103,6 +118,15 @@ export function resetCalls(): void {
   calls.cancelDisposed = 0;
   calls.remoteName = undefined;
   calls.extensionKind = 1;
+  calls.modals.length = 0;
+  calls.modalChoices.length = 0;
+  calls.inputQueue.length = 0;
+  calls.pickQueue.length = 0;
+  calls.treeViews.clear();
+}
+
+function isModal(options: unknown): boolean {
+  return typeof options === "object" && options !== null && (options as { modal?: boolean }).modal === true;
 }
 
 /** An in-memory `context.secrets` that records what was stored. */
@@ -145,6 +169,7 @@ class EventEmitter<T> {
 enum TreeItemCollapsibleState { None = 0, Collapsed = 1, Expanded = 2 }
 
 class TreeItem {
+  id?: string;
   description?: string;
   tooltip?: string;
   contextValue?: string;
@@ -205,21 +230,35 @@ const fake = {
       calls.errors.push({ message, items });
       return calls.nextErrorChoice;
     },
-    async showInformationMessage(message: string) {
+    async showInformationMessage(message: string, options?: unknown, ...items: string[]) {
+      if (isModal(options)) {
+        calls.modals.push({ kind: "info", message, items });
+        return calls.modalChoices.shift();
+      }
       calls.infos.push(message);
       return undefined;
     },
-    async showWarningMessage(message: string) {
+    async showWarningMessage(message: string, options?: unknown, ...items: string[]) {
+      if (isModal(options)) {
+        calls.modals.push({ kind: "warning", message, items });
+        return calls.modalChoices.shift();
+      }
       calls.warnings.push(message);
       return undefined;
     },
     async showInputBox(options: unknown) {
       calls.inputs.push(options);
-      return calls.nextInput;
+      return calls.inputQueue.length ? calls.inputQueue.shift() : calls.nextInput;
     },
     registerTreeDataProvider(id: string, provider: unknown) {
       calls.treeProviders.set(id, provider);
       return { dispose: () => calls.treeProviders.delete(id) };
+    },
+    createTreeView(id: string, options: { treeDataProvider: unknown }) {
+      calls.treeProviders.set(id, options.treeDataProvider);
+      const view = { message: undefined as string | undefined, description: undefined as string | undefined, dispose: () => { calls.treeProviders.delete(id); calls.treeViews.delete(id); } };
+      calls.treeViews.set(id, view);
+      return view;
     },
     async withProgress(options: { title: string }, task: (p: unknown, c: unknown) => Promise<unknown>) {
       const rec = { title: options.title, messages: [] as string[], options };
@@ -237,7 +276,8 @@ const fake = {
     },
     async showQuickPick(items: any[], options: unknown) {
       calls.quickPicks.push({ items, options });
-      return calls.nextPick === undefined ? undefined : items[calls.nextPick];
+      const pick = calls.pickQueue.length ? calls.pickQueue.shift() : calls.nextPick;
+      return pick === undefined ? undefined : items[pick];
     },
   },
   env: {

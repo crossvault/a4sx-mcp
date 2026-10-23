@@ -12,7 +12,9 @@ suite("a4sx extension (in VS Code)", () => {
     await ext.activate();
     const commands = await vscode.commands.getCommands(true);
     for (const id of ["a4sx.saveSession", "a4sx.openLibrary", "a4sx.signIn", "a4sx.signOut", "a4sx.refreshSessions",
-      "a4sx.resumeSession", "a4sx.resumeInClaude", "a4sx.openSessionOnWeb", "a4sx.copySessionId", "a4sx.searchMarketplace", "a4sx.openListing"]) {
+      "a4sx.resumeSession", "a4sx.resumeInClaude", "a4sx.openSessionOnWeb", "a4sx.copySessionId", "a4sx.searchMarketplace", "a4sx.openListing",
+      "a4sx.filterSessions", "a4sx.clearSessionFilter", "a4sx.moveToFolder", "a4sx.removeFromFolder", "a4sx.refreshProfiles",
+      "a4sx.createProfile", "a4sx.editProfile", "a4sx.setDefaultProfile", "a4sx.deleteProfile", "a4sx.allowScope"]) {
       assert.ok(commands.includes(id), id);
     }
   });
@@ -25,10 +27,25 @@ suite("a4sx extension (in VS Code)", () => {
     assert.strictEqual(vscode.env.remoteName, undefined);
   });
 
-  test("the sidebar views open, and signed out there is no a4sx session", async () => {
+  test("the sidebar views (My sessions, Launch profiles, Marketplace) open, and signed out there is no a4sx session", async () => {
     await vscode.commands.executeCommand("a4sx.sessions.focus");
+    await vscode.commands.executeCommand("a4sx.profiles.focus");
     await vscode.commands.executeCommand("a4sx.marketplace.focus");
     const session = await vscode.authentication.getSession("a4sx", [], { silent: true });
     assert.strictEqual(session, undefined);
+  });
+});
+
+suite("a4sx manifest (in VS Code)", () => {
+  test("every menu and palette command is a contributed command", () => {
+    const ext = vscode.extensions.getExtension("crossvaultGmbH.a4sx");
+    assert.ok(ext);
+    const pkg = ext.packageJSON;
+    const ids = new Set(pkg.contributes.commands.map((c: { command: string }) => c.command));
+    for (const [where, entries] of Object.entries(pkg.contributes.menus as Record<string, { command: string }[]>)) {
+      for (const e of entries) {
+        assert.ok(ids.has(e.command), `${where}: ${e.command}`);
+      }
+    }
   });
 });

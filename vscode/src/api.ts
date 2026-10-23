@@ -11,10 +11,17 @@ export type FetchLike = (url: string, init?: { method?: string; headers?: Record
 
 export type ApiErrorCode =
   | "bad-server-url" | "unreachable" | "unauthorized" | "busy" | "expired" | "too-many-tokens"
-  | "bad-login-url" | "bad-response" | "http";
+  | "bad-login-url" | "bad-response" | "http"
+  | "bad-scopes" | "insufficient-scope" | "not-supported" | "rejected" | "profile-limit" | "not-found";
 
 export class ApiError extends Error {
-  constructor(public readonly code: ApiErrorCode, message: string, public readonly status?: number) {
+  constructor(
+    public readonly code: ApiErrorCode,
+    message: string,
+    public readonly status?: number,
+    /** For "insufficient-scope": the scope the server says the route needs. */
+    public readonly requiredScope?: string,
+  ) {
     super(message);
   }
 }
@@ -29,6 +36,14 @@ export const MESSAGES = {
   badLoginUrl: "a4sx sent a sign-in link for a different site, so the extension did not open it.",
   badResponse: "a4sx sent an answer this extension doesn't understand. Update the extension or try again later.",
   http: (status: number) => `a4sx answered with an error (HTTP ${status}). Try again later.`,
+  needsScope: (scope: string) => `This needs the a4sx permission ${scope}.`,
+  profilesNotSupported: "Launch profiles needs a newer a4sx server.",
+  foldersNotSupported: "Folders need a newer a4sx server.",
+  profileRejected: "a4sx did not accept this launch profile.",
+  folderRejected: "a4sx did not accept this folder name.",
+  profileLimit: "You have the maximum number of launch profiles. Delete one first.",
+  profileGone: "This launch profile no longer exists. Refresh the list.",
+  sessionGone: "This session no longer exists. Refresh the list.",
 } as const;
 
 /** The server origin from the a4sx.serverUrl setting: https only (plain http only for this machine). */
@@ -99,6 +114,9 @@ export interface SessionRow {
   id: string;
   title?: string;
   label?: string;
+  tags?: string[];
+  /** One folder path such as "work/a4sx", or null when unfiled. Servers before folders send no key at all. */
+  folder?: string | null;
   created_at?: string;
   updated_at?: string;
   tokens?: { current?: number; peak?: number };
@@ -147,14 +165,25 @@ export interface LoginStart {
   expiresIn: number;
 }
 
-export const LOGIN_SCOPES = ["library:read"];
+export const SCOPE_READ = "library:read";
+export const SCOPE_ORGANIZE = "library:organize";
+export const SCOPE_PROFILES_READ = "profiles:read";
+export const SCOPE_PROFILES_WRITE = "profiles:write";
+/** What sign-in asks for. `profiles:write` is asked for separately, the first time a profile is changed. */
+export const LOGIN_SCOPES = [SCOPE_READ, SCOPE_PROFILES_READ, SCOPE_ORGANIZE];
+/** What sign-in falls back to when the server does not offer the newer scopes. */
+export const LEGACY_LOGIN_SCOPES = [SCOPE_READ];
 export const LOGIN_LABEL = "a4sx for VS Code";
 
-export async function startLogin(c: Client): Promise<LoginStart> {
+export async function startLogin(c: Client, scopes: readonly string[] = LOGIN_SCOPES): Promise<LoginStart> {
   const { status, data } = await call(c, "/auth/cli/start", {
     method: "POST",
-    body: { token_type: "library", scopes: LOGIN_SCOPES, label: LOGIN_LABEL },
+    body: { token_type: "library", scopes: [...scopes], label: LOGIN_LABEL },
   });
+  if (status === 400 && errorCode(data) === "bad_scopes") {
+    // A server that doesn't offer one of these scopes yet.
+    throw new ApiError("bad-scopes", MESSAGES.badResponse, status);
+  }
   if (status !== 200) {
     fail(status);
   }
@@ -176,7 +205,7 @@ export async function startLogin(c: Client): Promise<LoginStart> {
 
 export type PollResult =
   | { status: "pending" | "awaiting_approval" | "retry" }
-  | { status: "ok"; token: string; tokenId?: string; scopes: string[]; expiresAt?: string };
+  | { status: "ok"; token: string; tokenId?: string; scopes?: string[]; expiresAt?: string };
 
 export async function pollLogin(c: Client, code: string): Promise<PollResult> {
   let r: { status: number; data: any };
@@ -197,7 +226,7 @@ export async function pollLogin(c: Client, code: string): Promise<PollResult> {
       status: "ok",
       token: data.token,
       tokenId: typeof data.token_id === "string" ? data.token_id : undefined,
-      scopes: Array.isArray(data.scopes) ? data.scopes.filter((s: unknown) => typeof s === "string") : LOGIN_SCOPES,
+      scopes: Array.isArray(data.scopes) ? data.scopes.filter((s: unknown) => typeof s === "string") : undefined,
       expiresAt: typeof data.expires_at === "string" ? data.expires_at : undefined,
     };
   }
@@ -220,4 +249,119 @@ export function sessionWebUrl(base: string, id: string): string {
 export function listingWebUrl(base: string, row: { id: string; tenant?: string }): string {
   const t = row.tenant && row.tenant !== "default" ? `?t=${encodeURIComponent(row.tenant)}` : "";
   return `${base}/marketplace/${encodeURIComponent(row.id)}${t}`;
+}
+
+/**
+ * The refusals of a route that a scoped key may lack, or that an older server doesn't have:
+ * a 403 naming `required_scope` is "insufficient-scope" (the caller can offer a new sign-in);
+ * any other 401/403, and a 404/405 for the route itself, mean the server doesn't offer it yet.
+ */
+function scopedFail(status: number, data: any, notSupported: string): never {
+  const code = errorCode(data);
+  const need = data?.error?.details?.required_scope;
+  if (status === 403 && code === "insufficient_scope" && typeof need === "string" && need) {
+    throw new ApiError("insufficient-scope", MESSAGES.needsScope(need), status, need);
+  }
+  if (status === 401 || status === 403 || status === 405 || (status === 404 && code !== "no_such_profile")) {
+    throw new ApiError("not-supported", notSupported, status);
+  }
+  fail(status);
+}
+
+/** The non-secret fields of a launch profile. The server never stores an API key in one. */
+export interface Profile {
+  name?: string;
+  harness?: string;
+  model?: string;
+  base_url?: string;
+  flags?: string[];
+  [field: string]: unknown;
+}
+
+export interface ProfilesState {
+  /** In the server's order: deleting the default makes the first remaining profile the default. */
+  profiles: [string, Profile][];
+  default: string | null;
+}
+
+function profilesState(status: number, data: any): ProfilesState {
+  if (!data || typeof data.profiles !== "object" || data.profiles === null || Array.isArray(data.profiles)) {
+    throw new ApiError("bad-response", MESSAGES.badResponse, status);
+  }
+  const profiles = Object.entries(data.profiles as Record<string, unknown>)
+    .filter(([id, p]) => PROFILE_ID.test(id) && typeof p === "object" && p !== null && !Array.isArray(p)) as [string, Profile][];
+  const def = typeof data.default === "string" && profiles.some(([id]) => id === data.default) ? data.default : null;
+  return { profiles, default: def };
+}
+
+/** The server's rule for a profile id. */
+export const PROFILE_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+export async function listProfiles(c: Client, token: string): Promise<ProfilesState> {
+  const { status, data } = await call(c, "/library/profiles", { token });
+  if (status !== 200) {
+    scopedFail(status, data, MESSAGES.profilesNotSupported);
+  }
+  return profilesState(status, data);
+}
+
+function profileWriteFail(status: number, data: any): never {
+  const code = errorCode(data);
+  if (status === 429 && code === "profile_limit") {
+    throw new ApiError("profile-limit", MESSAGES.profileLimit, status);
+  }
+  if (status === 404 && code === "no_such_profile") {
+    throw new ApiError("not-found", MESSAGES.profileGone, status);
+  }
+  if (status === 400) {
+    throw new ApiError("rejected", MESSAGES.profileRejected, status);
+  }
+  scopedFail(status, data, MESSAGES.profilesNotSupported);
+}
+
+function profilePath(id: string, suffix = ""): string {
+  if (!PROFILE_ID.test(id)) {
+    throw new ApiError("rejected", MESSAGES.profileRejected);
+  }
+  return `/library/profiles/${encodeURIComponent(id)}${suffix}`;
+}
+
+export async function putProfile(c: Client, token: string, id: string, profile: Profile): Promise<ProfilesState> {
+  const { status, data } = await call(c, profilePath(id), { method: "PUT", token, body: profile });
+  if (status !== 200) {
+    profileWriteFail(status, data);
+  }
+  return profilesState(status, data);
+}
+
+export async function deleteProfile(c: Client, token: string, id: string): Promise<ProfilesState> {
+  const { status, data } = await call(c, profilePath(id), { method: "DELETE", token });
+  if (status !== 200) {
+    profileWriteFail(status, data);
+  }
+  return profilesState(status, data);
+}
+
+export async function setDefaultProfile(c: Client, token: string, id: string): Promise<ProfilesState> {
+  const { status, data } = await call(c, profilePath(id, "/default"), { method: "POST", token, body: {} });
+  if (status !== 200) {
+    profileWriteFail(status, data);
+  }
+  return profilesState(status, data);
+}
+
+/** Files a saved session in `folder`, or takes it out of its folder (null). */
+export async function setSessionFolder(c: Client, token: string, id: string, folder: string | null): Promise<void> {
+  const { status, data } = await call(c, `/library/session/${encodeURIComponent(id)}/meta`, { method: "POST", token, body: { folder } });
+  if (status === 200) {
+    return;
+  }
+  if (status === 400) {
+    throw new ApiError("rejected", MESSAGES.folderRejected, status);
+  }
+  if (status === 404) {
+    // The meta route exists on every server, so a 404 is about the session.
+    throw new ApiError("not-found", MESSAGES.sessionGone, status);
+  }
+  scopedFail(status, data, MESSAGES.foldersNotSupported);
 }

@@ -1,0 +1,601 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 crossVault GmbH
+// 0.3.0: session folders and the filter, the Launch profiles view, the profile pick on resume, and the
+// step-up sign-in. The server is faked; old-server answers are faked too (no `folder` key, 400
+// bad_scopes at sign-in, 401/403/404 on the profile routes).
+import * as assert from "assert";
+import { calls, fakeSecrets, resetCalls } from "../fakeVscode";
+import * as ext from "../../extension";
+import * as api from "../../api";
+import { deviceLogin, LoginRequest, SECRET_KEY, STEP_UP_TITLE } from "../../auth";
+import {
+  buildFolderTree, FILTER_MESSAGE, FolderItem, matchesFilter, NO_MATCH, normalizeFolder, SessionItem,
+} from "../../sessionsView";
+import { FOLDER_TEXTS } from "../../folderCommands";
+import { ALLOW_SCOPE_ITEM, displayAddress, NO_PROFILES, ProfileItem } from "../../profilesView";
+import { PROFILE_TEXTS, validateBaseUrl, validateFlags, validateProfileId, withField } from "../../profileCommands";
+import { STEP_UP } from "../../stepUp";
+import type { CliLookup } from "../../cli";
+
+const TOKEN = "lib_tok_OLD_secret_111";
+const NEW_TOKEN = "lib_tok_NEW_secret_222";
+const BASE = "https://session-exchange.com";
+const ALL = ["library:read", "profiles:read", "library:organize"];
+
+interface Req { url: string; method: string; headers: Record<string, string>; body?: any }
+type Answer = { status: number; body?: unknown } | Error;
+
+function fakeFetch(routes: Record<string, Answer[]>) {
+  const seen: Req[] = [];
+  const fetch: api.FetchLike = async (url, init) => {
+    const u = new URL(url);
+    seen.push({ url, method: init?.method ?? "GET", headers: init?.headers ?? {}, body: init?.body ? JSON.parse(init.body) : undefined });
+    const key = `${init?.method ?? "GET"} ${u.pathname}`;
+    const queue = routes[key];
+    if (!queue || queue.length === 0) {
+      throw new Error(`unexpected request ${key}`);
+    }
+    const next = queue.length > 1 ? queue.shift()! : queue[0];
+    if (next instanceof Error) {
+      throw next;
+    }
+    return { status: next.status, json: async () => (next.body === undefined ? Promise.reject(new Error("no body")) : next.body) };
+  };
+  return { fetch, seen };
+}
+
+const clientWith = (fetch: api.FetchLike): api.Client => ({ base: BASE, fetch, userAgent: "a4sx-vscode" });
+const stored = (scopes: string[], token = TOKEN) => JSON.stringify({ token, server: BASE, id: "tok_1", scopes });
+const scopeRefusal = (need: string | null) => ({ status: 403, body: { error: { code: "insufficient_scope", message: "x", details: { token_valid: true, required_scope: need } } } });
+
+const savedRuntime = { ...ext.runtime };
+afterEach(() => Object.assign(ext.runtime, savedRuntime));
+
+/** Activates with a fake network and a stored key holding `scopes`; `logins` records step-up requests. */
+async function activateWith(routes: Record<string, Answer[]>, scopes: string[] | null = ALL) {
+  const net = fakeFetch(routes);
+  ext.runtime.fetch = net.fetch;
+  const logins: LoginRequest[] = [];
+  ext.runtime.login = async (_c, req) => {
+    logins.push(req);
+    return { token: NEW_TOKEN, server: BASE, id: "tok_2", scopes: [...req.scopes] };
+  };
+  const ctx = { subscriptions: [] as { dispose(): unknown }[], secrets: fakeSecrets() };
+  ext.activate(ctx as any);
+  if (scopes) {
+    await ctx.secrets.store(SECRET_KEY, stored(scopes));
+  }
+  return { ctx, net, logins, sb: ext.sidebar! };
+}
+
+const storedKey = (ctx: { secrets: { store_: Map<string, string> } }) => JSON.parse(ctx.secrets.store_.get(SECRET_KEY) ?? "null");
+const bearer = (r: Req) => r.headers.Authorization;
+
+function noTokenAnywhere(): void {
+  const shown = [...calls.errors.map((e) => e.message), ...calls.infos, ...calls.warnings, ...calls.modals.map((m) => m.message),
+    ...calls.progress.flatMap((p) => p.messages), ...[...calls.treeViews.values()].map((v) => v.message ?? "")];
+  for (const m of shown) {
+    assert.ok(!m.includes(TOKEN) && !m.includes(NEW_TOKEN), `token leaked into a message: ${m}`);
+  }
+}
+
+const rows = [
+  { id: "c-1", title: "Fix login", updated_at: "2026-10-20T10:00:00Z", folder: "work/a4sx", tags: ["auth"] },
+  { id: "c-2", title: "Refactor router", updated_at: "2026-10-21T10:00:00Z", folder: "work/a4sx" },
+  { id: "c-3", title: "Taxes", label: "tax-2026", updated_at: "2026-10-01T10:00:00Z", folder: "home" },
+  { id: "c-4", title: "Old notes", updated_at: "2026-09-01T10:00:00Z", folder: "work" },
+  { id: "c-5", title: "Unfiled one", updated_at: "2026-10-22T10:00:00Z", folder: null },
+  { id: "c-6", title: "Unfiled two", updated_at: "2026-10-02T10:00:00Z", folder: null, tags: ["Deploy"] },
+];
+
+describe("folder tree", () => {
+  beforeEach(resetCalls);
+
+  it("nests folders by segment (sorted), sessions newest first, unfiled ones at the top level", () => {
+    const root = buildFolderTree(rows);
+    assert.deepStrictEqual(root.folders.map((f) => f.name), ["home", "work"]);
+    assert.deepStrictEqual(root.sessions.map((r) => r.id), ["c-5", "c-6"]);
+    const work = root.folders[1];
+    assert.deepStrictEqual(work.sessions.map((r) => r.id), ["c-4"]);
+    assert.deepStrictEqual(work.folders.map((f) => [f.name, f.path]), [["a4sx", "work/a4sx"]]);
+    assert.deepStrictEqual(work.folders[0].sessions.map((r) => r.id), ["c-2", "c-1"]);
+  });
+
+  it("folder paths compare case-sensitively; odd values are unfiled", () => {
+    const root = buildFolderTree([
+      { id: "a", folder: "Work" }, { id: "b", folder: "work" }, { id: "c", folder: 7 as any }, { id: "d", folder: " / " }, { id: "e" },
+    ]);
+    assert.deepStrictEqual(root.folders.map((f) => f.name), ["Work", "work"]);
+    assert.deepStrictEqual(root.sessions.map((r) => r.id).sort(), ["c", "d", "e"]);
+  });
+
+  it("the view shows folders first (collapsed, with a count), then unfiled sessions; a folder expands to its contents", async () => {
+    const { sb } = await activateWith({ "GET /library/sessions": [{ status: 200, body: { sessions: rows } }] });
+    const top = await sb.sessions.getChildren();
+    assert.deepStrictEqual(top.map((i) => i.label), ["home", "work", "Unfiled one", "Unfiled two"]);
+    const work = top[1] as FolderItem;
+    assert.strictEqual(work.collapsibleState, 1);
+    assert.strictEqual(work.description, "3");
+    assert.strictEqual(work.contextValue, "a4sx.folder");
+    const inside = await sb.sessions.getChildren(work);
+    assert.deepStrictEqual(inside.map((i) => i.label), ["a4sx", "Old notes"]);
+    const deeper = (await sb.sessions.getChildren(inside[0])) as SessionItem[];
+    assert.deepStrictEqual(deeper.map((i) => [i.label, i.contextValue]), [["Refactor router", "a4sx.session.filed"], ["Fix login", "a4sx.session.filed"]]);
+    assert.ok(!String(deeper[0].description).includes("work/a4sx"), "in the tree, the folder is not repeated in the description");
+    assert.strictEqual((top[2] as SessionItem).contextValue, "a4sx.session");
+    assert.strictEqual(calls.context["a4sx.foldersSupported"], true);
+  });
+
+  it("an older server (no `folder` key on rows): everything is unfiled and the folder actions are hidden", async () => {
+    const old = rows.map(({ folder: _f, ...r }) => r);
+    const { sb, net } = await activateWith({ "GET /library/sessions": [{ status: 200, body: { sessions: old } }] });
+    const top = await sb.sessions.getChildren();
+    assert.ok(top.every((i) => i instanceof SessionItem && i.contextValue === "a4sx.session"));
+    assert.strictEqual(top.length, rows.length);
+    assert.strictEqual(calls.context["a4sx.foldersSupported"], false);
+    await calls.commands.get(ext.CMD_MOVE_TO_FOLDER)!(top[0]);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [api.MESSAGES.foldersNotSupported]);
+    assert.strictEqual(net.seen.filter((r) => r.method === "POST").length, 0);
+  });
+
+  it("folder names follow the server's rule", () => {
+    assert.strictEqual(normalizeFolder(" work / a4sx "), "work/a4sx");
+    assert.strictEqual(normalizeFolder("a/b/c/d"), "a/b/c/d");
+    for (const bad of ["", "/work", "work/", "a/b/c/d/e", "a//b", "..", "a/./b", "x".repeat(41), "naïve", "a:b", `${"x".repeat(40)}/${"y".repeat(40)}/${"z".repeat(40)}`]) {
+      assert.strictEqual(normalizeFolder(bad), undefined, bad);
+    }
+  });
+});
+
+describe("session filter", () => {
+  beforeEach(resetCalls);
+
+  it("matches title, label, id, tags and folder, case-insensitively", () => {
+    const [c1, , c3, , , c6] = rows;
+    assert.ok(matchesFilter(c1, "FIX"));
+    assert.ok(matchesFilter(c3, "Tax-2026"));
+    assert.ok(matchesFilter(c3, "C-3"));
+    assert.ok(matchesFilter(c6, "deploy"));
+    assert.ok(matchesFilter(c1, "WORK/A4"));
+    assert.ok(!matchesFilter(c6, "work"));
+    assert.ok(matchesFilter(c6, "  "));
+  });
+
+  it("shows matches flat (newest first) with the folder in the description, and the filter in the view message", async () => {
+    const { sb, net } = await activateWith({ "GET /library/sessions": [{ status: 200, body: { sessions: rows } }] });
+    await sb.sessions.getChildren();
+    calls.nextInput = "WORK";
+    await calls.commands.get(ext.CMD_FILTER)!();
+    assert.strictEqual(calls.inputs[0].title, FOLDER_TEXTS.filterTitle);
+    assert.strictEqual(calls.context["a4sx.sessionsFiltered"], true);
+    const items = (await sb.sessions.getChildren()) as SessionItem[];
+    assert.deepStrictEqual(items.map((i) => i.label), ["Refactor router", "Fix login", "Old notes"]);
+    assert.ok(items.every((i) => i instanceof SessionItem));
+    assert.ok(String(items[0].description).startsWith("work/a4sx · 2026-10-21"));
+    assert.ok(String(items[2].description).startsWith("work · "));
+    assert.strictEqual(calls.treeViews.get(ext.VIEW_SESSIONS)!.message, FILTER_MESSAGE("WORK", 3, 6));
+    assert.strictEqual(net.seen.length, 1, "a filter change reuses the list");
+  });
+
+  it("no match is one item that clears the filter; Clear filter brings the tree back; Esc keeps the filter", async () => {
+    const { sb } = await activateWith({ "GET /library/sessions": [{ status: 200, body: { sessions: rows } }] });
+    sb.sessions.setFilter("zzz");
+    const none = await sb.sessions.getChildren();
+    assert.deepStrictEqual(none.map((i) => i.label), [NO_MATCH("zzz")]);
+    assert.strictEqual(none[0].command!.command, ext.CMD_CLEAR_FILTER);
+    calls.nextInput = undefined;
+    await calls.commands.get(ext.CMD_FILTER)!();
+    assert.strictEqual(sb.sessions.filter, "zzz");
+    await calls.commands.get(ext.CMD_CLEAR_FILTER)!();
+    assert.strictEqual(sb.sessions.filter, undefined);
+    assert.strictEqual(calls.context["a4sx.sessionsFiltered"], false);
+    assert.strictEqual(calls.treeViews.get(ext.VIEW_SESSIONS)!.message, undefined);
+    assert.deepStrictEqual((await sb.sessions.getChildren()).map((i) => i.label), ["home", "work", "Unfiled one", "Unfiled two"]);
+    calls.nextInput = "";
+    sb.sessions.setFilter("x");
+    await calls.commands.get(ext.CMD_FILTER)!();
+    assert.strictEqual(sb.sessions.filter, undefined, "an empty filter clears it");
+  });
+});
+
+describe("Move to folder / Remove from folder", () => {
+  beforeEach(resetCalls);
+
+  const sessionsRoute = { "GET /library/sessions": [{ status: 200, body: { sessions: rows } }] as Answer[] };
+
+  it("picks an existing folder, posts it with the current key, refreshes", async () => {
+    const { sb, net } = await activateWith({ ...sessionsRoute, "POST /library/session/c-5/meta": [{ status: 200, body: { id: "c-5" } }] });
+    const top = await sb.sessions.getChildren();
+    calls.nextPick = 1;   // ["home", "work", "work/a4sx", "New folder…"]
+    await calls.commands.get(ext.CMD_MOVE_TO_FOLDER)!(top[2]);
+    assert.deepStrictEqual(calls.quickPicks[0].items.map((i: any) => i.label), ["home", "work", "work/a4sx", FOLDER_TEXTS.newFolder]);
+    const post = net.seen.find((r) => r.method === "POST")!;
+    assert.deepStrictEqual(post.body, { folder: "work" });
+    assert.strictEqual(bearer(post), `Bearer ${TOKEN}`);
+    assert.strictEqual(sb.sessions.rows, undefined, "the list is fetched again");
+    assert.strictEqual(calls.modals.length, 0, "the key already holds library:organize");
+  });
+
+  it("a new folder is typed and validated; Remove from folder posts folder: null", async () => {
+    const { sb, net } = await activateWith({ ...sessionsRoute, "POST /library/session/c-1/meta": [{ status: 200, body: {} }] });
+    await sb.sessions.getChildren();
+    const filed = new SessionItem(rows[0]);
+    calls.nextPick = 2;   // "New folder…" (work/a4sx is the current folder, so it isn't offered)
+    calls.nextInput = " clients / acme ";
+    await calls.commands.get(ext.CMD_MOVE_TO_FOLDER)!(filed);
+    assert.strictEqual(calls.inputs[0].value, "work/a4sx");
+    assert.strictEqual(calls.inputs[0].validateInput("a//b"), FOLDER_TEXTS.folderInvalid);
+    assert.strictEqual(calls.inputs[0].validateInput("ok/fine"), null);
+    await sb.sessions.getChildren();
+    await calls.commands.get(ext.CMD_REMOVE_FROM_FOLDER)!(filed);
+    assert.deepStrictEqual(net.seen.filter((r) => r.method === "POST").map((r) => r.body), [{ folder: "clients/acme" }, { folder: null }]);
+  });
+
+  it("without library:organize: a modal names the permission, the new sign-in asks for it, the new key replaces the old", async () => {
+    const { sb, net, ctx, logins } = await activateWith({ ...sessionsRoute, "POST /library/session/c-5/meta": [{ status: 200, body: {} }] }, ["library:read", "profiles:read"]);
+    const top = await sb.sessions.getChildren();
+    assert.strictEqual(bearer(net.seen[0]), `Bearer ${TOKEN}`, "the old key works until the new one arrives");
+    calls.modalChoices.push(STEP_UP.signIn);
+    calls.nextPick = 0;
+    await calls.commands.get(ext.CMD_MOVE_TO_FOLDER)!(top[2]);
+    assert.deepStrictEqual(calls.modals.map((m) => [m.message, m.items]), [[STEP_UP.prompt("library:organize"), [STEP_UP.signIn]]]);
+    assert.ok(calls.modals[0].message.includes("library:organize"));
+    assert.deepStrictEqual(logins, [{ scopes: ["library:read", "profiles:read", "library:organize"], fallback: false, adding: "library:organize" }]);
+    assert.strictEqual(storedKey(ctx).token, NEW_TOKEN);
+    const post = net.seen.find((r) => r.method === "POST")!;
+    assert.strictEqual(bearer(post), `Bearer ${NEW_TOKEN}`);
+    noTokenAnywhere();
+  });
+
+  it("declining the new sign-in changes nothing and keeps the old key", async () => {
+    const { sb, net, ctx, logins } = await activateWith(sessionsRoute, ["library:read"]);
+    const top = await sb.sessions.getChildren();
+    calls.modalChoices.push(undefined);
+    await calls.commands.get(ext.CMD_MOVE_TO_FOLDER)!(top[2]);
+    assert.strictEqual(logins.length, 0);
+    assert.strictEqual(storedKey(ctx).token, TOKEN);
+    assert.strictEqual(net.seen.filter((r) => r.method === "POST").length, 0);
+    assert.strictEqual(calls.quickPicks.length, 0);
+  });
+
+  it("a 403 naming required_scope offers the new sign-in, then the move is sent once more with the new key", async () => {
+    const { sb, net } = await activateWith({ ...sessionsRoute, "POST /library/session/c-5/meta": [scopeRefusal("library:organize"), { status: 200, body: {} }] });
+    const top = await sb.sessions.getChildren();
+    calls.nextPick = 0;
+    calls.modalChoices.push(STEP_UP.signIn);
+    await calls.commands.get(ext.CMD_MOVE_TO_FOLDER)!(top[2]);
+    const posts = net.seen.filter((r) => r.method === "POST");
+    assert.deepStrictEqual(posts.map(bearer), [`Bearer ${TOKEN}`, `Bearer ${NEW_TOKEN}`]);
+    assert.strictEqual(calls.errors.length, 0);
+  });
+
+  it("a server without the scope (400 bad_scopes on the new sign-in) says folders need a newer server; the old key stays", async () => {
+    const { sb, ctx } = await activateWith(sessionsRoute, ["library:read"]);
+    ext.runtime.login = async () => { throw new api.ApiError("bad-scopes", api.MESSAGES.badResponse, 400); };
+    const top = await sb.sessions.getChildren();
+    calls.modalChoices.push(STEP_UP.signIn);
+    await calls.commands.get(ext.CMD_MOVE_TO_FOLDER)!(top[2]);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [api.MESSAGES.foldersNotSupported]);
+    assert.strictEqual(storedKey(ctx).token, TOKEN);
+  });
+
+  it("a server that refuses the meta route for keys says folders need a newer server; a bad name is a short error", async () => {
+    const { sb } = await activateWith({ ...sessionsRoute, "POST /library/session/c-5/meta": [scopeRefusal(null), { status: 400, body: { error: { code: "bad_folder" } } }] });
+    const top = await sb.sessions.getChildren();
+    calls.nextPick = 0;
+    await calls.commands.get(ext.CMD_MOVE_TO_FOLDER)!(top[2]);
+    await sb.sessions.getChildren();
+    calls.nextPick = 0;
+    await calls.commands.get(ext.CMD_MOVE_TO_FOLDER)!(top[2]);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [api.MESSAGES.foldersNotSupported, api.MESSAGES.folderRejected]);
+  });
+});
+
+describe("sign-in scopes and older servers", () => {
+  beforeEach(resetCalls);
+
+  const start = { status: 200, body: { code: "PAIR", user_code: "ABCD-EFGH", login_url: `${BASE}/auth/cli/choose?code=PAIR`, expires_in: 600 } };
+  const hooks = () => {
+    let t = 0;
+    return { open: async () => undefined, report: () => undefined, cancelled: () => false, sleep: async (ms: number) => { t += ms; }, now: () => t };
+  };
+
+  it("a server that rejects the newer scopes (400 bad_scopes) gets a sign-in for library:read only", async () => {
+    const net = fakeFetch({
+      "POST /auth/cli/start": [{ status: 400, body: { error: { code: "bad_scopes", details: { allowed: ["library:read"] } } } }, start],
+      "GET /auth/cli/poll": [{ status: 200, body: { status: "ok", token: TOKEN, token_id: "t" } }],
+    });
+    const got = await deviceLogin(clientWith(net.fetch), hooks());
+    assert.deepStrictEqual(net.seen.filter((r) => r.method === "POST").map((r) => r.body.scopes), [ALL, ["library:read"]]);
+    assert.deepStrictEqual(got.scopes, ["library:read"], "no scopes in the answer: the ones asked for");
+  });
+
+  it("a step-up sign-in never falls back; its progress title names the permission", async () => {
+    const net = fakeFetch({ "POST /auth/cli/start": [{ status: 400, body: { error: { code: "bad_scopes" } } }] });
+    await assert.rejects(deviceLogin(clientWith(net.fetch), hooks(), { scopes: [...ALL, "profiles:write"], fallback: false, adding: "profiles:write" }),
+      (e: any) => e.code === "bad-scopes");
+    assert.strictEqual(net.seen.length, 1);
+    const ok = fakeFetch({ "POST /auth/cli/start": [start], "GET /auth/cli/poll": [{ status: 200, body: { status: "ok", token: NEW_TOKEN, scopes: [...ALL, "profiles:write"] } }] });
+    const { vscodeLogin, timing } = await import("../../auth");
+    const saved = timing.pollMs;
+    timing.pollMs = 1;
+    const got = await vscodeLogin(clientWith(ok.fetch), { scopes: [...ALL, "profiles:write"], fallback: false, adding: "profiles:write" }).finally(() => { timing.pollMs = saved; });
+    assert.strictEqual(calls.progress[0].title, STEP_UP_TITLE("profiles:write"));
+    assert.deepStrictEqual(got.scopes, [...ALL, "profiles:write"]);
+  });
+
+  it("with a library:read-only key on an older server, Launch profiles shows one short note and no actions", async () => {
+    for (const answer of [scopeRefusal(null), { status: 401, body: { error: { code: "not_logged_in" } } }, { status: 404, body: { error: { code: "not_found" } } }]) {
+      resetCalls();
+      const { sb } = await activateWith({ "GET /library/profiles": [answer] }, ["library:read"]);
+      const items = await sb.profiles.getChildren();
+      assert.deepStrictEqual(items.map((i) => i.label), [api.MESSAGES.profilesNotSupported]);
+      assert.strictEqual(items[0].command, undefined);
+      assert.strictEqual(sb.profiles.state, "unsupported");
+      assert.strictEqual(calls.context["a4sx.profilesAvailable"], false);
+    }
+  });
+
+  it("a 0.2.x key (library:read) on a newer server: the 403 names profiles:read, and the item asks for it", async () => {
+    const { sb, ctx, logins } = await activateWith({
+      "GET /library/profiles": [scopeRefusal("profiles:read"), { status: 200, body: { profiles: {}, default: null } }],
+    }, ["library:read"]);
+    const items = await sb.profiles.getChildren();
+    assert.deepStrictEqual(items.map((i) => i.label), [ALLOW_SCOPE_ITEM("profiles:read")]);
+    await calls.commands.get(items[0].command!.command)!(...items[0].command!.arguments!);
+    assert.strictEqual(calls.modals.length, 0, "the item already names the permission");
+    assert.deepStrictEqual(logins.map((l) => l.adding), ["profiles:read"]);
+    assert.strictEqual(storedKey(ctx).token, NEW_TOKEN);
+    assert.deepStrictEqual((await sb.profiles.getChildren()).map((i) => i.label), [NO_PROFILES]);
+    assert.strictEqual(calls.context["a4sx.profilesAvailable"], true);
+  });
+
+  it("sign-out still removes the key after a step-up", async () => {
+    const { ctx, sb } = await activateWith({ "GET /library/profiles": [scopeRefusal("profiles:read")] }, ["library:read"]);
+    await sb.auth.stepUp("profiles:read");
+    assert.strictEqual(storedKey(ctx).token, NEW_TOKEN);
+    await calls.commands.get(ext.CMD_SIGN_OUT)!();
+    assert.strictEqual(ctx.secrets.store_.size, 0);
+    assert.deepStrictEqual(calls.infos, [ext.SIGNED_OUT_INFO]);
+    assert.deepStrictEqual(await sb.profiles.getChildren(), []);
+    assert.strictEqual(sb.profiles.state, "signed-out");
+  });
+});
+
+const profiles = {
+  profiles: {
+    work: { name: "Work", model: "model-a", base_url: "https://proxy.example.com/v1", harness: "claude-code", flags: ["--verbose"], headers: { "X-Team": "blue" } },
+    home: { model: "model-b" },
+    lab: { name: "Lab", base_url: "http://localhost:8080" },
+  },
+  default: "home",
+};
+
+describe("Launch profiles view", () => {
+  beforeEach(resetCalls);
+
+  it("lists the default first, marked; never shows headers; signed out shows nothing and asks nothing", async () => {
+    const { sb, net } = await activateWith({ "GET /library/profiles": [{ status: 200, body: profiles }] });
+    const items = (await sb.profiles.getChildren()) as ProfileItem[];
+    assert.deepStrictEqual(items.map((i) => [i.label, i.description, i.contextValue]), [
+      ["home", "default · model-b", "a4sx.profile.default"],
+      ["Lab", "http://localhost:8080", "a4sx.profile"],
+      ["Work", "model-a · https://proxy.example.com/v1", "a4sx.profile"],
+    ]);
+    assert.ok(!JSON.stringify(items.map((i) => [i.label, i.description, i.tooltip])).includes("blue"), "header values are not shown");
+    assert.strictEqual(bearer(net.seen[0]), `Bearer ${TOKEN}`);
+    assert.strictEqual(calls.context["a4sx.profilesAvailable"], true);
+    const out = await activateWith({}, null);
+    assert.deepStrictEqual(await out.sb.profiles.getChildren(), []);
+    assert.strictEqual(out.net.seen.length, 0);
+  });
+
+  it("addresses are shown without user name, password or query", () => {
+    assert.strictEqual(displayAddress("https://u:p@proxy.example.com/v1?key=1#x"), "https://proxy.example.com/v1");
+    assert.strictEqual(displayAddress("https://proxy.example.com/"), "https://proxy.example.com");
+    assert.strictEqual(displayAddress(""), undefined);
+  });
+});
+
+describe("Launch profile actions", () => {
+  beforeEach(resetCalls);
+
+  const listed = { "GET /library/profiles": [{ status: 200, body: profiles }] as Answer[] };
+  const after = (over: object) => ({ status: 200, body: { ...profiles, ...over } });
+
+  async function itemsOf(sb: ext.Sidebar) {
+    const items = (await sb.profiles.getChildren()) as ProfileItem[];
+    return Object.fromEntries(items.map((i) => [i.id, i]));
+  }
+
+  it("the first edit asks for profiles:write with a new sign-in naming it, then sends the whole profile with the new key", async () => {
+    const { sb, net, logins, ctx } = await activateWith({ ...listed, "PUT /library/profiles/work": [after({})] });
+    const work = (await itemsOf(sb)).work;
+    calls.modalChoices.push(STEP_UP.signIn);
+    calls.nextPick = 1;          // Model
+    calls.nextInput = "model-c";
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+    assert.deepStrictEqual(calls.modals.map((m) => m.message), [STEP_UP.prompt("profiles:write")]);
+    assert.deepStrictEqual(logins, [{ scopes: [...ALL, "profiles:write"], fallback: false, adding: "profiles:write" }]);
+    assert.strictEqual(storedKey(ctx).token, NEW_TOKEN);
+    assert.deepStrictEqual(calls.quickPicks[0].items.map((i: any) => [i.label, i.description]), [
+      ["Name", "Work"], ["Model", "model-a"], ["Server address", "https://proxy.example.com/v1"], ["Harness", "claude-code"], ["Flags", "--verbose"],
+    ]);
+    const put = net.seen.find((r) => r.method === "PUT")!;
+    assert.strictEqual(bearer(put), `Bearer ${NEW_TOKEN}`);
+    assert.deepStrictEqual(put.body, { ...profiles.profiles.work, model: "model-c" }, "fields it doesn't edit (headers too) are sent back unchanged");
+    assert.ok(!JSON.stringify(put.body).match(/api[-_]?key|authorization/i));
+    noTokenAnywhere();
+  });
+
+  it("a changed base_url needs a modal that names the new address; Cancel sends nothing", async () => {
+    const { sb, net } = await activateWith({ ...listed, "PUT /library/profiles/work": [after({})] }, [...ALL, "profiles:write"]);
+    const work = (await itemsOf(sb)).work;
+    calls.pickQueue.push(2, 2);  // Server address, twice
+    calls.inputQueue.push("https://other.example.org/api", "https://other.example.org/api");
+    calls.modalChoices.push(undefined, PROFILE_TEXTS.changeAddress);
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+    assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 0);
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+    assert.deepStrictEqual(calls.modals.map((m) => [m.kind, m.message, m.items]), [
+      ["warning", PROFILE_TEXTS.confirmBaseUrl("Work", "https://other.example.org/api"), [PROFILE_TEXTS.changeAddress]],
+      ["warning", PROFILE_TEXTS.confirmBaseUrl("Work", "https://other.example.org/api"), [PROFILE_TEXTS.changeAddress]],
+    ]);
+    assert.ok(calls.modals[0].message.includes("https://other.example.org/api"));
+    assert.strictEqual(net.seen.find((r) => r.method === "PUT")!.body.base_url, "https://other.example.org/api");
+  });
+
+  it("clearing base_url names the CLI's default; an unchanged value sends nothing; a bad address is refused", async () => {
+    const { sb, net } = await activateWith({ ...listed, "PUT /library/profiles/work": [after({})] }, [...ALL, "profiles:write"]);
+    const work = (await itemsOf(sb)).work;
+    calls.pickQueue.push(2, 2, 2);
+    calls.inputQueue.push("", "https://proxy.example.com/v1", "ftp://x.example");
+    calls.modalChoices.push(PROFILE_TEXTS.changeAddress);
+    for (let i = 0; i < 3; i++) {
+      await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+    }
+    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmBaseUrl("Work", PROFILE_TEXTS.cliDefaultAddress)]);
+    const puts = net.seen.filter((r) => r.method === "PUT");
+    assert.strictEqual(puts.length, 1);
+    assert.ok(!("base_url" in puts[0].body));
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [PROFILE_TEXTS.baseUrlInvalid]);
+  });
+
+  it("base_url must be an http(s) address with no user name, password or query", () => {
+    for (const ok of ["", "https://proxy.example.com", "http://localhost:8080/v1", "https://10.0.0.5:4000/anthropic"]) {
+      assert.strictEqual(validateBaseUrl(ok), undefined, ok);
+    }
+    for (const bad of ["proxy.example.com", "ftp://x.example", "javascript:alert(1)", "https://u:p@x.example", "https://x.example/?key=1", "https://x.example/#a", "https://"]) {
+      assert.strictEqual(validateBaseUrl(bad), PROFILE_TEXTS.baseUrlInvalid, bad);
+    }
+  });
+
+  it("flags that look like a key or token are refused; ids follow the server's rule", () => {
+    assert.strictEqual(validateFlags("--verbose --max-turns 3"), undefined);
+    for (const bad of ["--api-key=abc", "--header Authorization:Bearer x", "sk-abc123", "--token=x", "x:ghp_abc"]) {
+      assert.strictEqual(validateFlags(bad), PROFILE_TEXTS.flagsSecret, bad);
+    }
+    assert.strictEqual(validateFlags(Array(21).fill("-x").join(" ")), PROFILE_TEXTS.flagsTooMany);
+    assert.strictEqual(validateProfileId("work-2"), undefined);
+    assert.strictEqual(validateProfileId("Work"), PROFILE_TEXTS.idInvalid);
+    assert.strictEqual(validateProfileId("-x"), PROFILE_TEXTS.idInvalid);
+    assert.strictEqual(validateProfileId("home", ["home"]), PROFILE_TEXTS.idTaken);
+    assert.deepStrictEqual(withField({ model: "m", flags: ["-a"] }, "flags", "  "), { model: "m" });
+  });
+
+  it("Set as default asks in a modal that names the address new launches will use", async () => {
+    const { sb, net } = await activateWith({ ...listed, "POST /library/profiles/work/default": [after({ default: "work" })] }, [...ALL, "profiles:write"]);
+    const { work, home } = await itemsOf(sb);
+    await calls.commands.get(ext.CMD_SET_DEFAULT_PROFILE)!(home);
+    assert.strictEqual(calls.modals.length, 0, "already the default: nothing to do");
+    calls.modalChoices.push(PROFILE_TEXTS.makeDefault);
+    await calls.commands.get(ext.CMD_SET_DEFAULT_PROFILE)!(work);
+    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmDefault("Work", "https://proxy.example.com/v1")]);
+    assert.strictEqual(net.seen.filter((r) => r.method === "POST").length, 1);
+    const items = (await sb.profiles.getChildren()) as ProfileItem[];
+    assert.strictEqual(items[0].id, "work", "the list the server returned is shown");
+    assert.strictEqual(net.seen.filter((r) => r.method === "GET").length, 1);
+  });
+
+  it("Delete asks first; deleting the default names the next default and its address", async () => {
+    const { sb, net } = await activateWith({
+      ...listed,
+      "DELETE /library/profiles/lab": [after({})],
+      "DELETE /library/profiles/home": [after({})],
+    }, [...ALL, "profiles:write"]);
+    const { lab, home } = await itemsOf(sb);
+    calls.modalChoices.push(undefined, PROFILE_TEXTS.delete);
+    await calls.commands.get(ext.CMD_DELETE_PROFILE)!(lab);
+    await calls.commands.get(ext.CMD_DELETE_PROFILE)!(home);
+    assert.deepStrictEqual(calls.modals.map((m) => [m.message, m.items]), [
+      [PROFILE_TEXTS.confirmDelete("Lab"), [PROFILE_TEXTS.delete]],
+      [PROFILE_TEXTS.confirmDeleteDefault("home", "Work", "https://proxy.example.com/v1"), [PROFILE_TEXTS.delete]],
+    ]);
+    assert.deepStrictEqual(net.seen.filter((r) => r.method === "DELETE").map((r) => new URL(r.url).pathname), ["/library/profiles/home"]);
+  });
+
+  it("Create asks for id, model and address; the first profile becomes the default, so the modal names its address", async () => {
+    const { sb, net } = await activateWith({
+      "GET /library/profiles": [{ status: 200, body: { profiles: {}, default: null } }],
+      "PUT /library/profiles/work": [{ status: 200, body: { profiles: { work: { model: "m" } }, default: "work" } }],
+    }, [...ALL, "profiles:write"]);
+    await sb.profiles.getChildren();
+    calls.inputQueue.push("work", "m", "https://proxy.example.com");
+    calls.modalChoices.push(PROFILE_TEXTS.makeDefault);
+    await calls.commands.get(ext.CMD_CREATE_PROFILE)!();
+    assert.strictEqual(calls.inputs[0].validateInput("Bad Id"), PROFILE_TEXTS.idInvalid);
+    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmDefault("work", "https://proxy.example.com")]);
+    assert.deepStrictEqual(net.seen.find((r) => r.method === "PUT")!.body, { model: "m", base_url: "https://proxy.example.com" });
+  });
+
+  it("an older server answers writes with a refusal: one short message, no crash", async () => {
+    const { sb } = await activateWith({ ...listed, "PUT /library/profiles/work": [scopeRefusal(null)] }, [...ALL, "profiles:write"]);
+    const work = (await itemsOf(sb)).work;
+    calls.nextPick = 1;
+    calls.nextInput = "model-z";
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [api.MESSAGES.profilesNotSupported]);
+  });
+
+  it("api: profile refusals map to fixed messages", async () => {
+    const c = (a: Answer) => clientWith(fakeFetch({ "PUT /library/profiles/x": [a], "POST /library/profiles/x/default": [a] }).fetch);
+    await assert.rejects(api.putProfile(c(scopeRefusal("profiles:write")), TOKEN, "x", {}), (e: any) => e.code === "insufficient-scope" && e.requiredScope === "profiles:write");
+    await assert.rejects(api.putProfile(c({ status: 429, body: { error: { code: "profile_limit" } } }), TOKEN, "x", {}), (e: any) => e.code === "profile-limit");
+    await assert.rejects(api.putProfile(c({ status: 400, body: { error: { code: "bad_profile" } } }), TOKEN, "x", {}), (e: any) => e.code === "rejected");
+    await assert.rejects(api.setDefaultProfile(c({ status: 404, body: { error: { code: "no_such_profile" } } }), TOKEN, "x"), (e: any) => e.code === "not-found");
+    await assert.rejects(api.putProfile(c({ status: 200, body: {} }), TOKEN, "Bad/Id", {}), (e: any) => e.code === "rejected");
+  });
+});
+
+describe("Resume in terminal: profile pick", () => {
+  beforeEach(resetCalls);
+  const item = new SessionItem({ id: "c-123", label: "my-base" });
+  const found = (): CliLookup => ({ found: true, path: "/usr/local/bin/a4sx" });
+
+  it("with more than one profile, a pick (default first) passes --profile=ID as one argv element, no shell", async () => {
+    await activateWith({ "GET /library/profiles": [{ status: 200, body: profiles }] });
+    calls.nextPick = 2;
+    await ext.resumeSession(item, found);
+    assert.deepStrictEqual(calls.quickPicks[0].items.map((i: any) => [i.label, i.description, i.detail]), [
+      ["home", "default · model-b", PROFILE_TEXTS.cliDefaultAddress],
+      ["Lab", "lab", "http://localhost:8080"],
+      ["Work", "work · model-a", "https://proxy.example.com/v1"],
+    ]);
+    assert.deepStrictEqual(calls.terminals[0].options, {
+      name: ext.RESUME_TERMINAL_NAME, shellPath: "/usr/local/bin/a4sx", shellArgs: ["launch", "--a4sx-session=my-base", "--profile=work"],
+    });
+  });
+
+  it("Esc in the pick starts nothing; one profile, no profiles:read, or an error: no pick and no --profile", async () => {
+    await activateWith({ "GET /library/profiles": [{ status: 200, body: profiles }] });
+    calls.nextPick = undefined;
+    await ext.resumeSession(item, found);
+    assert.strictEqual(calls.terminals.length, 0);
+    for (const [routes, scopes] of [
+      [{ "GET /library/profiles": [{ status: 200, body: { profiles: { home: {} }, default: "home" } }] }, ALL],
+      [{}, ["library:read"]],
+      [{ "GET /library/profiles": [new Error("offline")] }, ALL],
+      [{ "GET /library/profiles": [scopeRefusal(null)] }, ALL],
+    ] as [Record<string, Answer[]>, string[]][]) {
+      resetCalls();
+      const { net } = await activateWith(routes, scopes);
+      await ext.resumeSession(item, found);
+      assert.strictEqual(calls.quickPicks.length, 0);
+      assert.deepStrictEqual(calls.terminals[0].options.shellArgs, ["launch", "--a4sx-session=my-base"]);
+      if (scopes.length === 1) {
+        assert.strictEqual(net.seen.length, 0, "no request without profiles:read");
+      }
+    }
+  });
+
+  it("Resume in Claude Code offers no profile pick", async () => {
+    const { net } = await activateWith({ "GET /library/profiles": [{ status: 200, body: profiles }] });
+    calls.extensions.add("anthropic.claude-code");
+    calls.workspaceFolders = [{ name: "p", uri: { scheme: "file", fsPath: "/p" } }];
+    await ext.resumeInClaude(item, found, (_file, _args, _options, callback) => {
+      callback(null, "11111111-2222-3333-4444-555555555555\n", "");
+    });
+    assert.strictEqual(calls.quickPicks.length, 0);
+    assert.strictEqual(net.seen.length, 0);
+  });
+});

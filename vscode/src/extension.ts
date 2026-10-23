@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 crossVault GmbH
 // a4sx for VS Code: registers the a4sx remote MCP servers for agent mode, adds the a4sx sidebar
-// (sign-in, "My sessions", "Marketplace") and the save/resume commands. The sidebar is the only part
-// that calls the a4sx server itself; its scoped, read-only token lives only in VS Code's secret storage.
+// (sign-in, "My sessions", "Launch profiles", "Marketplace") and the save/resume commands. The sidebar
+// is the only part that calls the a4sx server itself; its scoped token lives only in VS Code's secret storage.
 // VS Code connects to the MCP servers when chat uses them, and runs their sign-in itself.
 import * as vscode from "vscode";
 import { Client, FetchLike, listingWebUrl, normalizeServerUrl, sessionWebUrl } from "./api";
-import { A4sxAuthProvider, AUTH_ID, AUTH_LABEL, LoginCancelled, SECRET_KEY, vscodeLogin } from "./auth";
+import { A4sxAuthProvider, AUTH_ID, AUTH_LABEL, LoginCancelled, LoginRequest, SECRET_KEY, vscodeLogin } from "./auth";
 import { CLAUDE_EXTENSION_ID, claudeResumeUri, defaultExecFile, ExecFileLike, SeedResult, seedSession } from "./claudeResume";
 import { CLI_NAME, findCli, CliLookup } from "./cli";
+import { clearFilter, filterSessions, moveToFolder, removeFromFolder } from "./folderCommands";
 import { CMD_OPEN_LISTING, ListingItem, MarketplaceProvider } from "./marketplaceView";
+import { createProfile, editProfile, pickProfileForResume, removeProfile, setDefault } from "./profileCommands";
+import { ProfileItem, ProfilesProvider, ProfilesViewState } from "./profilesView";
 import { launchName, SessionItem, SessionsProvider, ViewState } from "./sessionsView";
+import { errorText, offerStepUp } from "./stepUp";
 
 export const SITE = "https://session-exchange.com";
 export const MCP_URL = `${SITE}/mcp`;
@@ -30,8 +34,19 @@ export const CMD_RESUME_CLAUDE = "a4sx.resumeInClaude";
 export const CMD_OPEN_SESSION = "a4sx.openSessionOnWeb";
 export const CMD_COPY_ID = "a4sx.copySessionId";
 export const CMD_SEARCH = "a4sx.searchMarketplace";
+export const CMD_FILTER = "a4sx.filterSessions";
+export const CMD_CLEAR_FILTER = "a4sx.clearSessionFilter";
+export const CMD_MOVE_TO_FOLDER = "a4sx.moveToFolder";
+export const CMD_REMOVE_FROM_FOLDER = "a4sx.removeFromFolder";
+export const CMD_REFRESH_PROFILES = "a4sx.refreshProfiles";
+export const CMD_CREATE_PROFILE = "a4sx.createProfile";
+export const CMD_EDIT_PROFILE = "a4sx.editProfile";
+export const CMD_SET_DEFAULT_PROFILE = "a4sx.setDefaultProfile";
+export const CMD_DELETE_PROFILE = "a4sx.deleteProfile";
+export const CMD_ALLOW_SCOPE = "a4sx.allowScope";
 export { CMD_OPEN_LISTING };
 export const VIEW_SESSIONS = "a4sx.sessions";
+export const VIEW_PROFILES = "a4sx.profiles";
 export const VIEW_MARKETPLACE = "a4sx.marketplace";
 export const TERMINAL_NAME = "a4sx: save session";
 export const RESUME_TERMINAL_NAME = "a4sx: resume session";
@@ -178,7 +193,7 @@ export async function openLibrary(): Promise<void> {
 }
 
 /** Swappable in unit tests: the network and the interactive login. */
-export const runtime: { fetch: FetchLike; login: (client: Client) => ReturnType<typeof vscodeLogin> } = {
+export const runtime: { fetch: FetchLike; login: (client: Client, req: LoginRequest) => ReturnType<typeof vscodeLogin> } = {
   fetch: (url, init) => fetch(url, init),
   login: vscodeLogin,
 };
@@ -189,10 +204,6 @@ export function client(): Client {
     fetch: runtime.fetch,
     userAgent: "a4sx-vscode",
   };
-}
-
-function errorText(e: unknown): string {
-  return e instanceof Error && e.message ? e.message : "Something went wrong. Try again.";
 }
 
 export async function signIn(auth: A4sxAuthProvider): Promise<void> {
@@ -213,7 +224,18 @@ export async function signOut(auth: A4sxAuthProvider): Promise<void> {
   await vscode.window.showInformationMessage(SIGNED_OUT_INFO);
 }
 
-export async function resumeSession(item: SessionItem | undefined, lookup: (configured: string | undefined) => CliLookup = findCli): Promise<vscode.Terminal | undefined> {
+/**
+ * Which launch profile "Resume in terminal" uses: { id } (passed as --profile=ID), {} for the CLI's
+ * default, undefined when the user dismissed the pick. Set by activate(); without it, the default.
+ */
+export type ChooseProfile = () => Promise<{ id?: string } | undefined>;
+let chooseResumeProfile: ChooseProfile = async () => ({});
+
+export async function resumeSession(
+  item: SessionItem | undefined,
+  lookup: (configured: string | undefined) => CliLookup = findCli,
+  choose: ChooseProfile = () => chooseResumeProfile(),
+): Promise<vscode.Terminal | undefined> {
   if (!item) {
     return undefined;
   }
@@ -225,11 +247,20 @@ export async function resumeSession(item: SessionItem | undefined, lookup: (conf
     await reportMissingCli(result);
     return undefined;
   }
-  // `a4sx launch` starts Claude Code on a copy of the saved session; run directly, no shell.
+  const profile = await choose();
+  if (!profile) {
+    return undefined;
+  }
+  // `a4sx launch` starts Claude Code on a copy of the saved session; run directly, no shell. Each
+  // option is one argv element, so a name or profile id can never become another option.
+  const shellArgs = ["launch", `--a4sx-session=${launchName(item.row)}`];
+  if (profile.id) {
+    shellArgs.push(`--profile=${profile.id}`);
+  }
   const terminal = vscode.window.createTerminal({
     name: RESUME_TERMINAL_NAME,
     shellPath: result.path,
-    shellArgs: ["launch", `--a4sx-session=${launchName(item.row)}`],
+    shellArgs,
   });
   terminal.show();
   return terminal;
@@ -428,9 +459,13 @@ export async function searchMarketplace(market: MarketplaceProvider): Promise<vo
   market.search(q);
 }
 
-function setViewContext(state: ViewState): void {
-  void vscode.commands.executeCommand("setContext", "a4sx.signedIn", state !== "signed-out");
-  void vscode.commands.executeCommand("setContext", "a4sx.sessionsEmpty", state === "empty");
+function setContext(key: string, value: unknown): void {
+  void vscode.commands.executeCommand("setContext", key, value);
+}
+
+function setProfilesContext(state: ProfilesViewState): void {
+  // Create shows only where the server has launch profiles and the key may read them.
+  setContext("a4sx.profilesAvailable", state === "ok" || state === "empty");
 }
 
 /** Editors built on VS Code (installed from Open VSX) may lack the MCP provider API; the commands still work there. */
@@ -441,6 +476,7 @@ export function hasMcpProviderApi(): boolean {
 export interface Sidebar {
   auth: A4sxAuthProvider;
   sessions: SessionsProvider;
+  profiles: ProfilesProvider;
   market: MarketplaceProvider;
 }
 
@@ -453,21 +489,35 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_OPEN_LIBRARY, () => openLibrary()),
   );
 
-  const auth = new A4sxAuthProvider(context.secrets, client, (c) => runtime.login(c));
-  const sessions = new SessionsProvider(auth, client, setViewContext);
+  const auth = new A4sxAuthProvider(context.secrets, client, (c, req) => runtime.login(c, req));
+  const sessions: SessionsProvider = new SessionsProvider(auth, client, (state: ViewState) => {
+    setContext("a4sx.signedIn", state !== "signed-out");
+    setContext("a4sx.sessionsEmpty", state === "empty");
+    setContext("a4sx.foldersSupported", sessions.foldersSupported());
+  }, (filter) => setContext("a4sx.sessionsFiltered", !!filter));
+  const profiles = new ProfilesProvider(auth, client, setProfilesContext);
   const market = new MarketplaceProvider(client);
   const syncSignedIn = () => void auth.current().then((s) => vscode.commands.executeCommand("setContext", "a4sx.signedIn", !!s));
   syncSignedIn();
+  setContext("a4sx.sessionsFiltered", false);
+  const sessionsView = vscode.window.createTreeView(VIEW_SESSIONS, { treeDataProvider: sessions });
+  sessions.view = sessionsView;
+  chooseResumeProfile = () => pickProfileForResume(auth, client);
+  const folderDeps = { auth, client, sessions };
+  const profileDeps = { auth, client, view: profiles };
   context.subscriptions.push(
     auth,
     sessions,
+    profiles,
     market,
     vscode.authentication.registerAuthenticationProvider(AUTH_ID, AUTH_LABEL, auth, { supportsMultipleAccounts: false }),
-    vscode.window.registerTreeDataProvider(VIEW_SESSIONS, sessions),
+    sessionsView,
+    vscode.window.registerTreeDataProvider(VIEW_PROFILES, profiles),
     vscode.window.registerTreeDataProvider(VIEW_MARKETPLACE, market),
     auth.onDidChangeSessions(() => {
       syncSignedIn();
       sessions.refresh();
+      profiles.refresh();
     }),
     context.secrets.onDidChange((e) => {
       if (e.key === SECRET_KEY) {
@@ -478,6 +528,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (e.affectsConfiguration("a4sx.serverUrl")) {
         syncSignedIn();
         sessions.refresh();
+        profiles.refresh();
         market.search(market.query);
       }
     }),
@@ -490,6 +541,21 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_COPY_ID, (item?: SessionItem) => copySessionId(item)),
     vscode.commands.registerCommand(CMD_SEARCH, () => searchMarketplace(market)),
     vscode.commands.registerCommand(CMD_OPEN_LISTING, (item?: ListingItem) => openListing(item)),
+    vscode.commands.registerCommand(CMD_FILTER, () => filterSessions(sessions)),
+    vscode.commands.registerCommand(CMD_CLEAR_FILTER, () => clearFilter(sessions)),
+    vscode.commands.registerCommand(CMD_MOVE_TO_FOLDER, (item?: SessionItem) => moveToFolder(folderDeps, item)),
+    vscode.commands.registerCommand(CMD_REMOVE_FROM_FOLDER, (item?: SessionItem) => removeFromFolder(folderDeps, item)),
+    vscode.commands.registerCommand(CMD_REFRESH_PROFILES, () => profiles.refresh()),
+    vscode.commands.registerCommand(CMD_CREATE_PROFILE, () => createProfile(profileDeps)),
+    vscode.commands.registerCommand(CMD_EDIT_PROFILE, (item?: ProfileItem) => editProfile(profileDeps, item)),
+    vscode.commands.registerCommand(CMD_SET_DEFAULT_PROFILE, (item?: ProfileItem) => setDefault(profileDeps, item)),
+    vscode.commands.registerCommand(CMD_DELETE_PROFILE, (item?: ProfileItem) => removeProfile(profileDeps, item)),
+    // From the "Sign in again to allow …" item: the item names the permission, so no extra modal.
+    vscode.commands.registerCommand(CMD_ALLOW_SCOPE, async (scope?: unknown) => {
+      if (typeof scope === "string" && /^[a-z]+:[a-z]+$/.test(scope)) {
+        await offerStepUp(auth, scope, false);
+      }
+    }),
   );
   if (hasMcpProviderApi()) {
     const changed = new vscode.EventEmitter<void>();
@@ -502,7 +568,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }),
     );
   }
-  sidebar = { auth, sessions, market };
+  sidebar = { auth, sessions, profiles, market };
 }
 
 export function deactivate(): void {
