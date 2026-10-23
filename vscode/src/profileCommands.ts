@@ -2,7 +2,9 @@
 // Copyright 2026 crossVault GmbH
 // The Launch profiles actions (create, edit one field, set default, delete) and the profile pick for
 // "Resume in terminal". Writes need `profiles:write`, asked for with a new sign-in the first time.
-// A changed server address, or a changed default, is confirmed in a modal that names the address.
+// The server address is read-only here (a library key may not set it): Edit shows it and offers the
+// a4sx CLI or the website. A changed default is confirmed in a modal that names the address. Adding a
+// flag that turns off permission prompts is refused; keeping or removing one is fine.
 // No API key is ever asked for, shown or stored: a profile holds none.
 import * as vscode from "vscode";
 import {
@@ -24,22 +26,23 @@ export const PROFILE_TEXTS = {
   idTaken: "A launch profile with this id already exists.",
   pickField: "Choose what to change",
   fields: { name: "Name", model: "Model", base_url: "Server address", harness: "Harness", flags: "Flags" },
+  readOnlyHere: "Read-only here",
   prompts: {
     name: "Name shown in the list. Leave empty to show the id.",
     model: "Model. Leave empty to use the CLI's default.",
-    base_url: "Server address (base_url). Leave empty to use the CLI's default.",
     harness: "Harness, for example claude-code. Leave empty to use the CLI's default.",
     flags: "Launch flags, separated by spaces. Leave empty for none.",
   },
+  addressReadOnly: MESSAGES.baseUrlNeedsSignin,
+  openWebsite: "Open on the website",
+  runCli: "Run a4sx profile",
   flagsHiddenKept: "Flags with a key or token are hidden here and kept as they are.",
-  baseUrlInvalid: "Enter an http:// or https:// address without a user name, password or query.",
   tooLong: (max: number) => `Use at most ${max} characters.`,
   flagsSecret: "Flags can't contain an API key or token.",
   flagsTooMany: "Use at most 20 flags of up to 128 characters each.",
   maskTyped: "Type the whole value instead of ••••.",
+  permissionFlag: MESSAGES.permissionFlagNeedsSignin,
   cliDefaultAddress: "the CLI's default server address",
-  confirmBaseUrl: (name: string, address: string) => `Launches with "${name}" will send their requests to ${address}. Change the server address?`,
-  changeAddress: "Change address",
   confirmDefault: (name: string, address: string) => `New launches will use "${name}" and send their requests to ${address}. Make it the default?`,
   makeDefault: "Make default",
   confirmDelete: (name: string) => `Delete the launch profile "${name}"?`,
@@ -55,13 +58,22 @@ export const PROFILE_TEXTS = {
 };
 
 export type ProfileField = keyof typeof PROFILE_TEXTS.fields;
+/** What Edit may change. The server address is shown but not editable. */
+export type EditableField = Exclude<ProfileField, "base_url">;
 const FIELD_ORDER: ProfileField[] = ["name", "model", "base_url", "harness", "flags"];
-const MAX_LEN: Record<Exclude<ProfileField, "flags">, number> = { name: 64, model: 128, base_url: 512, harness: 64 };
+const MAX_LEN: Record<Exclude<EditableField, "flags">, number> = { name: 64, model: 128, harness: 64 };
+
+/** Where the server address can be changed: the a4sx CLI in a terminal, or the website. */
+export interface AddressElsewhere {
+  website(): Promise<void>;
+  cli(profileId: string): Promise<void>;
+}
 
 export interface ProfileDeps {
   auth: ScopedAuth;
   client: () => Client;
   view: ProfilesProvider;
+  elsewhere?: AddressElsewhere;
 }
 
 export function validateProfileId(raw: string, taken: readonly string[] = []): string | undefined {
@@ -71,26 +83,6 @@ export function validateProfileId(raw: string, taken: readonly string[] = []): s
   }
   return taken.includes(id) ? PROFILE_TEXTS.idTaken : undefined;
 }
-
-/** An http(s) address with a host and no user name, password, query or fragment. Empty is allowed (the CLI's default). */
-export function validateBaseUrl(raw: string): string | undefined {
-  const value = raw.trim();
-  if (!value) {
-    return undefined;
-  }
-  let u: URL;
-  try {
-    u = new URL(value);
-  } catch {
-    return PROFILE_TEXTS.baseUrlInvalid;
-  }
-  if (!(u.protocol === "http:" || u.protocol === "https:") || !u.hostname || u.username || u.password || u.search || u.hash
-    || value.includes("?") || value.includes("#")) {
-    return PROFILE_TEXTS.baseUrlInvalid;
-  }
-  return value.length > MAX_LEN.base_url ? PROFILE_TEXTS.tooLong(MAX_LEN.base_url) : undefined;
-}
-
 
 export function parseFlags(raw: string): string[] {
   return raw.split(/\s+/).filter(Boolean);
@@ -108,10 +100,37 @@ export function validateFlags(raw: string, kept = 0): string | undefined {
   return flags.some((f) => SECRET_FLAG.test(f)) ? PROFILE_TEXTS.flagsSecret : undefined;
 }
 
-export function validateField(field: ProfileField, raw: string): string | undefined {
-  if (field === "base_url") {
-    return validateBaseUrl(raw);
+const squash = (f: string) => f.toLowerCase().replace(/[-_]/g, "");
+
+/**
+ * The permission-loosening flags in a list, by kind, in any spelling: `--dangerously-skip-permissions`
+ * (also `--dangerously_skip_permissions`, `--allow-dangerously-skip-permissions`, any case) and
+ * `--permission-mode bypassPermissions` / `--permission-mode=bypassPermissions`.
+ */
+export function looseningFlags(flags: readonly string[]): { skip: number; bypass: number } {
+  const out = { skip: 0, bypass: 0 };
+  for (let i = 0; i < flags.length; i++) {
+    const f = squash(flags[i]);
+    if (f.includes("dangerouslyskippermissions")) {
+      out.skip++;
+    } else if (/^permissionmode(=|$)/.test(f)) {
+      const value = f.includes("=") ? f.slice(f.indexOf("=") + 1) : squash(flags[i + 1] ?? "");
+      if (value.replace(/["']/g, "") === "bypasspermissions") {
+        out.bypass++;
+      }
+    }
   }
+  return out;
+}
+
+/** True when `after` has more permission-loosening flags of some kind than `before` (adding one). */
+export function addsLooseningFlag(before: readonly string[], after: readonly string[]): boolean {
+  const a = looseningFlags(before);
+  const b = looseningFlags(after);
+  return b.skip > a.skip || b.bypass > a.bypass;
+}
+
+export function validateField(field: EditableField, raw: string): string | undefined {
   if (field === "flags") {
     return validateFlags(raw);
   }
@@ -123,21 +142,11 @@ function shownText(p: Profile, field: ProfileField): string {
   if (field === "flags") {
     return shownFlags(p.flags).join(" ");
   }
+  if (field === "base_url") {
+    return displayAddress(typeof p.base_url === "string" ? p.base_url : undefined) ?? "";
+  }
   const v = p[field];
   return typeof v === "string" ? v : "";
-}
-
-/** scheme://host:port of a base_url ("" for none or unparsable): what hidden settings are tied to. */
-function origin(raw: unknown): string {
-  if (typeof raw !== "string" || !raw.trim()) {
-    return "";
-  }
-  try {
-    const u = new URL(raw.trim());
-    return `${u.protocol}//${u.hostname}:${u.port}`;
-  } catch {
-    return raw.trim();
-  }
 }
 
 function flagList(p: Profile): string[] {
@@ -152,7 +161,7 @@ export function splitFlags(p: Profile): { visible: string[]; hidden: string[] } 
 }
 
 /** The profile with one field changed; an empty value removes the field (the CLI's default applies). */
-export function withField(p: Profile, field: ProfileField, raw: string): Profile {
+export function withField(p: Profile, field: EditableField, raw: string): Profile {
   const next: Profile = { ...p };
   const value = raw.trim();
   if (field === "flags") {
@@ -191,14 +200,15 @@ async function input(title: string, prompt: string, value: string, validate: (v:
   return got;
 }
 
-/** Runs one profile write with a key holding profiles:write, and shows the list it returns. */
+/** Refusals that keep the edit open with the server's message (the box opens again). */
+const KEEP_OPEN = new Set(["credential-in-profile", "hidden-bound-to-host", "base-url-needs-signin", "permission-flag-needs-signin"]);
+
 /**
- * Runs one profile write with a key holding profiles:write, and shows the list it returns. A 400
- * `credential_in_profile` is returned (not shown) when `credentialRetry` is set, so the caller can
- * keep the edit open with the server's message.
+ * Runs one profile write with a key holding profiles:write, and shows the list it returns. With
+ * `keepOpen`, a refusal in KEEP_OPEN is returned (not shown), so the caller can open the box again.
  */
 async function write(
-  deps: ProfileDeps, token: string, call: (c: Client, token: string) => Promise<ProfilesState>, credentialRetry = false,
+  deps: ProfileDeps, token: string, call: (c: Client, token: string) => Promise<ProfilesState>, keepOpen = false,
 ): Promise<ApiError | undefined> {
   try {
     const client = deps.client();
@@ -207,7 +217,7 @@ async function write(
       deps.view.show(done.value);
     }
   } catch (e) {
-    if (credentialRetry && e instanceof ApiError && (e.code === "credential-in-profile" || e.code === "hidden-bound-to-host")) {
+    if (keepOpen && e instanceof ApiError && KEEP_OPEN.has(e.code)) {
       return e;
     }
     await vscode.window.showErrorMessage(errorText(e));
@@ -234,14 +244,6 @@ export async function createProfile(deps: ProfileDeps): Promise<void> {
   }
   const taken = state.profiles.map(([id]) => id);
   const t = PROFILE_TEXTS;
-  const fresh = async (): Promise<ProfilesState | undefined> => {
-    try {
-      return await listProfiles(deps.client(), token);
-    } catch (e) {
-      await vscode.window.showErrorMessage(errorText(e));
-      return undefined;
-    }
-  };
   const id = await input(t.createTitle, t.idPrompt, "", (v) => validateProfileId(v, taken), t.idPlaceholder);
   if (id === undefined) {
     return;
@@ -250,36 +252,46 @@ export async function createProfile(deps: ProfileDeps): Promise<void> {
   if (model === undefined) {
     return;
   }
-  const base = await input(t.createTitle, t.prompts.base_url, "", validateBaseUrl);
-  if (base === undefined) {
-    return;
-  }
   const pid = id.trim();
-  let profile = withField(withField({}, "model", model), "base_url", base);
-  if (Object.keys(profile).length === 0) {
-    // The server wants a non-empty profile; a name equal to the id changes nothing that is shown.
-    profile = { name: pid };
-  }
+  // No server address: a library key may not set one (the CLI's default applies until it is set
+  // with the a4sx CLI or on the website).
+  let profile = withField({}, "model", model);
   // The list may have changed while the boxes were open (another window, the CLI, the web).
-  const now = await fresh();
-  if (!now) {
+  let now: ProfilesState;
+  try {
+    now = await listProfiles(deps.client(), token);
+  } catch (e) {
+    await vscode.window.showErrorMessage(errorText(e));
     return;
   }
   const existing = now.profiles.find(([pid2]) => pid2 === pid)?.[1];
   if (existing && !(await confirm(t.confirmReplace(pid), t.replace))) {
     return;
   }
+  if (existing && typeof existing.base_url === "string" && existing.base_url) {
+    profile = { ...profile, base_url: existing.base_url };   // replacing keeps the address it has
+  }
+  if (Object.keys(profile).length === 0) {
+    // The server wants a non-empty profile; a name equal to the id changes nothing that is shown.
+    profile = { name: pid };
+  }
   // The server makes the first profile the default.
-  const becomesDefault = !now.default && !existing;
-  const addressChanged = existing ? addressOf(existing) !== addressOf(profile) : !!profile.base_url;
-  if (becomesDefault && !existing) {
-    if (!(await confirm(t.confirmDefault(pid, addressOf(profile)), t.makeDefault))) {
-      return;
-    }
-  } else if (addressChanged && !(await confirm(t.confirmBaseUrl(profileName(pid, profile), addressOf(profile)), t.changeAddress))) {
+  if (!now.default && !existing && !(await confirm(t.confirmDefault(pid, addressOf(profile)), t.makeDefault))) {
     return;
   }
   await write(deps, token, (c, tok) => putProfile(c, tok, pid, profile));
+}
+
+/** The server address is read-only here: say where it can be changed and offer both ways. */
+async function addressElsewhere(deps: ProfileDeps, item: ProfileItem): Promise<void> {
+  const t = PROFILE_TEXTS;
+  const buttons = deps.elsewhere ? [t.runCli, t.openWebsite] : [];
+  const choice = await vscode.window.showInformationMessage(t.addressReadOnly, ...buttons);
+  if (choice === t.runCli) {
+    await deps.elsewhere?.cli(item.id);
+  } else if (choice === t.openWebsite) {
+    await deps.elsewhere?.website();
+  }
 }
 
 export async function editProfile(deps: ProfileDeps, item: ProfileItem | undefined): Promise<void> {
@@ -294,14 +306,23 @@ export async function editProfile(deps: ProfileDeps, item: ProfileItem | undefin
   const name = profileName(item.id, item.profile);
   const hiddenOnServer = hiddenCount(item.profile);
   const picked = await vscode.window.showQuickPick(
-    FIELD_ORDER.map((field) => ({ label: t.fields[field], description: shownText(item.profile, field) || NOT_SET, field })),
+    FIELD_ORDER.map((field) => ({
+      label: t.fields[field],
+      description: shownText(item.profile, field) || (field === "base_url" ? t.cliDefaultAddress : NOT_SET),
+      detail: field === "base_url" ? t.readOnlyHere : undefined,
+      field,
+    })),
     { title: t.editTitle(name), placeHolder: hiddenOnServer ? `${t.pickField}. ${HIDDEN_FIELDS(hiddenOnServer)}` : t.pickField },
   );
   if (!picked) {
     return;
   }
-  const field = picked.field;
-  // A 400 credential_in_profile keeps the edit open: the box opens again with the server's message.
+  if (picked.field === "base_url") {
+    await addressElsewhere(deps, item);
+    return;
+  }
+  const field: EditableField = picked.field;
+  // A refusal in KEEP_OPEN keeps the edit open: the box opens again with the server's message.
   // It is prefilled with the stored value, never with what was just sent.
   let notice: string | undefined;
   for (;;) {
@@ -309,8 +330,11 @@ export async function editProfile(deps: ProfileDeps, item: ProfileItem | undefin
     if (field === "flags") {
       // Flags with a key or token are never prefilled; they are kept as they are.
       const { visible, hidden } = splitFlags(item.profile);
+      const stored = flagList(item.profile);
       const prompt = notice ?? (hidden.length ? `${t.prompts.flags} ${t.flagsHiddenKept}` : t.prompts.flags);
-      const value = await input(t.editTitle(name), prompt, visible.join(" "), (v) => validateFlags(v, hidden.length));
+      const check = (v: string) => validateFlags(v, hidden.length)
+        ?? (addsLooseningFlag(stored, [...parseFlags(v), ...hidden]) ? t.permissionFlag : undefined);
+      const value = await input(t.editTitle(name), prompt, visible.join(" "), check);
       if (value === undefined) {
         return;
       }
@@ -328,15 +352,6 @@ export async function editProfile(deps: ProfileDeps, item: ProfileItem | undefin
       if (shownText(next, field) === before) {
         return;
       }
-    }
-    if (field === "base_url" && hiddenOnServer && origin(next.base_url) !== origin(item.profile.base_url)) {
-      // The server keeps hidden settings tied to the current scheme, host and port (409
-      // hidden_fields_bound_to_host): say so now instead of confirming a change that would fail.
-      notice = MESSAGES.hiddenBoundToHost;
-      continue;
-    }
-    if (field === "base_url" && !(await confirm(t.confirmBaseUrl(profileName(item.id, next), addressOf(next)), t.changeAddress))) {
-      return;
     }
     const profile = next;
     const refused = await write(deps, token, (c, tok) => putProfile(c, tok, item.id, profile), true);

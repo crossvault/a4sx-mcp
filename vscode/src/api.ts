@@ -13,7 +13,7 @@ export type ApiErrorCode =
   | "bad-server-url" | "unreachable" | "unauthorized" | "busy" | "expired" | "too-many-tokens"
   | "bad-login-url" | "bad-response" | "http"
   | "bad-scopes" | "insufficient-scope" | "not-supported" | "rejected" | "profile-limit" | "not-found"
-  | "credential-in-profile" | "hidden-bound-to-host";
+  | "credential-in-profile" | "hidden-bound-to-host" | "base-url-needs-signin" | "permission-flag-needs-signin";
 
 export class ApiError extends Error {
   constructor(
@@ -42,6 +42,8 @@ export const MESSAGES = {
   foldersNotSupported: "Folders need a newer a4sx server.",
   profileRejected: "a4sx did not accept this launch profile.",
   credentialInProfile: "Keep keys out of launch profiles. Use a4sx launch --set-api-key instead.",
+  baseUrlNeedsSignin: "The server address can only be changed with the a4sx CLI or on the website.",
+  permissionFlagNeedsSignin: "Turning off permission prompts can only be done with the a4sx CLI or on the website.",
   hiddenBoundToHost: "This profile's hidden settings belong to its current address. Change the address with the a4sx CLI or on the website.",
   folderRejected: "a4sx did not accept this folder name.",
   profileLimit: "You have the maximum number of launch profiles. Delete one first.",
@@ -373,6 +375,12 @@ function profileWriteFail(status: number, data: any, submitted: readonly string[
   const code = errorCode(data);
   if (status === 400 && code === "credential_in_profile") {
     throw new ApiError("credential-in-profile", serverLine(data, submitted, MESSAGES.credentialInProfile), status);
+  }
+  if (status === 409 && code === "base_url_needs_signin") {
+    throw new ApiError("base-url-needs-signin", serverLine(data, submitted, MESSAGES.baseUrlNeedsSignin), status);
+  }
+  if (status === 409 && code === "permission_flag_needs_signin") {
+    throw new ApiError("permission-flag-needs-signin", serverLine(data, submitted, MESSAGES.permissionFlagNeedsSignin), status);
   }
   if (status === 409 && code === "hidden_fields_bound_to_host") {
     throw new ApiError("hidden-bound-to-host", serverLine(data, submitted, MESSAGES.hiddenBoundToHost), status);

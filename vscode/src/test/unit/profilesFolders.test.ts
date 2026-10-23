@@ -13,7 +13,7 @@ import {
 } from "../../sessionsView";
 import { FOLDER_TEXTS } from "../../folderCommands";
 import { ALLOW_SCOPE_ITEM, displayAddress, HIDDEN_FIELDS, NO_PROFILES, ProfileItem } from "../../profilesView";
-import { PROFILE_TEXTS, validateBaseUrl, validateFlags, validateProfileId, withField } from "../../profileCommands";
+import { addsLooseningFlag, looseningFlags, PROFILE_TEXTS, validateFlags, validateProfileId, withField } from "../../profileCommands";
 import { offerStepUp, STEP_UP, STEP_UP_SCOPES } from "../../stepUp";
 import type { CliLookup } from "../../cli";
 
@@ -431,48 +431,6 @@ describe("Launch profile actions", () => {
     noTokenAnywhere();
   });
 
-  it("a changed base_url needs a modal that names the new address; Cancel sends nothing", async () => {
-    const { sb, net } = await activateWith({ ...listed, "PUT /library/profiles/work": [after({})] }, [...ALL, "profiles:write"]);
-    const work = (await itemsOf(sb)).work;
-    calls.pickQueue.push(2, 2);  // Server address, twice
-    calls.inputQueue.push("https://other.example.org/api", "https://other.example.org/api");
-    calls.modalChoices.push(undefined, PROFILE_TEXTS.changeAddress);
-    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
-    assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 0);
-    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
-    assert.deepStrictEqual(calls.modals.map((m) => [m.kind, m.message, m.items]), [
-      ["warning", PROFILE_TEXTS.confirmBaseUrl("Work", "https://other.example.org/api"), [PROFILE_TEXTS.changeAddress]],
-      ["warning", PROFILE_TEXTS.confirmBaseUrl("Work", "https://other.example.org/api"), [PROFILE_TEXTS.changeAddress]],
-    ]);
-    assert.ok(calls.modals[0].message.includes("https://other.example.org/api"));
-    assert.strictEqual(net.seen.find((r) => r.method === "PUT")!.body.base_url, "https://other.example.org/api");
-  });
-
-  it("clearing base_url names the CLI's default; an unchanged value sends nothing; a bad address is refused", async () => {
-    const { sb, net } = await activateWith({ ...listed, "PUT /library/profiles/work": [after({})] }, [...ALL, "profiles:write"]);
-    const work = (await itemsOf(sb)).work;
-    calls.pickQueue.push(2, 2, 2);
-    calls.inputQueue.push("", "https://proxy.example.com/v1", "ftp://x.example");
-    calls.modalChoices.push(PROFILE_TEXTS.changeAddress);
-    for (let i = 0; i < 3; i++) {
-      await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
-    }
-    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmBaseUrl("Work", PROFILE_TEXTS.cliDefaultAddress)]);
-    const puts = net.seen.filter((r) => r.method === "PUT");
-    assert.strictEqual(puts.length, 1);
-    assert.ok(!("base_url" in puts[0].body));
-    assert.deepStrictEqual(calls.errors.map((e) => e.message), [PROFILE_TEXTS.baseUrlInvalid]);
-  });
-
-  it("base_url must be an http(s) address with no user name, password or query", () => {
-    for (const ok of ["", "https://proxy.example.com", "http://localhost:8080/v1", "https://10.0.0.5:4000/anthropic"]) {
-      assert.strictEqual(validateBaseUrl(ok), undefined, ok);
-    }
-    for (const bad of ["proxy.example.com", "ftp://x.example", "javascript:alert(1)", "https://u:p@x.example", "https://x.example/?key=1", "https://x.example/#a", "https://"]) {
-      assert.strictEqual(validateBaseUrl(bad), PROFILE_TEXTS.baseUrlInvalid, bad);
-    }
-  });
-
   it("flags that look like a key or token are refused; ids follow the server's rule", () => {
     assert.strictEqual(validateFlags("--verbose --max-turns 3"), undefined);
     for (const bad of ["--api-key=abc", "--header Authorization:Bearer x", "sk-abc123", "--token=x", "x:ghp_abc"]) {
@@ -517,18 +475,19 @@ describe("Launch profile actions", () => {
     assert.deepStrictEqual(net.seen.filter((r) => r.method === "DELETE").map((r) => new URL(r.url).pathname), ["/library/profiles/home"]);
   });
 
-  it("Create asks for id, model and address; the first profile becomes the default, so the modal names its address", async () => {
+  it("Create asks for id and model only (no address); the first profile becomes the default, so the modal names the address", async () => {
     const { sb, net } = await activateWith({
       "GET /library/profiles": [{ status: 200, body: { profiles: {}, default: null } }],
       "PUT /library/profiles/work": [{ status: 200, body: { profiles: { work: { model: "m" } }, default: "work" } }],
     }, [...ALL, "profiles:write"]);
     await sb.profiles.getChildren();
-    calls.inputQueue.push("work", "m", "https://proxy.example.com");
+    calls.inputQueue.push("work", "m");
     calls.modalChoices.push(PROFILE_TEXTS.makeDefault);
     await calls.commands.get(ext.CMD_CREATE_PROFILE)!();
+    assert.strictEqual(calls.inputs.length, 2, "no server address box");
     assert.strictEqual(calls.inputs[0].validateInput("Bad Id"), PROFILE_TEXTS.idInvalid);
-    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmDefault("work", "https://proxy.example.com")]);
-    assert.deepStrictEqual(net.seen.find((r) => r.method === "PUT")!.body, { model: "m", base_url: "https://proxy.example.com" });
+    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmDefault("work", PROFILE_TEXTS.cliDefaultAddress)]);
+    assert.deepStrictEqual(net.seen.find((r) => r.method === "PUT")!.body, { model: "m" });
   });
 
   it("an older server answers writes with a refusal: one short message, no crash", async () => {
@@ -760,18 +719,16 @@ describe("review follow-ups", () => {
       "PUT /library/profiles/work": [{ status: 200, body: profiles }],
     }, [...ALL, "profiles:write"]);
     await sb.profiles.getChildren();
-    calls.inputQueue.push("work", "m", "https://new.example.com", "work", "m", "https://new.example.com");
-    calls.modalChoices.push(undefined, PROFILE_TEXTS.replace, PROFILE_TEXTS.changeAddress);
+    calls.inputQueue.push("work", "m", "work", "m");
+    calls.modalChoices.push(undefined, PROFILE_TEXTS.replace);
     await calls.commands.get(ext.CMD_CREATE_PROFILE)!();
     assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 0, "Cancel: nothing replaced");
     await calls.commands.get(ext.CMD_CREATE_PROFILE)!();
-    assert.deepStrictEqual(calls.modals.map((m) => m.message), [
-      PROFILE_TEXTS.confirmReplace("work"),
-      PROFILE_TEXTS.confirmReplace("work"),
-      PROFILE_TEXTS.confirmBaseUrl("work", "https://new.example.com"),
-    ]);
+    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmReplace("work"), PROFILE_TEXTS.confirmReplace("work")]);
     assert.strictEqual(net.seen.filter((r) => r.method === "GET").length, 3, "the view's list, then once per Create");
-    assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 1);
+    const puts = net.seen.filter((r) => r.method === "PUT");
+    assert.strictEqual(puts.length, 1);
+    assert.deepStrictEqual(puts[0].body, { model: "m", base_url: "https://old.example.com" }, "replacing keeps the stored address");
   });
 
   it("Refresh while filtered fetches again and keeps the filter, with new counts", async () => {
@@ -869,57 +826,98 @@ describe("server-hidden profile values (hidden_fields, credential_in_profile)", 
   });
 });
 
-describe("hidden settings tied to the address (409 hidden_fields_bound_to_host)", () => {
+describe("server address is read-only; permission-loosening flags (409s)", () => {
   beforeEach(resetCalls);
 
-  const bound = (hidden: number) => ({ profiles: { work: { name: "Work", base_url: "https://proxy.example.com/v1", hidden_fields: hidden } }, default: "work" });
+  const withAddress = { profiles: { work: { name: "Work", base_url: "https://proxy.example.com/v1", flags: ["--verbose", "--dangerously-skip-permissions"] } }, default: "work" };
 
-  it("with hidden settings, a new host is refused up front: no confirmation, no request, the edit stays open", async () => {
-    const { sb, net } = await activateWith({
-      "GET /library/profiles": [{ status: 200, body: bound(1) }],
-      "PUT /library/profiles/work": [{ status: 200, body: bound(1) }],
-    }, [...ALL, "profiles:write"]);
+  it("Edit shows the address read-only and offers the CLI (shell-free terminal) or the website; nothing is sent", async () => {
+    const { sb, net } = await activateWith({ "GET /library/profiles": [{ status: 200, body: withAddress }] }, [...ALL, "profiles:write"]);
     const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
-    calls.nextPick = 2;
-    calls.inputQueue.push("https://other.example.com/v1", "http://proxy.example.com/v1", "https://proxy.example.com:8443/v1", undefined);
-    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
-    assert.strictEqual(calls.modals.length, 0, "no confirmation for a change that would fail");
+    const fake = require("vscode");
+    const savedInfo = fake.window.showInformationMessage;
+    const asked: { message: string; items: string[] }[] = [];
+    const answers = [PROFILE_TEXTS.openWebsite, PROFILE_TEXTS.runCli];
+    fake.window.showInformationMessage = async (message: string, ...items: string[]) => { asked.push({ message, items }); return answers.shift(); };
+    try {
+      calls.pickQueue.push(2, 2);
+      await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+      await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+    } finally {
+      fake.window.showInformationMessage = savedInfo;
+    }
+    const pickItem = calls.quickPicks[0].items[2];
+    assert.deepStrictEqual([pickItem.label, pickItem.description, pickItem.detail], ["Server address", "https://proxy.example.com/v1", PROFILE_TEXTS.readOnlyHere]);
+    assert.deepStrictEqual(asked.map((a) => [a.message, a.items]), [
+      [PROFILE_TEXTS.addressReadOnly, [PROFILE_TEXTS.runCli, PROFILE_TEXTS.openWebsite]],
+      [PROFILE_TEXTS.addressReadOnly, [PROFILE_TEXTS.runCli, PROFILE_TEXTS.openWebsite]],
+    ]);
+    assert.deepStrictEqual(calls.opened, [`${BASE}/account/workspace#profiles`]);
+    assert.strictEqual(calls.inputs.length, 0, "no box for the address");
+    assert.strictEqual(calls.modals.length, 0, "no address confirmation");
     assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 0);
-    assert.deepStrictEqual(calls.inputs.slice(1).map((i) => [i.prompt, i.value]), [
-      [api.MESSAGES.hiddenBoundToHost, "https://proxy.example.com/v1"],
-      [api.MESSAGES.hiddenBoundToHost, "https://proxy.example.com/v1"],
-      [api.MESSAGES.hiddenBoundToHost, "https://proxy.example.com/v1"],
-    ], "host, scheme and port changes all count");
   });
 
-  it("with hidden settings, a new path on the same address is confirmed and sent", async () => {
-    const { sb, net } = await activateWith({
-      "GET /library/profiles": [{ status: 200, body: bound(2) }],
-      "PUT /library/profiles/work": [{ status: 200, body: bound(2) }],
-    }, [...ALL, "profiles:write"]);
-    const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
-    calls.nextPick = 2;
-    calls.nextInput = "https://proxy.example.com/v2";
-    calls.modalChoices.push(PROFILE_TEXTS.changeAddress);
-    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
-    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmBaseUrl("Work", "https://proxy.example.com/v2")]);
-    assert.strictEqual(net.seen.find((r) => r.method === "PUT")!.body.base_url, "https://proxy.example.com/v2");
+  it("the CLI button runs `a4sx profile --name ID` directly in a terminal", async () => {
+    const t = await ext.runProfileCli("work", () => ({ found: true, path: "/usr/local/bin/a4sx" }));
+    assert.ok(t);
+    assert.deepStrictEqual(calls.terminals[0].options, { name: ext.PROFILE_TERMINAL_NAME, shellPath: "/usr/local/bin/a4sx", shellArgs: ["profile", "--name", "work"] });
+    assert.strictEqual(await ext.runProfileCli("--evil", () => ({ found: true, path: "/x" })), undefined);
+    assert.strictEqual(calls.terminals.length, 1);
   });
 
-  it("a 409 from the server keeps the edit open with its one-line message", async () => {
+  it("adding a permission-loosening flag is refused in any spelling; keeping or removing one is fine", async () => {
+    for (const add of ["--dangerously-skip-permissions", "--Dangerously_Skip_Permissions", "--allow-dangerously-skip-permissions",
+      "--permission-mode=bypassPermissions", "--permission-mode bypassPermissions", "--permission_mode BYPASS_PERMISSIONS"]) {
+      assert.ok(addsLooseningFlag(["--verbose"], ["--verbose", ...add.split(" ")]), add);
+    }
+    assert.deepStrictEqual(looseningFlags(["--permission-mode", "plan"]), { skip: 0, bypass: 0 });
+    assert.ok(!addsLooseningFlag(["--dangerously-skip-permissions"], ["--dangerously-skip-permissions", "--verbose"]), "kept");
+    assert.ok(!addsLooseningFlag(["--dangerously-skip-permissions"], []), "removed");
+    assert.ok(addsLooseningFlag(["--dangerously-skip-permissions"], ["--dangerously-skip-permissions", "--permission-mode=bypassPermissions"]), "another kind added");
+
     const { sb, net } = await activateWith({
-      "GET /library/profiles": [{ status: 200, body: bound(0) }],
-      "PUT /library/profiles/work": [{ status: 409, body: { error: { code: "hidden_fields_bound_to_host", message: "Hidden values stay tied to the current address; change it from the CLI or the website.\nmore" } } }],
+      "GET /library/profiles": [{ status: 200, body: withAddress }],
+      "PUT /library/profiles/work": [{ status: 200, body: withAddress }],
     }, [...ALL, "profiles:write"]);
     const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
-    calls.nextPick = 2;
-    calls.inputQueue.push("https://other.example.com", undefined);
-    calls.modalChoices.push(PROFILE_TEXTS.changeAddress);
+    calls.pickQueue.push(4, 4);
+    calls.inputQueue.push("--verbose --dangerously-skip-permissions --permission-mode=bypassPermissions", "--verbose");
     await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
-    assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 1);
-    assert.strictEqual(calls.inputs.length, 2);
-    assert.strictEqual(calls.inputs[1].prompt, "Hidden values stay tied to the current address; change it from the CLI or the website.");
-    assert.strictEqual(calls.inputs[1].value, "https://proxy.example.com/v1");
-    assert.strictEqual(calls.errors.length, 0);
+    assert.strictEqual(calls.inputs[0].validateInput("--verbose --dangerously-skip-permissions --permission-mode bypassPermissions"), PROFILE_TEXTS.permissionFlag);
+    assert.strictEqual(calls.inputs[0].validateInput("--verbose --dangerously-skip-permissions --debug"), null, "keeping one is fine");
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [PROFILE_TEXTS.permissionFlag]);
+    assert.strictEqual(PROFILE_TEXTS.permissionFlag, "Turning off permission prompts can only be done with the a4sx CLI or on the website.");
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+    const puts = net.seen.filter((r) => r.method === "PUT");
+    assert.deepStrictEqual(puts.map((r) => r.body.flags), [["--verbose"]], "removing one is sent");
+  });
+
+  for (const [code, message] of [
+    ["base_url_needs_signin", "Change the server address with the a4sx CLI or on the website."],
+    ["permission_flag_needs_signin", "Turning off permission prompts needs the a4sx CLI or the website."],
+    ["hidden_fields_bound_to_host", "Hidden values stay tied to the current address."],
+  ] as const) {
+    it(`a 409 ${code} keeps the edit open with the server's one-line message`, async () => {
+      const { sb, net } = await activateWith({
+        "GET /library/profiles": [{ status: 200, body: withAddress }],
+        "PUT /library/profiles/work": [{ status: 409, body: { error: { code, message: `${message}\nmore` } } }],
+      }, [...ALL, "profiles:write"]);
+      const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
+      calls.nextPick = 4;
+      calls.inputQueue.push("--verbose --debug", undefined);
+      await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+      assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 1);
+      assert.strictEqual(calls.inputs.length, 2, "the edit stays open");
+      assert.strictEqual(calls.inputs[1].prompt, message);
+      assert.strictEqual(calls.inputs[1].value, "--verbose --dangerously-skip-permissions", "the stored value");
+      assert.strictEqual(calls.errors.length, 0);
+    });
+  }
+
+  it("409 fallbacks are fixed short texts when the server sends no message", () => {
+    for (const [code, fallback] of [["base_url_needs_signin", api.MESSAGES.baseUrlNeedsSignin], ["permission_flag_needs_signin", api.MESSAGES.permissionFlagNeedsSignin]]) {
+      assert.strictEqual(api.serverLine({ error: { code } }, [], fallback), fallback);
+    }
   });
 });
