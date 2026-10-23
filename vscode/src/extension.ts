@@ -14,7 +14,7 @@ import { CMD_OPEN_LISTING, ListingItem, MarketplaceProvider } from "./marketplac
 import { createProfile, editProfile, pickProfileForResume, removeProfile, setDefault } from "./profileCommands";
 import { ProfileItem, ProfilesProvider, ProfilesViewState } from "./profilesView";
 import { launchName, SessionItem, SessionsProvider, ViewState } from "./sessionsView";
-import { errorText, offerStepUp } from "./stepUp";
+import { errorText, offerStepUp, stepUpAllowed } from "./stepUp";
 
 export const SITE = "https://session-exchange.com";
 export const MCP_URL = `${SITE}/mcp`;
@@ -219,10 +219,12 @@ export async function signIn(auth: A4sxAuthProvider): Promise<void> {
 export const SIGNED_OUT_INFO =
   "Signed out of a4sx on this computer. The key stays valid until it expires or you revoke it on the a4sx website under Account › Agent keys.";
 export const SIGNED_OUT_REVOKED_INFO = "Signed out of a4sx. The key was revoked.";
+export const SIGNED_OUT_NO_KEY_INFO = "Signed out of a4sx.";
 
 export async function signOut(auth: A4sxAuthProvider): Promise<void> {
   const result = await auth.signOut();
-  await vscode.window.showInformationMessage(result === "revoked" ? SIGNED_OUT_REVOKED_INFO : SIGNED_OUT_INFO);
+  const info = result === undefined ? SIGNED_OUT_NO_KEY_INFO : result === "revoked" ? SIGNED_OUT_REVOKED_INFO : SIGNED_OUT_INFO;
+  await vscode.window.showInformationMessage(info);
 }
 
 /**
@@ -553,7 +555,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_DELETE_PROFILE, (item?: ProfileItem) => removeProfile(profileDeps, item)),
     // From the "Sign in again to allow …" item: the item names the permission, so no extra modal.
     vscode.commands.registerCommand(CMD_ALLOW_SCOPE, async (scope?: unknown) => {
-      if (typeof scope === "string" && /^[a-z]+:[a-z]+$/.test(scope)) {
+      if (typeof scope === "string" && stepUpAllowed(scope)) {
         await offerStepUp(auth, scope, false);
       }
     }),

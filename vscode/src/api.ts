@@ -37,7 +37,7 @@ export const MESSAGES = {
   badResponse: "a4sx sent an answer this extension doesn't understand. Update the extension or try again later.",
   http: (status: number) => `a4sx answered with an error (HTTP ${status}). Try again later.`,
   needsScope: (scope: string) => `This needs the a4sx permission ${scope}.`,
-  profilesNotSupported: "Launch profiles needs a newer a4sx server.",
+  profilesNotSupported: "Launch profiles need a newer a4sx server.",
   foldersNotSupported: "Folders need a newer a4sx server.",
   profileRejected: "a4sx did not accept this launch profile.",
   folderRejected: "a4sx did not accept this folder name.",
@@ -279,7 +279,10 @@ export interface Profile {
 }
 
 export interface ProfilesState {
-  /** In the server's order: deleting the default makes the first remaining profile the default. */
+  /**
+   * In the order the JSON answer lists them, which is the server's order, except that JavaScript puts
+   * integer-like ids ("1", "42") first (see nextDefaultAfterDelete).
+   */
   profiles: [string, Profile][];
   default: string | null;
 }
@@ -292,6 +295,23 @@ function profilesState(status: number, data: any): ProfilesState {
     .filter(([id, p]) => PROFILE_ID.test(id) && typeof p === "object" && p !== null && !Array.isArray(p)) as [string, Profile][];
   const def = typeof data.default === "string" && profiles.some(([id]) => id === data.default) ? data.default : null;
   return { profiles, default: def };
+}
+
+/**
+ * The profile the server makes the default when the default `id` is deleted: the first remaining one
+ * in its stored (insertion) order. Parsed JSON keeps that order unless an id is integer-like, which
+ * JavaScript moves to the front, so then the answer is "unknown" (undefined), not a guess. `null`:
+ * no profile remains.
+ */
+export function nextDefaultAfterDelete(state: ProfilesState, id: string): string | null | undefined {
+  const rest = state.profiles.filter(([pid]) => pid !== id);
+  if (rest.length === 0) {
+    return null;
+  }
+  if (state.profiles.some(([pid]) => /^(0|[1-9][0-9]*)$/.test(pid))) {
+    return undefined;
+  }
+  return rest[0][0];
 }
 
 /** The server's rule for a profile id. */

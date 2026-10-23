@@ -7,7 +7,10 @@
 // until the new one is stored, then revoked (best-effort). Sign-out revokes the key (best-effort,
 // short timeout) and always deletes it here, whatever the server answers.
 import * as vscode from "vscode";
-import { ApiError, Client, LEGACY_LOGIN_SCOPES, LOGIN_SCOPES, MESSAGES, pollLogin, revokeKey, RevokeResult, startLogin } from "./api";
+import {
+  ApiError, Client, LEGACY_LOGIN_SCOPES, LOGIN_SCOPES, MESSAGES, pollLogin, revokeKey, RevokeResult,
+  SCOPE_ORGANIZE, SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, startLogin,
+} from "./api";
 
 export const AUTH_ID = "a4sx";
 export const AUTH_LABEL = "a4sx";
@@ -149,6 +152,9 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
    * The current key stays in use until the new one arrives; then the new one replaces it.
    */
   async stepUp(scope: string): Promise<string> {
+    if (![SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, SCOPE_ORGANIZE].includes(scope)) {
+      throw new ApiError("bad-scopes", MESSAGES.needsScope(scope));
+    }
     const have = (await this.current())?.scopes ?? LOGIN_SCOPES;
     const scopes = [...new Set([...have, scope])];
     const session = await this.signInWith({ scopes, fallback: false, adding: scope });
@@ -183,7 +189,10 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
     await this.signOut();
   }
 
-  /** Sign-out: revokes the key on the server (best-effort), then deletes it here whatever the result. */
+  /**
+   * Sign-out: revokes the key on the server (best-effort), then deletes it here whatever the result.
+   * Resolves to undefined when no key was stored.
+   */
   async signOut(): Promise<RevokeResult | undefined> {
     const old = await this.read();
     const result = old ? await this.revoke(old) : undefined;

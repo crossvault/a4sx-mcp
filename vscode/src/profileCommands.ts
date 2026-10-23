@@ -6,10 +6,12 @@
 // No API key is ever asked for, shown or stored: a profile holds none.
 import * as vscode from "vscode";
 import {
-  ApiError, Client, deleteProfile, listProfiles, Profile, PROFILE_ID, ProfilesState, putProfile,
+  ApiError, Client, deleteProfile, listProfiles, nextDefaultAfterDelete, Profile, PROFILE_ID, ProfilesState, putProfile,
   SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, setDefaultProfile,
 } from "./api";
-import { DEFAULT_MARK, displayAddress, NOT_SET, ProfileItem, profileName, ProfilesProvider, sortedProfiles } from "./profilesView";
+import {
+  DEFAULT_MARK, displayAddress, NOT_SET, ProfileItem, profileName, ProfilesProvider, SECRET_FLAG, secretFlags, shownFlags, sortedProfiles,
+} from "./profilesView";
 import { callWithScope, ensureScope, errorText, ScopedAuth } from "./stepUp";
 
 export const PROFILE_TEXTS = {
@@ -28,6 +30,7 @@ export const PROFILE_TEXTS = {
     harness: "Harness, for example claude-code. Leave empty to use the CLI's default.",
     flags: "Launch flags, separated by spaces. Leave empty for none.",
   },
+  flagsHiddenKept: "Flags with a key or token are hidden here and kept as they are.",
   baseUrlInvalid: "Enter an http:// or https:// address without a user name, password or query.",
   tooLong: (max: number) => `Use at most ${max} characters.`,
   flagsSecret: "Flags can't contain an API key or token.",
@@ -40,6 +43,11 @@ export const PROFILE_TEXTS = {
   confirmDelete: (name: string) => `Delete the launch profile "${name}"?`,
   confirmDeleteDefault: (name: string, next: string, address: string) =>
     `Delete the launch profile "${name}"? "${next}" becomes the default, and new launches send their requests to ${address}.`,
+  confirmDeleteDefaultUnknown: (name: string) =>
+    `Delete the launch profile "${name}"? Another profile becomes the default. Check which one in the list, and pick a new default if you need to.`,
+  confirmReplace: (id: string) => `A launch profile "${id}" already exists. Replace it?`,
+  replace: "Replace",
+  loadingProfiles: "Loading launch profiles…",
   delete: "Delete",
   pickForResume: "Choose a launch profile",
 };
@@ -81,16 +89,15 @@ export function validateBaseUrl(raw: string): string | undefined {
   return value.length > MAX_LEN.base_url ? PROFILE_TEXTS.tooLong(MAX_LEN.base_url) : undefined;
 }
 
-// Values that look like a credential (the server drops such header values too).
-const SECRET_FLAG = /(^|[=\s:])(bearer\b|basic\s|sk-|sk_live|sk_test|ghp_|github_pat_|xox[baprs]-|ya29\.)|authorization|(api[-_]?key|token|secret|password)(=|$)/i;
 
 export function parseFlags(raw: string): string[] {
   return raw.split(/\s+/).filter(Boolean);
 }
 
-export function validateFlags(raw: string): string | undefined {
+/** `kept`: how many hidden (credential) flags are kept besides the typed ones. */
+export function validateFlags(raw: string, kept = 0): string | undefined {
   const flags = parseFlags(raw);
-  if (flags.length > 20 || flags.some((f) => f.length > 128)) {
+  if (flags.length + kept > 20 || flags.some((f) => f.length > 128)) {
     return PROFILE_TEXTS.flagsTooMany;
   }
   return flags.some((f) => SECRET_FLAG.test(f)) ? PROFILE_TEXTS.flagsSecret : undefined;
@@ -106,12 +113,24 @@ export function validateField(field: ProfileField, raw: string): string | undefi
   return raw.trim().length > MAX_LEN[field] ? PROFILE_TEXTS.tooLong(MAX_LEN[field]) : undefined;
 }
 
-function fieldText(p: Profile, field: ProfileField): string {
-  const v = p[field];
+/** A field as it may be shown: flags with a key or token are masked. */
+function shownText(p: Profile, field: ProfileField): string {
   if (field === "flags") {
-    return Array.isArray(v) ? v.filter((f) => typeof f === "string").join(" ") : "";
+    return shownFlags(p.flags).join(" ");
   }
+  const v = p[field];
   return typeof v === "string" ? v : "";
+}
+
+function flagList(p: Profile): string[] {
+  return Array.isArray(p.flags) ? p.flags.filter((f): f is string => typeof f === "string") : [];
+}
+
+/** The flags split into the ones that may be shown and edited, and the hidden ones (kept unchanged). */
+export function splitFlags(p: Profile): { visible: string[]; hidden: string[] } {
+  const flags = flagList(p);
+  const secret = secretFlags(flags);
+  return { visible: flags.filter((_f, i) => !secret[i]), hidden: flags.filter((_f, i) => secret[i]) };
 }
 
 /** The profile with one field changed; an empty value removes the field (the CLI's default applies). */
@@ -186,6 +205,14 @@ export async function createProfile(deps: ProfileDeps): Promise<void> {
   }
   const taken = state.profiles.map(([id]) => id);
   const t = PROFILE_TEXTS;
+  const fresh = async (): Promise<ProfilesState | undefined> => {
+    try {
+      return await listProfiles(deps.client(), token);
+    } catch (e) {
+      await vscode.window.showErrorMessage(errorText(e));
+      return undefined;
+    }
+  };
   const id = await input(t.createTitle, t.idPrompt, "", (v) => validateProfileId(v, taken), t.idPlaceholder);
   if (id === undefined) {
     return;
@@ -204,13 +231,23 @@ export async function createProfile(deps: ProfileDeps): Promise<void> {
     // The server wants a non-empty profile; a name equal to the id changes nothing that is shown.
     profile = { name: pid };
   }
+  // The list may have changed while the boxes were open (another window, the CLI, the web).
+  const now = await fresh();
+  if (!now) {
+    return;
+  }
+  const existing = now.profiles.find(([pid2]) => pid2 === pid)?.[1];
+  if (existing && !(await confirm(t.confirmReplace(pid), t.replace))) {
+    return;
+  }
   // The server makes the first profile the default.
-  const becomesDefault = !state.default;
-  if (becomesDefault) {
+  const becomesDefault = !now.default && !existing;
+  const addressChanged = existing ? addressOf(existing) !== addressOf(profile) : !!profile.base_url;
+  if (becomesDefault && !existing) {
     if (!(await confirm(t.confirmDefault(pid, addressOf(profile)), t.makeDefault))) {
       return;
     }
-  } else if (profile.base_url && !(await confirm(t.confirmBaseUrl(pid, addressOf(profile)), t.changeAddress))) {
+  } else if (addressChanged && !(await confirm(t.confirmBaseUrl(profileName(pid, profile), addressOf(profile)), t.changeAddress))) {
     return;
   }
   await write(deps, token, (c, tok) => putProfile(c, tok, pid, profile));
@@ -227,21 +264,36 @@ export async function editProfile(deps: ProfileDeps, item: ProfileItem | undefin
   const t = PROFILE_TEXTS;
   const name = profileName(item.id, item.profile);
   const picked = await vscode.window.showQuickPick(
-    FIELD_ORDER.map((field) => ({ label: t.fields[field], description: fieldText(item.profile, field) || NOT_SET, field })),
+    FIELD_ORDER.map((field) => ({ label: t.fields[field], description: shownText(item.profile, field) || NOT_SET, field })),
     { title: t.editTitle(name), placeHolder: t.pickField },
   );
   if (!picked) {
     return;
   }
   const field = picked.field;
-  const before = fieldText(item.profile, field);
-  const value = await input(t.editTitle(name), t.prompts[field], before, (v) => validateField(field, v));
-  if (value === undefined) {
-    return;
-  }
-  const next = withField(item.profile, field, value);
-  if (fieldText(next, field) === before) {
-    return;
+  let next: Profile;
+  if (field === "flags") {
+    // Flags with a key or token are never prefilled; they are kept as they are.
+    const { visible, hidden } = splitFlags(item.profile);
+    const prompt = hidden.length ? `${t.prompts.flags} ${t.flagsHiddenKept}` : t.prompts.flags;
+    const value = await input(t.editTitle(name), prompt, visible.join(" "), (v) => validateFlags(v, hidden.length));
+    if (value === undefined) {
+      return;
+    }
+    if (JSON.stringify(parseFlags(value)) === JSON.stringify(visible)) {
+      return;   // unchanged: the stored order (hidden flags included) stays as it is
+    }
+    next = withField(item.profile, "flags", [...parseFlags(value), ...hidden].join(" "));
+  } else {
+    const before = shownText(item.profile, field);
+    const value = await input(t.editTitle(name), t.prompts[field], before, (v) => validateField(field, v));
+    if (value === undefined) {
+      return;
+    }
+    next = withField(item.profile, field, value);
+    if (shownText(next, field) === before) {
+      return;
+    }
   }
   if (field === "base_url" && !(await confirm(t.confirmBaseUrl(profileName(item.id, next), addressOf(next)), t.changeAddress))) {
     return;
@@ -274,9 +326,18 @@ export async function removeProfile(deps: ProfileDeps, item: ProfileItem | undef
   }
   const t = PROFILE_TEXTS;
   const name = profileName(item.id, item.profile);
-  // Deleting the default makes the first remaining profile (in the server's order) the default.
-  const next = item.isDefault ? (deps.view.data?.profiles ?? []).find(([id]) => id !== item.id) : undefined;
-  const message = next ? t.confirmDeleteDefault(name, profileName(next[0], next[1]), addressOf(next[1])) : t.confirmDelete(name);
+  // Deleting the default makes the first remaining profile (in the server's stored order) the default.
+  let message = t.confirmDelete(name);
+  const state = deps.view.data;
+  if (item.isDefault && state) {
+    const nextId = nextDefaultAfterDelete(state, item.id);
+    const next = nextId ? state.profiles.find(([id]) => id === nextId) : undefined;
+    if (next) {
+      message = t.confirmDeleteDefault(name, profileName(next[0], next[1]), addressOf(next[1]));
+    } else if (nextId === undefined) {
+      message = t.confirmDeleteDefaultUnknown(name);
+    }
+  }
   if (!(await confirm(message, t.delete))) {
     return;
   }
@@ -296,7 +357,10 @@ export async function pickProfileForResume(auth: ScopedAuth, client: () => Clien
     if (!cur || !cur.scopes.includes(SCOPE_PROFILES_READ)) {
       return {};
     }
-    state = await listProfiles(client(), cur.token);
+    state = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Window, title: PROFILE_TEXTS.loadingProfiles },
+      () => listProfiles(client(), cur.token),
+    );
   } catch {
     return {};
   }

@@ -16,6 +16,54 @@ export const NOT_SET = "not set";
 
 export type ProfilesViewState = "signed-out" | "ok" | "empty" | "needs-scope" | "unsupported" | "error";
 
+export const MASK = "••••";
+
+/** Flag text that looks like a credential (the server drops such header values too). */
+export const SECRET_FLAG = /(^|[=\s:])(bearer\b|basic\s|sk-|sk_live|sk_test|ghp_|github_pat_|xox[baprs]-|ya29\.)|authorization|(api[-_]?key|token|secret|password)(=|$)/i;
+/** A flag that only names a credential, so the next flag is its value (`--api-key VALUE`). */
+const SECRET_NAME = /^-{0,2}[a-z0-9_-]*(api[-_]?key|token|secret|password|authorization)$/i;
+
+/**
+ * Which flags hold a credential: `true` at each index whose value must never be shown or prefilled.
+ * A flag naming a credential (`--api-key`) marks the following flag too.
+ */
+export function secretFlags(flags: readonly string[]): boolean[] {
+  const out = flags.map(() => false);
+  for (let i = 0; i < flags.length; i++) {
+    if (SECRET_FLAG.test(flags[i])) {
+      out[i] = true;
+      if (SECRET_NAME.test(flags[i]) && i + 1 < flags.length) {
+        out[i + 1] = true;
+        i++;
+      }
+    }
+  }
+  return out;
+}
+
+/** One flag as it may be shown: the value part of a credential-looking flag becomes ••••. */
+export function maskFlag(flag: string): string {
+  if (SECRET_NAME.test(flag)) {
+    return flag;   // just the name; its value is the next flag
+  }
+  const eq = flag.indexOf("=");
+  if (eq > 0) {
+    return `${flag.slice(0, eq + 1)}${MASK}`;
+  }
+  const colon = flag.indexOf(":");
+  if (colon > 0 && /authorization/i.test(flag.slice(0, colon))) {
+    return `${flag.slice(0, colon + 1)}${MASK}`;
+  }
+  return MASK;
+}
+
+/** The profile's flags as they may be shown, credential values masked. */
+export function shownFlags(flags: unknown): string[] {
+  const list = Array.isArray(flags) ? flags.filter((f): f is string => typeof f === "string") : [];
+  const secret = secretFlags(list);
+  return list.map((f, i) => (secret[i] ? maskFlag(f) : f));
+}
+
 export interface ProfileTokenSource {
   token(): Promise<string | undefined>;
 }
@@ -45,7 +93,7 @@ export class ProfileItem extends vscode.TreeItem {
     const model = typeof profile.model === "string" && profile.model ? profile.model : undefined;
     const address = displayAddress(typeof profile.base_url === "string" ? profile.base_url : undefined);
     this.description = [isDefault ? DEFAULT_MARK : undefined, model, address].filter(Boolean).join(" · ");
-    const flags = Array.isArray(profile.flags) ? profile.flags.filter((f) => typeof f === "string").join(" ") : "";
+    const flags = shownFlags(profile.flags).join(" ");
     this.tooltip = [
       `ID: ${id}`,
       `Model: ${model ?? NOT_SET}`,

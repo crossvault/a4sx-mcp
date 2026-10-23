@@ -19,8 +19,15 @@ const PURPOSE: Record<string, string> = {
   [SCOPE_ORGANIZE]: "Moving sessions between folders",
 };
 
+/** The only permissions the extension ever asks for with a new sign-in, whatever a server names. */
+export const STEP_UP_SCOPES: readonly string[] = [SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, SCOPE_ORGANIZE];
+
+export function stepUpAllowed(scope: string): boolean {
+  return STEP_UP_SCOPES.includes(scope);
+}
+
 export const STEP_UP = {
-  prompt: (scope: string) => `${PURPOSE[scope] ?? "This"} needs the a4sx permission ${scope}. Sign in again in your browser to allow it.`,
+  prompt: (scope: string) => `${PURPOSE[scope]} needs the a4sx permission ${scope}. Sign in again in your browser to allow it.`,
   signIn: "Sign in",
   signInFirst: "Sign in to a4sx first.",
 };
@@ -38,6 +45,10 @@ export function notSupportedFor(scope: string): string {
  * the new key, or undefined when the user declined, cancelled, or the server can't grant it.
  */
 export async function offerStepUp(auth: ScopedAuth, scope: string, ask = true): Promise<string | undefined> {
+  if (!stepUpAllowed(scope)) {
+    await vscode.window.showErrorMessage(MESSAGES.needsScope(scope));
+    return undefined;
+  }
   if (ask) {
     const choice = await vscode.window.showInformationMessage(STEP_UP.prompt(scope), { modal: true }, STEP_UP.signIn);
     if (choice !== STEP_UP.signIn) {
@@ -78,8 +89,8 @@ export async function callWithScope<T>(auth: ScopedAuth, token: string, call: (t
   try {
     return { value: await call(token) };
   } catch (e) {
-    if (!(e instanceof ApiError && e.code === "insufficient-scope" && e.requiredScope)) {
-      throw e;
+    if (!(e instanceof ApiError && e.code === "insufficient-scope" && e.requiredScope && stepUpAllowed(e.requiredScope))) {
+      throw e;   // a scope outside the allow-list: its fixed "needs the permission" message
     }
     const again = await offerStepUp(auth, e.requiredScope);
     if (!again) {

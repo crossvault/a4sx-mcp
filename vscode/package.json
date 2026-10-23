@@ -1,7 +1,7 @@
 {
   "name": "a4sx",
   "displayName": "a4sx",
-  "description": "Use a4sx from VS Code: sign in, browse, filter, file and resume your saved sessions, manage your launch profiles, search the marketplace, and add the a4sx MCP servers for agent mode.",
+  "description": "Use a4sx from VS Code: sign in, browse and resume your saved sessions, sort them into folders, manage your launch profiles, search the marketplace, and add the a4sx MCP servers for agent mode.",
   "version": "0.3.0",
   "publisher": "crossvaultGmbH",
   "license": "Apache-2.0",

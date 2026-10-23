@@ -193,7 +193,7 @@ const fake = {
   TreeItem,
   TreeItemCollapsibleState,
   ThemeIcon,
-  ProgressLocation: { Notification: 15 },
+  ProgressLocation: { Notification: 15, Window: 10 },
   ExtensionKind: { UI: 1, Workspace: 2 },
   commands: {
     registerCommand(id: string, fn: (...args: unknown[]) => unknown) {

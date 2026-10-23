@@ -6,6 +6,7 @@
 - New actions on a session: **Move to folder…** and **Remove from folder**.
 - **Filter** in the **My sessions** title bar shows only the sessions that match what you type (title, name, id, tags or folder). **Clear filter** shows all of them again.
 - New view **Launch profiles**: lists your launch profiles and marks the default. You can create, edit and delete profiles and set the default. Setting the default or changing a server address asks you to confirm and names the address.
+- In **Launch profiles**, flags that look like a key or token are shown as `••••`. **Edit** never fills them in and keeps them as they are.
 - **Resume in terminal** asks which launch profile to use when you have more than one, and passes it to `a4sx launch` as `--profile`.
 - **a4sx: Sign out** now asks the a4sx server to revoke the key before it removes the key from VS Code. If the server can't be reached, the key is still removed. After the extra sign-in for a new permission, the old key is revoked the same way.
 - Sign-in now also asks for `profiles:read` and `library:organize`. The first change to a launch profile asks for `profiles:write` with a new browser sign-in. On an older a4sx server, sign-in asks for `library:read` only, and the folder and profile actions are hidden.

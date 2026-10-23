@@ -14,7 +14,7 @@ import {
 import { FOLDER_TEXTS } from "../../folderCommands";
 import { ALLOW_SCOPE_ITEM, displayAddress, NO_PROFILES, ProfileItem } from "../../profilesView";
 import { PROFILE_TEXTS, validateBaseUrl, validateFlags, validateProfileId, withField } from "../../profileCommands";
-import { offerStepUp, STEP_UP } from "../../stepUp";
+import { offerStepUp, STEP_UP, STEP_UP_SCOPES } from "../../stepUp";
 import type { CliLookup } from "../../cli";
 
 const TOKEN = "lib_tok_OLD_secret_111";
@@ -675,5 +675,132 @@ describe("revoking the key: sign-out and step-up", () => {
       assert.strictEqual(storedKey(run.ctx).token, TOKEN, "the old key stays");
     }
     assert.ok(net.seen.filter(isRevoke).length === 1);
+  });
+});
+
+describe("review follow-ups", () => {
+  beforeEach(resetCalls);
+
+  const SECRETS = ["abc123def", "t0k3n", "sk-ant-xyz"];
+  const secretProfile = { profiles: { work: { name: "Work", flags: ["--verbose", "--api-key", "abc123def", "--token=t0k3n", "sk-ant-xyz"] } }, default: "work" };
+  const noSecret = (text: string) => SECRETS.forEach((v) => assert.ok(!text.includes(v), `shown: ${text}`));
+
+  it("credential-looking flags are masked in the tooltip and the edit pick, never prefilled, and kept unchanged on save", async () => {
+    const { sb, net } = await activateWith({
+      "GET /library/profiles": [{ status: 200, body: secretProfile }],
+      "PUT /library/profiles/work": [{ status: 200, body: secretProfile }],
+    }, [...ALL, "profiles:write"]);
+    const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
+    assert.ok(String(work.tooltip).includes("Flags: --verbose --api-key •••• --token=•••• ••••"));
+    noSecret(String(work.tooltip));
+    calls.pickQueue.push(4, 4);   // Flags, twice
+    calls.inputQueue.push("--verbose", "--verbose --debug");
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+    assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 0, "nothing typed: nothing sent");
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+    const flagsItem = calls.quickPicks[0].items[4];
+    assert.strictEqual(flagsItem.description, "--verbose --api-key •••• --token=•••• ••••");
+    for (const box of calls.inputs) {
+      assert.strictEqual(box.value, "--verbose", "only the flags without a key are prefilled");
+      assert.ok(box.prompt.includes(PROFILE_TEXTS.flagsHiddenKept));
+      noSecret(box.value + box.prompt);
+    }
+    const put = net.seen.find((r) => r.method === "PUT")!;
+    assert.deepStrictEqual(put.body.flags, ["--verbose", "--debug", "--api-key", "abc123def", "--token=t0k3n", "sk-ant-xyz"]);
+    assert.ok(!JSON.stringify(put.body).includes("••••"));
+  });
+
+  it("the delete-the-default modal names the next default only when the order is certain", () => {
+    // The server's stored order is zeta, alpha, 10: after deleting zeta, alpha is the default. JavaScript
+    // puts the integer-like "10" first, so the client can't tell and must not guess.
+    const parsed = JSON.parse('{"profiles": {"zeta": {}, "alpha": {}, "10": {}}, "default": "zeta"}');
+    const numeric: api.ProfilesState = { profiles: Object.entries(parsed.profiles) as [string, api.Profile][], default: "zeta" };
+    assert.strictEqual(numeric.profiles[0][0], "10");
+    assert.strictEqual(api.nextDefaultAfterDelete(numeric, "zeta"), undefined);
+    const plain: api.ProfilesState = { profiles: [["zeta", {}], ["alpha", {}], ["beta", {}]], default: "zeta" };
+    assert.strictEqual(api.nextDefaultAfterDelete(plain, "zeta"), "alpha");
+    assert.strictEqual(api.nextDefaultAfterDelete({ profiles: [["zeta", {}]], default: "zeta" }, "zeta"), null);
+  });
+
+  it("deleting the default with integer-like ids says another profile becomes the default, without naming one", async () => {
+    const { sb } = await activateWith({
+      "GET /library/profiles": [{ status: 200, body: JSON.parse('{"profiles": {"zeta": {}, "alpha": {}, "10": {}}, "default": "zeta"}') }],
+    }, [...ALL, "profiles:write"]);
+    const zeta = ((await sb.profiles.getChildren()) as ProfileItem[]).find((i) => i.id === "zeta")!;
+    calls.modalChoices.push(undefined);
+    await calls.commands.get(ext.CMD_DELETE_PROFILE)!(zeta);
+    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmDeleteDefaultUnknown("zeta")]);
+  });
+
+  it("step-up only ever asks for profiles:read, profiles:write or library:organize", async () => {
+    const { sb, logins } = await activateWith({
+      "GET /library/profiles": [{ status: 200, body: profiles }],
+      "PUT /library/profiles/home": [scopeRefusal("admin:all")],
+    }, [...ALL, "profiles:write"]);
+    const home = ((await sb.profiles.getChildren()) as ProfileItem[])[0];
+    calls.nextPick = 1;
+    calls.nextInput = "model-q";
+    calls.modalChoices.push(STEP_UP.signIn);
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(home);
+    assert.strictEqual(calls.modals.length, 0);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [api.MESSAGES.needsScope("admin:all")]);
+    await calls.commands.get(ext.CMD_ALLOW_SCOPE)!("library:publish");
+    assert.strictEqual(await offerStepUp(sb.auth, "library:acquire"), undefined);
+    await assert.rejects(sb.auth.stepUp("library:publish"), (e: any) => e.code === "bad-scopes");
+    assert.strictEqual(logins.length, 0);
+    assert.deepStrictEqual([...STEP_UP_SCOPES].sort(), ["library:organize", "profiles:read", "profiles:write"]);
+  });
+
+  it("Create fetches the list again before writing, and asks before replacing an id that now exists", async () => {
+    const { sb, net } = await activateWith({
+      "GET /library/profiles": [
+        { status: 200, body: { profiles: { home: {} }, default: "home" } },
+        { status: 200, body: { profiles: { home: {}, work: { base_url: "https://old.example.com" } }, default: "home" } },
+      ],
+      "PUT /library/profiles/work": [{ status: 200, body: profiles }],
+    }, [...ALL, "profiles:write"]);
+    await sb.profiles.getChildren();
+    calls.inputQueue.push("work", "m", "https://new.example.com", "work", "m", "https://new.example.com");
+    calls.modalChoices.push(undefined, PROFILE_TEXTS.replace, PROFILE_TEXTS.changeAddress);
+    await calls.commands.get(ext.CMD_CREATE_PROFILE)!();
+    assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 0, "Cancel: nothing replaced");
+    await calls.commands.get(ext.CMD_CREATE_PROFILE)!();
+    assert.deepStrictEqual(calls.modals.map((m) => m.message), [
+      PROFILE_TEXTS.confirmReplace("work"),
+      PROFILE_TEXTS.confirmReplace("work"),
+      PROFILE_TEXTS.confirmBaseUrl("work", "https://new.example.com"),
+    ]);
+    assert.strictEqual(net.seen.filter((r) => r.method === "GET").length, 3, "the view's list, then once per Create");
+    assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 1);
+  });
+
+  it("Refresh while filtered fetches again and keeps the filter, with new counts", async () => {
+    const { sb, net } = await activateWith({ "GET /library/sessions": [
+      { status: 200, body: { sessions: rows } },
+      { status: 200, body: { sessions: [...rows, { id: "c-7", title: "Work log", folder: null }] } },
+    ] });
+    sb.sessions.setFilter("work");
+    assert.strictEqual((await sb.sessions.getChildren()).length, 3);
+    await calls.commands.get(ext.CMD_REFRESH)!();
+    const items = await sb.sessions.getChildren();
+    assert.strictEqual(net.seen.length, 2);
+    assert.strictEqual(sb.sessions.filter, "work");
+    assert.deepStrictEqual(items.map((i) => i.label).sort(), ["Fix login", "Old notes", "Refactor router", "Work log"]);
+    assert.strictEqual(calls.treeViews.get(ext.VIEW_SESSIONS)!.message, FILTER_MESSAGE("work", 4, 7));
+    assert.strictEqual(calls.context["a4sx.sessionsFiltered"], true);
+  });
+
+  it("signing out with no stored key says only that, and calls nothing", async () => {
+    const { net } = await activateWith({}, null);
+    await calls.commands.get(ext.CMD_SIGN_OUT)!();
+    assert.deepStrictEqual(calls.infos, [ext.SIGNED_OUT_NO_KEY_INFO]);
+    assert.strictEqual(net.seen.length, 0);
+  });
+
+  it("Resume in terminal shows progress while the profile list loads", async () => {
+    await activateWith({ "GET /library/profiles": [{ status: 200, body: profiles }] });
+    calls.nextPick = 0;
+    await ext.resumeSession(new SessionItem({ id: "c-1", label: "x" }), () => ({ found: true, path: "/usr/local/bin/a4sx" }));
+    assert.deepStrictEqual(calls.progress.map((p) => p.title), [PROFILE_TEXTS.loadingProfiles]);
   });
 });

@@ -5,7 +5,7 @@
 This extension connects VS Code to a4sx. It adds:
 
 - **The a4sx sidebar.** Click the a4sx icon in the activity bar.
-  - **Sign in to a4sx.** Your browser opens the a4sx sign-in page. Check that it shows the same code as VS Code, then confirm. VS Code keeps the resulting key in its secret storage. The key can read your library and your launch profiles, and move sessions between folders.
+  - **Sign in to a4sx.** Your browser opens the a4sx sign-in page. Check that it shows the same code as VS Code, then confirm. VS Code keeps the resulting key in its secret storage. The key can read your library and your launch profiles. It can also rename your saved sessions, change their tags and move them between folders.
   - **My sessions** lists the sessions in your library, newest first, with their date and size, in folders. For each session you can:
     - **Resume in terminal**, which runs `a4sx launch --a4sx-session=NAME` and continues the session in Claude Code. If you have more than one launch profile, VS Code asks which one to use.
     - **Resume in Claude Code**, which copies the session into Claude Code's local history for the open folder and opens it in the Claude Code extension's panel. If more than one folder is open, VS Code asks which one.
@@ -32,7 +32,7 @@ Folders need a newer a4sx server. On an older server, all sessions appear at the
 
 ## Launch profiles
 
-A launch profile says how `a4sx launch` starts a session: the model, the server address (`base_url`), the harness and extra flags. A profile never holds an API key, and the extension never asks for one.
+A launch profile says how `a4sx launch` starts a session: the model, the server address (`base_url`), the harness and extra flags. The extension never shows or stores an API key; keep keys out of profile flags and headers. In the list and in **Edit**, flags that look like a key or token are shown as `••••`, and **Edit** keeps them as they are.
 
 - **Create launch profile** (the + button) asks for an id, a model and a server address.
 - **Edit** asks which field to change.
@@ -41,7 +41,7 @@ A launch profile says how `a4sx launch` starts a session: the model, the server 
 
 The first time you change a profile, the extension asks for one more permission (`profiles:write`). Your browser opens a new sign-in that names it. The extension keeps using your current key until the new one arrives. Then it replaces the old key and asks the a4sx server to revoke it.
 
-On an older a4sx server, the view shows "Launch profiles needs a newer a4sx server." and the profile actions are hidden.
+On an older a4sx server, the view shows "Launch profiles need a newer a4sx server." and the profile actions are hidden.
 
 ## Signing out
 
