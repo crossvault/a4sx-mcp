@@ -13,7 +13,7 @@ import {
 } from "../../sessionsView";
 import { FOLDER_TEXTS } from "../../folderCommands";
 import { ALLOW_SCOPE_ITEM, displayAddress, HIDDEN_FIELDS, NO_PROFILES, ProfileItem } from "../../profilesView";
-import { addableFlag, addedFlags, PROFILE_TEXTS, validateFlags, validateProfileId, withField } from "../../profileCommands";
+import { fieldBody, PROFILE_TEXTS, validateField, validateProfileId } from "../../profileCommands";
 import { offerStepUp, STEP_UP, STEP_UP_SCOPES } from "../../stepUp";
 import type { CliLookup } from "../../cli";
 
@@ -412,7 +412,7 @@ describe("Launch profile actions", () => {
     return Object.fromEntries(items.map((i) => [i.id, i]));
   }
 
-  it("the first edit asks for profiles:write with a new sign-in naming it, then sends the whole profile with the new key", async () => {
+  it("the first edit asks for profiles:write with a new sign-in naming it, then sends only the changed field with the new key", async () => {
     const { sb, net, logins, ctx } = await activateWith({ ...listed, "PUT /library/profiles/work": [after({})] });
     const work = (await itemsOf(sb)).work;
     calls.modalChoices.push(STEP_UP.signIn);
@@ -427,26 +427,35 @@ describe("Launch profile actions", () => {
       ["Server address", "https://proxy.example.com"], ["Harness", "claude-code"], ["Router", "not set"], ["Headers", "1 header"],
     ]);
     assert.deepStrictEqual(calls.quickPicks[0].items.map((i: any) => i.detail),
-      [undefined, undefined, undefined, PROFILE_TEXTS.readOnlyHere, PROFILE_TEXTS.readOnlyHere, PROFILE_TEXTS.readOnlyHere, PROFILE_TEXTS.readOnlyHere]);
+      [undefined, undefined, ...Array(5).fill(PROFILE_TEXTS.readOnlyHere)], "only name and model are editable");
     assert.ok(!JSON.stringify(calls.quickPicks[0].items).includes("blue"), "header values are never shown");
     const put = net.seen.find((r) => r.method === "PUT")!;
     assert.strictEqual(bearer(put), `Bearer ${NEW_TOKEN}`);
-    assert.deepStrictEqual(put.body, { ...profiles.profiles.work, model: "model-c" }, "fields it doesn't edit (headers too) are sent back unchanged");
+    assert.deepStrictEqual(put.body, { model: "model-c" }, "only the changed field: the server keeps the rest as it is");
     assert.ok(!JSON.stringify(put.body).match(/api[-_]?key|authorization/i));
     noTokenAnywhere();
   });
 
-  it("flags that look like a key or token are refused; ids follow the server's rule", () => {
-    assert.strictEqual(validateFlags("--verbose --max-turns 3"), undefined);
-    for (const bad of ["--api-key=abc", "--header Authorization:Bearer x", "sk-abc123", "--token=x", "x:ghp_abc"]) {
-      assert.strictEqual(validateFlags(bad), PROFILE_TEXTS.flagsSecret, bad);
-    }
-    assert.strictEqual(validateFlags(Array(21).fill("-x").join(" ")), PROFILE_TEXTS.flagsTooMany);
+  it("ids, names and models follow the server's rules; an empty name shows the id, an empty model is the CLI's default", () => {
     assert.strictEqual(validateProfileId("work-2"), undefined);
     assert.strictEqual(validateProfileId("Work"), PROFILE_TEXTS.idInvalid);
     assert.strictEqual(validateProfileId("-x"), PROFILE_TEXTS.idInvalid);
     assert.strictEqual(validateProfileId("home", ["home"]), PROFILE_TEXTS.idTaken);
-    assert.deepStrictEqual(withField({ model: "m", flags: ["-a"] }, "flags", "  "), { model: "m" });
+    for (const ok of ["Work (EU)", "a.b_c-d", "x".repeat(64), ""]) {
+      assert.strictEqual(validateField("name", ok), undefined, ok);
+    }
+    for (const bad of ["x".repeat(65), "naïve", "a/b", "a:b"]) {
+      assert.strictEqual(validateField("name", bad), PROFILE_TEXTS.nameInvalid, bad);
+    }
+    for (const ok of ["claude-opus-4", "gpt-5.1", "org/model:tag", "m[1m]", ""]) {
+      assert.strictEqual(validateField("model", ok), undefined, ok);
+    }
+    for (const bad of ["-m", "a b", "x".repeat(65), "sk ant"]) {
+      assert.strictEqual(validateField("model", bad), PROFILE_TEXTS.modelInvalid, bad);
+    }
+    assert.deepStrictEqual(fieldBody("work", "name", "  "), { name: "work" });
+    assert.deepStrictEqual(fieldBody("work", "name", " Work "), { name: "Work" });
+    assert.deepStrictEqual(fieldBody("work", "model", ""), { model: "" });
   });
 
   it("the default is changed only elsewhere: the button offers the CLI or the website, and nothing is sent", async () => {
@@ -505,19 +514,19 @@ describe("Launch profile actions", () => {
     assert.deepStrictEqual(del.map((m: any) => m.when), ["view == a4sx.profiles && viewItem == a4sx.profile"], "the menu hides Delete for the default and locked profiles");
   });
 
-  it("Create asks for id and model only (no address); the first profile becomes the default, so the modal names the address", async () => {
+  it("Create asks for id, name and model only; the first profile becomes the default, so the modal names the address", async () => {
     const { sb, net } = await activateWith({
       "GET /library/profiles": [{ status: 200, body: { profiles: {}, default: null } }],
       "PUT /library/profiles/work": [{ status: 200, body: { profiles: { work: { model: "m" } }, default: "work" } }],
     }, [...ALL, "profiles:write"]);
     await sb.profiles.getChildren();
-    calls.inputQueue.push("work", "m");
+    calls.inputQueue.push("work", "", "m");
     calls.modalChoices.push(PROFILE_TEXTS.makeDefault);
     await calls.commands.get(ext.CMD_CREATE_PROFILE)!();
-    assert.strictEqual(calls.inputs.length, 2, "no server address box");
+    assert.strictEqual(calls.inputs.length, 3, "id, name, model: no address or flags box");
     assert.strictEqual(calls.inputs[0].validateInput("Bad Id"), PROFILE_TEXTS.idInvalid);
     assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmDefault("work", PROFILE_TEXTS.cliDefaultAddress)]);
-    assert.deepStrictEqual(net.seen.find((r) => r.method === "PUT")!.body, { model: "m" });
+    assert.deepStrictEqual(net.seen.find((r) => r.method === "PUT")!.body, { name: "work", model: "m" }, "an empty name shows the id");
   });
 
   it("an older server answers writes with a refusal: one short message, no crash", async () => {
@@ -677,29 +686,27 @@ describe("review follow-ups", () => {
   const secretProfile = { profiles: { work: { name: "Work", flags: ["--verbose", "--api-key", "abc123def", "--token=t0k3n", "sk-ant-xyz"] } }, default: "work" };
   const noSecret = (text: string) => SECRETS.forEach((v) => assert.ok(!text.includes(v), `shown: ${text}`));
 
-  it("credential-looking flags are masked in the tooltip and the edit pick, never prefilled, and kept unchanged on save", async () => {
-    const { sb, net } = await activateWith({
-      "GET /library/profiles": [{ status: 200, body: secretProfile }],
-      "PUT /library/profiles/work": [{ status: 200, body: secretProfile }],
-    }, [...ALL, "profiles:write"]);
+  it("flags are read-only: masked in the tooltip and the edit pick, they offer the CLI or the website, and nothing is sent", async () => {
+    const { sb, net } = await activateWith({ "GET /library/profiles": [{ status: 200, body: secretProfile }] }, [...ALL, "profiles:write"]);
     const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
     assert.ok(String(work.tooltip).includes("Flags: --verbose --api-key •••• --token=•••• ••••"));
     noSecret(String(work.tooltip));
-    calls.pickQueue.push(2, 2);   // Flags, twice
-    calls.inputQueue.push("--verbose", "--verbose --model m9");
-    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
-    assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 0, "nothing typed: nothing sent");
-    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
-    const flagsItem = calls.quickPicks[0].items[2];
-    assert.strictEqual(flagsItem.description, "--verbose --api-key •••• --token=•••• ••••");
-    for (const box of calls.inputs) {
-      assert.strictEqual(box.value, "--verbose", "only the flags without a key are prefilled");
-      assert.ok(box.prompt.includes(PROFILE_TEXTS.flagsHiddenKept));
-      noSecret(box.value + box.prompt);
+    const fake = require("vscode");
+    const savedInfo = fake.window.showInformationMessage;
+    const asked: string[] = [];
+    fake.window.showInformationMessage = async (message: string, ...items: string[]) => { asked.push(`${message}|${items.join(",")}`); return undefined; };
+    try {
+      calls.nextPick = 2;   // Flags
+      await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+    } finally {
+      fake.window.showInformationMessage = savedInfo;
     }
-    const put = net.seen.find((r) => r.method === "PUT")!;
-    assert.deepStrictEqual(put.body.flags, ["--verbose", "--model", "m9", "--api-key", "abc123def", "--token=t0k3n", "sk-ant-xyz"]);
-    assert.ok(!JSON.stringify(put.body).includes("••••"));
+    const flagsItem = calls.quickPicks[0].items[2];
+    assert.deepStrictEqual([flagsItem.label, flagsItem.description, flagsItem.detail], ["Flags", "--verbose --api-key •••• --token=•••• ••••", PROFILE_TEXTS.readOnlyHere]);
+    noSecret(JSON.stringify(calls.quickPicks[0].items));
+    assert.deepStrictEqual(asked, [`${PROFILE_TEXTS.readOnly}|${PROFILE_TEXTS.runCli},${PROFILE_TEXTS.openWebsite}`]);
+    assert.strictEqual(calls.inputs.length, 0, "no flags box");
+    assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 0);
   });
 
   it("step-up only ever asks for profiles:read, profiles:write or library:organize", async () => {
@@ -730,7 +737,7 @@ describe("review follow-ups", () => {
       "PUT /library/profiles/work": [{ status: 200, body: profiles }],
     }, [...ALL, "profiles:write"]);
     await sb.profiles.getChildren();
-    calls.inputQueue.push("work", "m", "work", "m");
+    calls.inputQueue.push("work", "", "m", "work", "", "m");
     calls.modalChoices.push(undefined, PROFILE_TEXTS.replace);
     await calls.commands.get(ext.CMD_CREATE_PROFILE)!();
     assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 0, "Cancel: nothing replaced");
@@ -739,7 +746,7 @@ describe("review follow-ups", () => {
     assert.strictEqual(net.seen.filter((r) => r.method === "GET").length, 3, "the view's list, then once per Create");
     const puts = net.seen.filter((r) => r.method === "PUT");
     assert.strictEqual(puts.length, 1);
-    assert.deepStrictEqual(puts[0].body, { model: "m", base_url: "https://old.example.com" }, "replacing keeps the stored address");
+    assert.deepStrictEqual(puts[0].body, { name: "work", model: "m" }, "only name and model: the server keeps the stored address and the rest");
   });
 
   it("Refresh while filtered fetches again and keeps the filter, with new counts", async () => {
@@ -792,7 +799,7 @@ describe("server-hidden profile values (hidden_fields, credential_in_profile)", 
     await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
     assert.ok(calls.quickPicks[0].options.placeHolder.includes(HIDDEN_FIELDS(2)));
     const put = net.seen.find((r) => r.method === "PUT")!;
-    assert.deepStrictEqual(put.body, { name: "Work", model: "m2", flags: ["--verbose"] });
+    assert.deepStrictEqual(put.body, { model: "m2" });
     const plain = new ProfileItem("p", { model: "m" }, false);
     assert.ok(!String(plain.tooltip).includes("hidden"));
   });
@@ -834,7 +841,6 @@ describe("server-hidden profile values (hidden_fields, credential_in_profile)", 
     await assert.rejects(api.putProfile(clientWith(net.fetch), TOKEN, "work", { flags: ["--key=••••"] }), (e: any) => e.code === "rejected");
     await assert.rejects(api.putProfile(clientWith(net.fetch), TOKEN, "work", { headers: { "X-K": "••••" } }), (e: any) => e.code === "rejected");
     assert.strictEqual(net.seen.length, 0);
-    assert.strictEqual(validateFlags("--x=••••"), PROFILE_TEXTS.maskTyped);
   });
 });
 
@@ -878,39 +884,17 @@ describe("server address is read-only; permission-loosening flags (409s)", () =>
     assert.strictEqual(calls.terminals.length, 1);
   });
 
-  it("flags: only --verbose, --model <id> and --permission-mode default|plan may be added; any flag may be removed", async () => {
-    for (const ok of ["--verbose", "--model claude-opus-4", "--model gpt-5.1", "--permission-mode default", "--permission-mode plan"]) {
-      assert.deepStrictEqual(addedFlags([], ok.split(" ")).every(addableFlag), true, ok);
-    }
-    for (const bad of ["--dangerously-skip-permissions", "--permission-mode bypassPermissions", "--permission-mode=plan", "--model=x",
-      "--model", "--debug", "--add-dir /", "-v"]) {
-      assert.strictEqual(addedFlags([], bad.split(" ")).every(addableFlag), false, bad);
-    }
-    assert.deepStrictEqual(addedFlags(["--debug", "--model", "a"], ["--model", "a", "--debug"]), [], "reordering adds nothing");
-    assert.deepStrictEqual(addedFlags(["--model", "a"], ["--model", "b"]), ["--model b"], "a changed value is an addition");
-
+  it("a key changes only name and model: no flags box anywhere, and Create sends no flags", async () => {
     const { sb, net } = await activateWith({
       "GET /library/profiles": [{ status: 200, body: withAddress }],
-      "PUT /library/profiles/work": [{ status: 200, body: withAddress }],
+      "PUT /library/profiles/new": [{ status: 200, body: withAddress }],
     }, [...ALL, "profiles:write"]);
-    const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
-    calls.pickQueue.push(2, 2, 2);
-    calls.inputQueue.push("--verbose --debug", "--verbose", "--verbose --dangerously-skip-permissions --permission-mode plan --model m1");
-    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
-    const check = calls.inputs[0].validateInput;
-    assert.strictEqual(check("--verbose --dangerously-skip-permissions --permission-mode bypassPermissions"), PROFILE_TEXTS.flagNotAllowed);
-    assert.strictEqual(check("--verbose --dangerously-skip-permissions --debug"), PROFILE_TEXTS.flagNotAllowed);
-    assert.strictEqual(check("--dangerously-skip-permissions"), null, "removing is free, keeping is fine");
-    assert.ok(calls.inputs[0].prompt.includes("--permission-mode default or plan"));
-    assert.deepStrictEqual(calls.errors.map((e) => e.message), [PROFILE_TEXTS.flagNotAllowed]);
-    assert.strictEqual(PROFILE_TEXTS.flagNotAllowed, "This flag can only be added with the a4sx CLI or on the website.");
-    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
-    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
-    const puts = net.seen.filter((r) => r.method === "PUT");
-    assert.deepStrictEqual(puts.map((r) => r.body.flags), [
-      ["--verbose"],
-      ["--verbose", "--dangerously-skip-permissions", "--permission-mode", "plan", "--model", "m1"],
-    ], "removing is sent; allowed additions are sent");
+    await sb.profiles.getChildren();
+    calls.inputQueue.push("new", "New one", "m1");
+    await calls.commands.get(ext.CMD_CREATE_PROFILE)!();
+    assert.deepStrictEqual(calls.inputs.map((i) => i.prompt), [PROFILE_TEXTS.idPrompt, PROFILE_TEXTS.prompts.name, PROFILE_TEXTS.prompts.model]);
+    assert.deepStrictEqual(net.seen.find((r) => r.method === "PUT")!.body, { name: "New one", model: "m1" });
+    assert.ok(!Object.values(PROFILE_TEXTS.prompts).some((p) => /flag/i.test(p)), "no text says flags can be edited");
   });
 
   for (const [code, message] of [
@@ -924,13 +908,13 @@ describe("server address is read-only; permission-loosening flags (409s)", () =>
         "PUT /library/profiles/work": [{ status: 409, body: { error: { code, message: `${message}\nmore` } } }],
       }, [...ALL, "profiles:write"]);
       const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
-      calls.nextPick = 2;
-      calls.inputQueue.push("--verbose --model m2", undefined);
+      calls.nextPick = 1;   // Model
+      calls.inputQueue.push("m2", undefined);
       await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
       assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 1);
       assert.strictEqual(calls.inputs.length, 2, "the edit stays open");
       assert.strictEqual(calls.inputs[1].prompt, message);
-      assert.strictEqual(calls.inputs[1].value, "--verbose --dangerously-skip-permissions", "the stored value");
+      assert.strictEqual(calls.inputs[1].value, "", "the stored value (no model)");
       assert.strictEqual(calls.errors.length, 0);
     });
   }
@@ -950,7 +934,7 @@ describe("read-only fields beyond the address; set-default and delete refusals",
     work: { name: "Work", base_url: "https://proxy.example.com", harness: "codex", use_router: true, router_tenant: "acme", headers: { "X-Team": "blue", "X-Org": "red" } },
   }, default: "home" };
 
-  it("harness, router, headers and address are read-only: each offers the CLI or the website, and nothing is sent", async () => {
+  it("flags, address, harness, router and headers are read-only: each offers the CLI or the website, and nothing is sent", async () => {
     const { sb, net } = await activateWith({ "GET /library/profiles": [{ status: 200, body }] }, [...ALL, "profiles:write"]);
     const work = ((await sb.profiles.getChildren()) as ProfileItem[]).find((i) => i.id === "work")!;
     const fake = require("vscode");
@@ -958,8 +942,8 @@ describe("read-only fields beyond the address; set-default and delete refusals",
     const asked: string[] = [];
     fake.window.showInformationMessage = async (message: string, ...items: string[]) => { asked.push(`${message}|${items.join(",")}`); return undefined; };
     try {
-      calls.pickQueue.push(3, 4, 5, 6);
-      for (let i = 0; i < 4; i++) {
+      calls.pickQueue.push(2, 3, 4, 5, 6);
+      for (let i = 0; i < 5; i++) {
         await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
       }
     } finally {
@@ -969,7 +953,7 @@ describe("read-only fields beyond the address; set-default and delete refusals",
     assert.deepStrictEqual(items.map((i: any) => i.field), ["name", "model", "flags", "base_url", "harness", "router", "headers"]);
     assert.deepStrictEqual(items.slice(3).map((i: any) => i.description), ["https://proxy.example.com", "codex", "on · acme", "2 headers"]);
     assert.ok(!JSON.stringify(items).match(/blue|red|X-Team/), "header names and values are never shown");
-    assert.deepStrictEqual(asked, Array(4).fill(`${PROFILE_TEXTS.readOnly}|${PROFILE_TEXTS.runCli},${PROFILE_TEXTS.openWebsite}`));
+    assert.deepStrictEqual(asked, Array(5).fill(`${PROFILE_TEXTS.readOnly}|${PROFILE_TEXTS.runCli},${PROFILE_TEXTS.openWebsite}`));
     assert.strictEqual(PROFILE_TEXTS.readOnly, "This setting can only be changed with the a4sx CLI or on the website.");
     assert.strictEqual(calls.inputs.length, 0);
     assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 0);

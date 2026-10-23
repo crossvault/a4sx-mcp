@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 crossVault GmbH
-// The Launch profiles actions (create, edit one field, set default, delete) and the profile pick for
-// "Resume in terminal". Writes need `profiles:write`, asked for with a new sign-in the first time.
-// The default is changed, and the default or a profile with hidden settings deleted, only with the
-// a4sx CLI or on the website; flags may be removed freely, and only a few may be added.
-// Edit changes only the name, the model and (non-loosening) flags; the server address, harness, router
-// and headers are read-only here (a library key may not set them), and Edit offers the a4sx CLI or
-// the website for them. A changed default is confirmed in a modal that names the address. Adding a
-// flag that turns off permission prompts is refused; keeping or removing one is fine.
+// The Launch profiles actions (create, edit one field, delete) and the profile pick for "Resume in
+// terminal". Writes need `profiles:write`, asked for with a new sign-in the first time.
+// A library key may change only a profile's name and model. Everything else (flags, server address,
+// harness, router, headers) is shown read-only, and Edit offers the a4sx CLI or the website for it; so
+// do changing the default and deleting the default or a profile with hidden settings. A write sends
+// only `name` and/or `model`: the server keeps every field it doesn't receive as it is.
 // No API key is ever asked for, shown or stored: a profile holds none.
 import * as vscode from "vscode";
 import {
@@ -15,8 +13,8 @@ import {
   SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE,
 } from "./api";
 import {
-  DEFAULT_MARK, deletable, DELETE_ELSEWHERE, displayAddress, HIDDEN_FIELDS, hiddenCount, MASK, NOT_SET, ProfileItem, profileName, ProfilesProvider, SECRET_FLAG, secretFlags,
-  shownFlags, sortedProfiles,
+  DEFAULT_MARK, deletable, DELETE_ELSEWHERE, displayAddress, HIDDEN_FIELDS, hiddenCount, NOT_SET, ProfileItem, profileName,
+  ProfilesProvider, shownFlags, sortedProfiles,
 } from "./profilesView";
 import { callWithScope, ensureScope, errorText, ScopedAuth } from "./stepUp";
 
@@ -33,27 +31,22 @@ export const PROFILE_TEXTS = {
   prompts: {
     name: "Name shown in the list. Leave empty to show the id.",
     model: "Model. Leave empty to use the CLI's default.",
-    flags: "Launch flags, separated by spaces. You can add --verbose, --model <id> and --permission-mode default or plan, and remove any flag.",
   },
+  nameInvalid: "Use up to 64 letters, digits, spaces and . _ ( ) -.",
+  modelInvalid: "Use up to 64 letters, digits and . _ : / [ ] -, starting with a letter or digit.",
   readOnly: MESSAGES.needsSignin,
   routerOn: "on",
   routerOff: "off",
   headerCount: (n: number) => (n === 1 ? "1 header" : `${n} headers`),
   openWebsite: "Open on the website",
   runCli: "Run a4sx profile",
-  flagsHiddenKept: "Flags with a key or token are hidden here and kept as they are.",
-  tooLong: (max: number) => `Use at most ${max} characters.`,
-  flagsSecret: "Flags can't contain an API key or token.",
-  flagsTooMany: "Use at most 20 flags of up to 128 characters each.",
-  maskTyped: "Type the whole value instead of ••••.",
-  flagNotAllowed: "This flag can only be added with the a4sx CLI or on the website.",
   deleteElsewhere: DELETE_ELSEWHERE,
   cliDefaultAddress: "the CLI's default server address",
   confirmDefault: (name: string, address: string) => `New launches will use "${name}" and send their requests to ${address}. Make it the default?`,
   makeDefault: "Make default",
   confirmDelete: (name: string) => `Delete the launch profile "${name}"?`,
-  confirmReplace: (id: string) => `A launch profile "${id}" already exists. Replace it?`,
-  replace: "Replace",
+  confirmReplace: (id: string) => `A launch profile "${id}" already exists. Change its name and model?`,
+  replace: "Change",
   loadingProfiles: "Loading launch profiles…",
   delete: "Delete",
   pickForResume: "Choose a launch profile",
@@ -61,16 +54,15 @@ export const PROFILE_TEXTS = {
 
 export type ProfileField = keyof typeof PROFILE_TEXTS.fields;
 /** What Edit may change; every other field is shown read-only. */
-export type EditableField = "name" | "model" | "flags";
-const EDITABLE: readonly ProfileField[] = ["name", "model", "flags"];
-const READ_ONLY: readonly ProfileField[] = ["base_url", "harness", "router", "headers"];
-const MAX_LEN: Record<Exclude<EditableField, "flags">, number> = { name: 64, model: 128 };
+export type EditableField = "name" | "model";
+const EDITABLE: readonly ProfileField[] = ["name", "model"];
+const READ_ONLY: readonly ProfileField[] = ["flags", "base_url", "harness", "router", "headers"];
 
 export function isEditable(field: ProfileField): field is EditableField {
   return EDITABLE.includes(field);
 }
 
-/** Where the server address can be changed: the a4sx CLI in a terminal, or the website. */
+/** Where a read-only setting can be changed: the a4sx CLI in a terminal, or the website. */
 export interface AddressElsewhere {
   website(): Promise<void>;
   cli(profileId: string): Promise<void>;
@@ -91,71 +83,25 @@ export function validateProfileId(raw: string, taken: readonly string[] = []): s
   return taken.includes(id) ? PROFILE_TEXTS.idTaken : undefined;
 }
 
-export function parseFlags(raw: string): string[] {
-  return raw.split(/\s+/).filter(Boolean);
-}
-
-/** `kept`: how many hidden (credential) flags are kept besides the typed ones. */
-export function validateFlags(raw: string, kept = 0): string | undefined {
-  const flags = parseFlags(raw);
-  if (flags.length + kept > 20 || flags.some((f) => f.length > 128)) {
-    return PROFILE_TEXTS.flagsTooMany;
-  }
-  if (flags.some((f) => f.includes(MASK))) {
-    return PROFILE_TEXTS.maskTyped;
-  }
-  return flags.some((f) => SECRET_FLAG.test(f)) ? PROFILE_TEXTS.flagsSecret : undefined;
-}
-
-/**
- * Flags as units: `--model ID` and `--permission-mode MODE` (two elements) count as one unit, so an
- * added unit can be checked as a whole.
- */
-export function flagUnits(flags: readonly string[]): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < flags.length; i++) {
-    const f = flags[i];
-    if ((f === "--model" || f === "--permission-mode") && i + 1 < flags.length && !flags[i + 1].startsWith("-")) {
-      out.push(`${f} ${flags[i + 1]}`);
-      i++;
-    } else {
-      out.push(f);
-    }
-  }
-  return out;
-}
-
-/** The only flags a key may add: --verbose, --model ID, --permission-mode default|plan. */
-export function addableFlag(unit: string): boolean {
-  return unit === "--verbose" || /^--model [A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$/.test(unit) || /^--permission-mode (default|plan)$/.test(unit);
-}
-
-/** The units in `after` that `before` doesn't have (as a multiset): what the edit adds. */
-export function addedFlags(before: readonly string[], after: readonly string[]): string[] {
-  const left = new Map<string, number>();
-  for (const u of flagUnits(before)) {
-    left.set(u, (left.get(u) ?? 0) + 1);
-  }
-  const added: string[] = [];
-  for (const u of flagUnits(after)) {
-    const n = left.get(u) ?? 0;
-    if (n > 0) {
-      left.set(u, n - 1);
-    } else {
-      added.push(u);
-    }
-  }
-  return added;
-}
-
+/** The server's rules for what a key may write. Empty: the name falls back to the id, the model to the CLI's default. */
 export function validateField(field: EditableField, raw: string): string | undefined {
-  if (field === "flags") {
-    return validateFlags(raw);
+  const value = raw.trim();
+  if (!value) {
+    return undefined;
   }
-  return raw.trim().length > MAX_LEN[field] ? PROFILE_TEXTS.tooLong(MAX_LEN[field]) : undefined;
+  if (field === "name") {
+    return /^[A-Za-z0-9 ._()-]{1,64}$/.test(value) ? undefined : PROFILE_TEXTS.nameInvalid;
+  }
+  return /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,63}$/.test(value) ? undefined : PROFILE_TEXTS.modelInvalid;
 }
 
-/** A field as it may be shown: flags with a key or token are masked. */
+/** The body of a key write: only the field changed. An empty name shows the id; an empty model is the CLI's default. */
+export function fieldBody(id: string, field: EditableField, raw: string): Profile {
+  const value = raw.trim();
+  return field === "name" ? { name: value || id } : { model: value };
+}
+
+/** A field as it may be shown: flags with a key or token are masked; header names and values never. */
 function shownText(p: Profile, field: ProfileField): string {
   if (field === "flags") {
     return shownFlags(p.flags).join(" ");
@@ -171,42 +117,11 @@ function shownText(p: Profile, field: ProfileField): string {
     return [p.use_router ? PROFILE_TEXTS.routerOn : PROFILE_TEXTS.routerOff, tenant].filter(Boolean).join(" · ");
   }
   if (field === "headers") {
-    // Names and values are never shown, only how many there are.
     const n = p.headers && typeof p.headers === "object" && !Array.isArray(p.headers) ? Object.keys(p.headers).length : 0;
     return n ? PROFILE_TEXTS.headerCount(n) : "";
   }
   const v = p[field];
   return typeof v === "string" ? v : "";
-}
-
-function flagList(p: Profile): string[] {
-  return Array.isArray(p.flags) ? p.flags.filter((f): f is string => typeof f === "string") : [];
-}
-
-/** The flags split into the ones that may be shown and edited, and the hidden ones (kept unchanged). */
-export function splitFlags(p: Profile): { visible: string[]; hidden: string[] } {
-  const flags = flagList(p);
-  const secret = secretFlags(flags);
-  return { visible: flags.filter((_f, i) => !secret[i]), hidden: flags.filter((_f, i) => secret[i]) };
-}
-
-/** The profile with one field changed; an empty value removes the field (the CLI's default applies). */
-export function withField(p: Profile, field: EditableField, raw: string): Profile {
-  const next: Profile = { ...p };
-  const value = raw.trim();
-  if (field === "flags") {
-    const flags = parseFlags(value);
-    if (flags.length) {
-      next.flags = flags;
-    } else {
-      delete next.flags;
-    }
-  } else if (value) {
-    next[field] = value;
-  } else {
-    delete next[field];
-  }
-  return next;
 }
 
 function addressOf(p: Profile | undefined): string {
@@ -280,14 +195,17 @@ export async function createProfile(deps: ProfileDeps): Promise<void> {
   if (id === undefined) {
     return;
   }
+  const pid = id.trim();
+  const name = await input(t.createTitle, t.prompts.name, "", (v) => validateField("name", v));
+  if (name === undefined) {
+    return;
+  }
   const model = await input(t.createTitle, t.prompts.model, "", (v) => validateField("model", v));
   if (model === undefined) {
     return;
   }
-  const pid = id.trim();
-  // No server address: a library key may not set one (the CLI's default applies until it is set
-  // with the a4sx CLI or on the website).
-  let profile = withField({}, "model", model);
+  // Only a name and a model: a key sets nothing else (no flags, no server address).
+  const profile: Profile = { ...fieldBody(pid, "name", name), ...(model.trim() ? { model: model.trim() } : {}) };
   // The list may have changed while the boxes were open (another window, the CLI, the web).
   let now: ProfilesState;
   try {
@@ -300,15 +218,8 @@ export async function createProfile(deps: ProfileDeps): Promise<void> {
   if (existing && !(await confirm(t.confirmReplace(pid), t.replace))) {
     return;
   }
-  if (existing && typeof existing.base_url === "string" && existing.base_url) {
-    profile = { ...profile, base_url: existing.base_url };   // replacing keeps the address it has
-  }
-  if (Object.keys(profile).length === 0) {
-    // The server wants a non-empty profile; a name equal to the id changes nothing that is shown.
-    profile = { name: pid };
-  }
   // The server makes the first profile the default.
-  if (!now.default && !existing && !(await confirm(t.confirmDefault(pid, addressOf(profile)), t.makeDefault))) {
+  if (!now.default && !existing && !(await confirm(t.confirmDefault(profileName(pid, profile), addressOf(profile)), t.makeDefault))) {
     return;
   }
   await write(deps, token, (c, tok) => putProfile(c, tok, pid, profile));
@@ -354,39 +265,20 @@ export async function editProfile(deps: ProfileDeps, item: ProfileItem | undefin
     return;
   }
   const field: EditableField = picked.field;
+  const before = shownText(item.profile, field);
   // A refusal in KEEP_OPEN keeps the edit open: the box opens again with the server's message.
   // It is prefilled with the stored value, never with what was just sent.
   let notice: string | undefined;
   for (;;) {
-    let next: Profile;
-    if (field === "flags") {
-      // Flags with a key or token are never prefilled; they are kept as they are.
-      const { visible, hidden } = splitFlags(item.profile);
-      const prompt = notice ?? (hidden.length ? `${t.prompts.flags} ${t.flagsHiddenKept}` : t.prompts.flags);
-      // Removing is free; only the allowed flags may be added.
-      const check = (v: string) => validateFlags(v, hidden.length)
-        ?? (addedFlags(visible, parseFlags(v)).every(addableFlag) ? undefined : t.flagNotAllowed);
-      const value = await input(t.editTitle(name), prompt, visible.join(" "), check);
-      if (value === undefined) {
-        return;
-      }
-      if (JSON.stringify(parseFlags(value)) === JSON.stringify(visible)) {
-        return;   // unchanged: the stored order (hidden flags included) stays as it is
-      }
-      next = withField(item.profile, "flags", [...parseFlags(value), ...hidden].join(" "));
-    } else {
-      const before = shownText(item.profile, field);
-      const value = await input(t.editTitle(name), notice ?? t.prompts[field], before, (v) => validateField(field, v));
-      if (value === undefined) {
-        return;
-      }
-      next = withField(item.profile, field, value);
-      if (shownText(next, field) === before) {
-        return;
-      }
+    const value = await input(t.editTitle(name), notice ?? t.prompts[field], before, (v) => validateField(field, v));
+    if (value === undefined) {
+      return;
     }
-    const profile = next;
-    const refused = await write(deps, token, (c, tok) => putProfile(c, tok, item.id, profile), true);
+    const body = fieldBody(item.id, field, value);
+    if ((body[field] ?? "") === (field === "name" ? name : before)) {
+      return;   // unchanged
+    }
+    const refused = await write(deps, token, (c, tok) => putProfile(c, tok, item.id, body), true);
     if (!refused) {
       return;
     }

@@ -32,11 +32,10 @@ Folders need a newer a4sx server. On an older server, all sessions appear at the
 
 ## Launch profiles
 
-A launch profile says how `a4sx launch` starts a session: the model, the server address (`base_url`), the harness and extra flags. The extension never shows or stores an API key; keep keys out of profile flags and headers. In the list and in **Edit**, flags that look like a key or token are shown as `••••`, and **Edit** keeps them as they are. Newer a4sx servers show only a few known settings here. The tooltip and **Edit** say how many other settings are hidden; they stay as they are, and you change them with the a4sx CLI or on the website. If a4sx refuses a change, **Edit** stays open with the server's message.
+A launch profile says how `a4sx launch` starts a session: the model, the server address (`base_url`), the harness and extra flags. The extension never shows or stores an API key; keep keys out of profile flags and headers. In the list and in **Edit**, flags that look like a key or token are shown as `••••`. Newer a4sx servers show only a few known settings here. The tooltip and **Edit** say how many other settings are hidden; they stay as they are, and you change them with the a4sx CLI or on the website. If a4sx refuses a change, **Edit** stays open with the server's message.
 
-- **Create launch profile** (the + button) asks for an id and a model.
-- **Edit** can change the name, the model and the flags. The server address (shown as `scheme://host[:port]`), harness, router and headers are shown but can't be changed here. Choose one of them to run `a4sx profile` in a terminal or open the launch profiles page on the website. Header names and values are not shown, only how many there are.
-- In **Flags** you can remove any flag, and add only `--verbose`, `--model <id>` and `--permission-mode default` or `plan`. Add other flags with the a4sx CLI or on the website.
+- **Create launch profile** (the + button) asks for an id, a name and a model. The new profile has no flags.
+- **Edit** can change the name and the model. The flags, the server address (shown as `scheme://host[:port]`), harness, router and headers are shown but can't be changed here. Choose one of them to run `a4sx profile` in a terminal or open the launch profiles page on the website. Header names and values are not shown, only how many there are.
 - The default can only be changed with the a4sx CLI or on the website. **Change default with the a4sx CLI or on the website** offers both.
 - **Delete** asks you to confirm first. The default profile, and profiles with hidden settings, can only be deleted with the a4sx CLI or on the website; their tooltip says so.
 - If a4sx refuses a change, the extension shows the server's message and changes nothing.
