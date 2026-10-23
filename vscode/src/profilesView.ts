@@ -20,7 +20,9 @@ export { MASK } from "./api";
 import { MASK } from "./api";
 
 export const HIDDEN_FIELDS = (n: number) =>
-  n === 1 ? "1 value that looks like a key is hidden and stays as it is." : `${n} values that look like keys are hidden and stay as they are.`;
+  n === 1
+    ? "1 other setting is hidden here and stays as it is. Change it with the a4sx CLI or on the website."
+    : `${n} other settings are hidden here and stay as they are. Change them with the a4sx CLI or on the website.`;
 
 /** The server's count of left-out credential-like entries (newer servers only). */
 export function hiddenCount(p: Profile): number {

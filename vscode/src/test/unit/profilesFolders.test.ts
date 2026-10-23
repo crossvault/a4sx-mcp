@@ -817,8 +817,8 @@ describe("server-hidden profile values (hidden_fields, credential_in_profile)", 
     }, [...ALL, "profiles:write"]);
     const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
     assert.ok(String(work.tooltip).endsWith(HIDDEN_FIELDS(2)));
-    assert.strictEqual(HIDDEN_FIELDS(2), "2 values that look like keys are hidden and stay as they are.");
-    assert.strictEqual(HIDDEN_FIELDS(1), "1 value that looks like a key is hidden and stays as it is.");
+    assert.strictEqual(HIDDEN_FIELDS(2), "2 other settings are hidden here and stay as they are. Change them with the a4sx CLI or on the website.");
+    assert.strictEqual(HIDDEN_FIELDS(1), "1 other setting is hidden here and stays as it is. Change it with the a4sx CLI or on the website.");
     calls.nextPick = 1;
     calls.nextInput = "m2";
     await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
@@ -852,10 +852,12 @@ describe("server-hidden profile values (hidden_fields, credential_in_profile)", 
 
   it("the server's message is capped to one line, and replaced if it echoes a submitted value or is missing", () => {
     const err = (message?: unknown) => ({ error: { code: "credential_in_profile", message } });
-    assert.strictEqual(api.credentialMessage(err("x".repeat(500)), []).length, 200);
-    assert.strictEqual(api.credentialMessage(err("bad flag --tok=abcd1234 found"), ["--tok=abcd1234"]), api.MESSAGES.credentialInProfile);
-    assert.strictEqual(api.credentialMessage(err(undefined), []), api.MESSAGES.credentialInProfile);
-    assert.strictEqual(api.credentialMessage(err("  \n second"), []), api.MESSAGES.credentialInProfile);
+    const fb = api.MESSAGES.credentialInProfile;
+    assert.strictEqual(api.serverLine(err("x".repeat(500)), [], fb).length, 200);
+    assert.strictEqual(api.serverLine(err("Use the a4sx CLI or the website."), [], fb), "Use the a4sx CLI or the website.", "shown as sent");
+    assert.strictEqual(api.serverLine(err("bad flag --tok=abcd1234 found"), ["--tok=abcd1234"], fb), fb);
+    assert.strictEqual(api.serverLine(err(undefined), [], fb), fb);
+    assert.strictEqual(api.serverLine(err("  \n second"), [], fb), fb);
   });
 
   it("a masked •••• is never sent: refused before any request, and refused as typed input", async () => {
@@ -864,5 +866,60 @@ describe("server-hidden profile values (hidden_fields, credential_in_profile)", 
     await assert.rejects(api.putProfile(clientWith(net.fetch), TOKEN, "work", { headers: { "X-K": "••••" } }), (e: any) => e.code === "rejected");
     assert.strictEqual(net.seen.length, 0);
     assert.strictEqual(validateFlags("--x=••••"), PROFILE_TEXTS.maskTyped);
+  });
+});
+
+describe("hidden settings tied to the address (409 hidden_fields_bound_to_host)", () => {
+  beforeEach(resetCalls);
+
+  const bound = (hidden: number) => ({ profiles: { work: { name: "Work", base_url: "https://proxy.example.com/v1", hidden_fields: hidden } }, default: "work" });
+
+  it("with hidden settings, a new host is refused up front: no confirmation, no request, the edit stays open", async () => {
+    const { sb, net } = await activateWith({
+      "GET /library/profiles": [{ status: 200, body: bound(1) }],
+      "PUT /library/profiles/work": [{ status: 200, body: bound(1) }],
+    }, [...ALL, "profiles:write"]);
+    const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
+    calls.nextPick = 2;
+    calls.inputQueue.push("https://other.example.com/v1", "http://proxy.example.com/v1", "https://proxy.example.com:8443/v1", undefined);
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+    assert.strictEqual(calls.modals.length, 0, "no confirmation for a change that would fail");
+    assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 0);
+    assert.deepStrictEqual(calls.inputs.slice(1).map((i) => [i.prompt, i.value]), [
+      [api.MESSAGES.hiddenBoundToHost, "https://proxy.example.com/v1"],
+      [api.MESSAGES.hiddenBoundToHost, "https://proxy.example.com/v1"],
+      [api.MESSAGES.hiddenBoundToHost, "https://proxy.example.com/v1"],
+    ], "host, scheme and port changes all count");
+  });
+
+  it("with hidden settings, a new path on the same address is confirmed and sent", async () => {
+    const { sb, net } = await activateWith({
+      "GET /library/profiles": [{ status: 200, body: bound(2) }],
+      "PUT /library/profiles/work": [{ status: 200, body: bound(2) }],
+    }, [...ALL, "profiles:write"]);
+    const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
+    calls.nextPick = 2;
+    calls.nextInput = "https://proxy.example.com/v2";
+    calls.modalChoices.push(PROFILE_TEXTS.changeAddress);
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmBaseUrl("Work", "https://proxy.example.com/v2")]);
+    assert.strictEqual(net.seen.find((r) => r.method === "PUT")!.body.base_url, "https://proxy.example.com/v2");
+  });
+
+  it("a 409 from the server keeps the edit open with its one-line message", async () => {
+    const { sb, net } = await activateWith({
+      "GET /library/profiles": [{ status: 200, body: bound(0) }],
+      "PUT /library/profiles/work": [{ status: 409, body: { error: { code: "hidden_fields_bound_to_host", message: "Hidden values stay tied to the current address; change it from the CLI or the website.\nmore" } } }],
+    }, [...ALL, "profiles:write"]);
+    const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
+    calls.nextPick = 2;
+    calls.inputQueue.push("https://other.example.com", undefined);
+    calls.modalChoices.push(PROFILE_TEXTS.changeAddress);
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+    assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 1);
+    assert.strictEqual(calls.inputs.length, 2);
+    assert.strictEqual(calls.inputs[1].prompt, "Hidden values stay tied to the current address; change it from the CLI or the website.");
+    assert.strictEqual(calls.inputs[1].value, "https://proxy.example.com/v1");
+    assert.strictEqual(calls.errors.length, 0);
   });
 });

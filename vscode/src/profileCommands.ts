@@ -6,7 +6,7 @@
 // No API key is ever asked for, shown or stored: a profile holds none.
 import * as vscode from "vscode";
 import {
-  ApiError, Client, deleteProfile, listProfiles, nextDefaultAfterDelete, Profile, PROFILE_ID, ProfilesState, putProfile,
+  ApiError, Client, deleteProfile, MESSAGES, listProfiles, nextDefaultAfterDelete, Profile, PROFILE_ID, ProfilesState, putProfile,
   SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, setDefaultProfile,
 } from "./api";
 import {
@@ -127,6 +127,19 @@ function shownText(p: Profile, field: ProfileField): string {
   return typeof v === "string" ? v : "";
 }
 
+/** scheme://host:port of a base_url ("" for none or unparsable): what hidden settings are tied to. */
+function origin(raw: unknown): string {
+  if (typeof raw !== "string" || !raw.trim()) {
+    return "";
+  }
+  try {
+    const u = new URL(raw.trim());
+    return `${u.protocol}//${u.hostname}:${u.port}`;
+  } catch {
+    return raw.trim();
+  }
+}
+
 function flagList(p: Profile): string[] {
   return Array.isArray(p.flags) ? p.flags.filter((f): f is string => typeof f === "string") : [];
 }
@@ -194,7 +207,7 @@ async function write(
       deps.view.show(done.value);
     }
   } catch (e) {
-    if (credentialRetry && e instanceof ApiError && e.code === "credential-in-profile") {
+    if (credentialRetry && e instanceof ApiError && (e.code === "credential-in-profile" || e.code === "hidden-bound-to-host")) {
       return e;
     }
     await vscode.window.showErrorMessage(errorText(e));
@@ -315,6 +328,12 @@ export async function editProfile(deps: ProfileDeps, item: ProfileItem | undefin
       if (shownText(next, field) === before) {
         return;
       }
+    }
+    if (field === "base_url" && hiddenOnServer && origin(next.base_url) !== origin(item.profile.base_url)) {
+      // The server keeps hidden settings tied to the current scheme, host and port (409
+      // hidden_fields_bound_to_host): say so now instead of confirming a change that would fail.
+      notice = MESSAGES.hiddenBoundToHost;
+      continue;
     }
     if (field === "base_url" && !(await confirm(t.confirmBaseUrl(profileName(item.id, next), addressOf(next)), t.changeAddress))) {
       return;

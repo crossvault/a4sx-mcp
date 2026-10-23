@@ -13,7 +13,7 @@ export type ApiErrorCode =
   | "bad-server-url" | "unreachable" | "unauthorized" | "busy" | "expired" | "too-many-tokens"
   | "bad-login-url" | "bad-response" | "http"
   | "bad-scopes" | "insufficient-scope" | "not-supported" | "rejected" | "profile-limit" | "not-found"
-  | "credential-in-profile";
+  | "credential-in-profile" | "hidden-bound-to-host";
 
 export class ApiError extends Error {
   constructor(
@@ -42,6 +42,7 @@ export const MESSAGES = {
   foldersNotSupported: "Folders need a newer a4sx server.",
   profileRejected: "a4sx did not accept this launch profile.",
   credentialInProfile: "Keep keys out of launch profiles. Use a4sx launch --set-api-key instead.",
+  hiddenBoundToHost: "This profile's hidden settings belong to its current address. Change the address with the a4sx CLI or on the website.",
   folderRejected: "a4sx did not accept this folder name.",
   profileLimit: "You have the maximum number of launch profiles. Delete one first.",
   profileGone: "This launch profile no longer exists. Refresh the list.",
@@ -287,17 +288,17 @@ export const MASK = "••••";
 const SERVER_MESSAGE_MAX = 200;
 
 /**
- * The server's refusal text for a credential in a profile, as one short line. If it is missing, or
- * contains any value that was submitted, the fixed text is used instead, so a key is never echoed.
+ * A server refusal's text, shown as sent but on one short line. If it is missing, or contains any
+ * value that was submitted, `fallback` is used instead, so a key is never echoed.
  */
-export function credentialMessage(data: any, submitted: readonly string[]): string {
+export function serverLine(data: any, submitted: readonly string[], fallback: string): string {
   const raw = data?.error?.message;
   if (typeof raw !== "string") {
-    return MESSAGES.credentialInProfile;
+    return fallback;
   }
   let line = raw.split(/\r?\n/)[0].replace(/\s+/g, " ").trim();
   if (!line || submitted.some((v) => v.length >= 4 && raw.includes(v))) {
-    return MESSAGES.credentialInProfile;
+    return fallback;
   }
   if (line.length > SERVER_MESSAGE_MAX) {
     line = `${line.slice(0, SERVER_MESSAGE_MAX - 1)}…`;
@@ -371,7 +372,10 @@ export async function listProfiles(c: Client, token: string): Promise<ProfilesSt
 function profileWriteFail(status: number, data: any, submitted: readonly string[] = []): never {
   const code = errorCode(data);
   if (status === 400 && code === "credential_in_profile") {
-    throw new ApiError("credential-in-profile", credentialMessage(data, submitted), status);
+    throw new ApiError("credential-in-profile", serverLine(data, submitted, MESSAGES.credentialInProfile), status);
+  }
+  if (status === 409 && code === "hidden_fields_bound_to_host") {
+    throw new ApiError("hidden-bound-to-host", serverLine(data, submitted, MESSAGES.hiddenBoundToHost), status);
   }
   if (status === 429 && code === "profile_limit") {
     throw new ApiError("profile-limit", MESSAGES.profileLimit, status);
