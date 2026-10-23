@@ -11,7 +11,7 @@ import { CLAUDE_EXTENSION_ID, claudeResumeUri, defaultExecFile, ExecFileLike, Se
 import { CLI_NAME, findCli, CliLookup } from "./cli";
 import { clearFilter, filterSessions, moveToFolder, removeFromFolder } from "./folderCommands";
 import { CMD_OPEN_LISTING, ListingItem, MarketplaceProvider } from "./marketplaceView";
-import { createProfile, editProfile, pickProfileForResume, removeProfile, setDefault } from "./profileCommands";
+import { changeDefault, createProfile, editProfile, pickProfileForResume, removeProfile } from "./profileCommands";
 import { ProfileItem, ProfilesProvider, ProfilesViewState } from "./profilesView";
 import { launchName, SessionItem, SessionsProvider, ViewState } from "./sessionsView";
 import { errorText, offerStepUp, stepUpAllowed } from "./stepUp";
@@ -41,7 +41,7 @@ export const CMD_REMOVE_FROM_FOLDER = "a4sx.removeFromFolder";
 export const CMD_REFRESH_PROFILES = "a4sx.refreshProfiles";
 export const CMD_CREATE_PROFILE = "a4sx.createProfile";
 export const CMD_EDIT_PROFILE = "a4sx.editProfile";
-export const CMD_SET_DEFAULT_PROFILE = "a4sx.setDefaultProfile";
+export const CMD_CHANGE_DEFAULT = "a4sx.changeDefaultElsewhere";
 export const CMD_DELETE_PROFILE = "a4sx.deleteProfile";
 export const CMD_ALLOW_SCOPE = "a4sx.allowScope";
 export { CMD_OPEN_LISTING };
@@ -578,7 +578,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_REFRESH_PROFILES, () => profiles.refresh()),
     vscode.commands.registerCommand(CMD_CREATE_PROFILE, () => createProfile(profileDeps)),
     vscode.commands.registerCommand(CMD_EDIT_PROFILE, (item?: ProfileItem) => editProfile(profileDeps, item)),
-    vscode.commands.registerCommand(CMD_SET_DEFAULT_PROFILE, (item?: ProfileItem) => setDefault(profileDeps, item)),
+    vscode.commands.registerCommand(CMD_CHANGE_DEFAULT, (item?: ProfileItem) => changeDefault(profileDeps, item)),
     vscode.commands.registerCommand(CMD_DELETE_PROFILE, (item?: ProfileItem) => removeProfile(profileDeps, item)),
     // From the "Sign in again to allow …" item: the item names the permission, so no extra modal.
     vscode.commands.registerCommand(CMD_ALLOW_SCOPE, async (scope?: unknown) => {

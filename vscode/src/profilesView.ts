@@ -9,6 +9,9 @@ import { MessageItem } from "./sessionsView";
 
 export const PROFILE_CONTEXT = "a4sx.profile";
 export const DEFAULT_PROFILE_CONTEXT = "a4sx.profile.default";
+/** A profile with hidden settings: a key may not delete it. */
+export const LOCKED_PROFILE_CONTEXT = "a4sx.profile.locked";
+export const DELETE_ELSEWHERE = "Delete it with the a4sx CLI or on the website.";
 export const DEFAULT_MARK = "default";
 export const NO_PROFILES = "No launch profiles yet. Create one.";
 export const ALLOW_SCOPE_ITEM = (scope: string) => `Sign in again to allow ${scope}`;
@@ -97,6 +100,11 @@ export function displayAddress(raw: string | undefined): string | undefined {
   }
 }
 
+/** A key may delete a profile only if it is not the default and has no hidden settings. */
+export function deletable(isDefault: boolean, p: Profile): boolean {
+  return !isDefault && hiddenCount(p) === 0;
+}
+
 export function profileName(id: string, p: Profile): string {
   return typeof p.name === "string" && p.name.trim() ? p.name.trim() : id;
 }
@@ -115,8 +123,9 @@ export class ProfileItem extends vscode.TreeItem {
       `Harness: ${typeof profile.harness === "string" && profile.harness ? profile.harness : NOT_SET}`,
       `Flags: ${flags || NOT_SET}`,
       ...(hiddenCount(profile) ? [HIDDEN_FIELDS(hiddenCount(profile))] : []),
+      ...(deletable(isDefault, profile) ? [] : [DELETE_ELSEWHERE]),
     ].join("\n");
-    this.contextValue = isDefault ? DEFAULT_PROFILE_CONTEXT : PROFILE_CONTEXT;
+    this.contextValue = isDefault ? DEFAULT_PROFILE_CONTEXT : hiddenCount(profile) ? LOCKED_PROFILE_CONTEXT : PROFILE_CONTEXT;
     this.iconPath = new vscode.ThemeIcon(isDefault ? "star-full" : "rocket");
   }
 }

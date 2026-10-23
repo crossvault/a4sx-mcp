@@ -13,7 +13,7 @@ import {
 } from "../../sessionsView";
 import { FOLDER_TEXTS } from "../../folderCommands";
 import { ALLOW_SCOPE_ITEM, displayAddress, HIDDEN_FIELDS, NO_PROFILES, ProfileItem } from "../../profilesView";
-import { addsLooseningFlag, looseningFlags, PROFILE_TEXTS, validateFlags, validateProfileId, withField } from "../../profileCommands";
+import { addableFlag, addedFlags, PROFILE_TEXTS, validateFlags, validateProfileId, withField } from "../../profileCommands";
 import { offerStepUp, STEP_UP, STEP_UP_SCOPES } from "../../stepUp";
 import type { CliLookup } from "../../cli";
 
@@ -449,35 +449,60 @@ describe("Launch profile actions", () => {
     assert.deepStrictEqual(withField({ model: "m", flags: ["-a"] }, "flags", "  "), { model: "m" });
   });
 
-  it("Set as default asks in a modal that names the address new launches will use", async () => {
-    const { sb, net } = await activateWith({ ...listed, "POST /library/profiles/work/default": [after({ default: "work" })] }, [...ALL, "profiles:write"]);
+  it("the default is changed only elsewhere: the button offers the CLI or the website, and nothing is sent", async () => {
+    const { sb, net } = await activateWith(listed, [...ALL, "profiles:write"]);
     const { work, home } = await itemsOf(sb);
-    await calls.commands.get(ext.CMD_SET_DEFAULT_PROFILE)!(home);
-    assert.strictEqual(calls.modals.length, 0, "already the default: nothing to do");
-    calls.modalChoices.push(PROFILE_TEXTS.makeDefault);
-    await calls.commands.get(ext.CMD_SET_DEFAULT_PROFILE)!(work);
-    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmDefault("Work", "https://proxy.example.com")]);
-    assert.strictEqual(net.seen.filter((r) => r.method === "POST" && r.url.endsWith("/library/profiles/work/default")).length, 1);
-    const items = (await sb.profiles.getChildren()) as ProfileItem[];
-    assert.strictEqual(items[0].id, "work", "the list the server returned is shown");
-    assert.strictEqual(net.seen.filter((r) => r.method === "GET").length, 1);
+    const fake = require("vscode");
+    const savedInfo = fake.window.showInformationMessage;
+    const asked: string[] = [];
+    fake.window.showInformationMessage = async (message: string, ...items: string[]) => { asked.push(`${message}|${items.join(",")}`); return undefined; };
+    try {
+      await calls.commands.get(ext.CMD_CHANGE_DEFAULT)!(work);
+      await calls.commands.get(ext.CMD_CHANGE_DEFAULT)!(home);
+    } finally {
+      fake.window.showInformationMessage = savedInfo;
+    }
+    assert.deepStrictEqual(asked, Array(2).fill(`${PROFILE_TEXTS.readOnly}|${PROFILE_TEXTS.runCli},${PROFILE_TEXTS.openWebsite}`));
+    assert.strictEqual(home.description!.toString().startsWith("default"), true, "the default mark stays, read-only");
+    assert.strictEqual(net.seen.filter((r) => r.method !== "GET").length, 0);
+    assert.strictEqual(calls.modals.length, 0);
+    const pkg = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "..", "..", "..", "package.json"), "utf8"));
+    assert.ok(!pkg.contributes.commands.some((c: any) => c.command === "a4sx.setDefaultProfile"), "no Set as default");
+    assert.strictEqual(pkg.contributes.commands.find((c: any) => c.command === ext.CMD_CHANGE_DEFAULT).title, "Change default with the a4sx CLI or on the website");
   });
 
-  it("Delete asks first; deleting the default names the next default and its address", async () => {
+  it("Delete asks first for a deletable profile; the default and profiles with hidden settings are deleted only elsewhere", async () => {
+    const lockedBody = { profiles: { ...profiles.profiles, secret: { name: "Secret", hidden_fields: 2 } }, default: "home" };
     const { sb, net } = await activateWith({
-      ...listed,
+      "GET /library/profiles": [{ status: 200, body: lockedBody }],
       "DELETE /library/profiles/lab": [after({})],
-      "DELETE /library/profiles/home": [after({})],
     }, [...ALL, "profiles:write"]);
-    const { lab, home } = await itemsOf(sb);
-    calls.modalChoices.push(undefined, PROFILE_TEXTS.delete);
-    await calls.commands.get(ext.CMD_DELETE_PROFILE)!(lab);
-    await calls.commands.get(ext.CMD_DELETE_PROFILE)!(home);
-    assert.deepStrictEqual(calls.modals.map((m) => [m.message, m.items]), [
-      [PROFILE_TEXTS.confirmDelete("Lab"), [PROFILE_TEXTS.delete]],
-      [PROFILE_TEXTS.confirmDeleteDefault("home", "Work", "https://proxy.example.com"), [PROFILE_TEXTS.delete]],
-    ]);
-    assert.deepStrictEqual(net.seen.filter((r) => r.method === "DELETE").map((r) => new URL(r.url).pathname), ["/library/profiles/home"]);
+    const items = (await sb.profiles.getChildren()) as ProfileItem[];
+    const by = Object.fromEntries(items.map((i) => [i.id, i]));
+    assert.deepStrictEqual([by.home.contextValue, by.secret.contextValue, by.lab.contextValue], ["a4sx.profile.default", "a4sx.profile.locked", "a4sx.profile"]);
+    assert.ok(String(by.home.tooltip).endsWith(PROFILE_TEXTS.deleteElsewhere));
+    assert.ok(String(by.secret.tooltip).endsWith(PROFILE_TEXTS.deleteElsewhere));
+    assert.ok(!String(by.lab.tooltip).includes(PROFILE_TEXTS.deleteElsewhere));
+    assert.strictEqual(PROFILE_TEXTS.deleteElsewhere, "Delete it with the a4sx CLI or on the website.");
+    const fake = require("vscode");
+    const savedInfo = fake.window.showInformationMessage;
+    const asked: string[] = [];
+    fake.window.showInformationMessage = async (message: string, ...buttons: string[]) => { asked.push(`${message}|${buttons.join(",")}`); return undefined; };
+    try {
+      calls.modalChoices.push(undefined, PROFILE_TEXTS.delete);
+      await calls.commands.get(ext.CMD_DELETE_PROFILE)!(by.lab);
+      await calls.commands.get(ext.CMD_DELETE_PROFILE)!(by.lab);
+      await calls.commands.get(ext.CMD_DELETE_PROFILE)!(by.home);
+      await calls.commands.get(ext.CMD_DELETE_PROFILE)!(by.secret);
+    } finally {
+      fake.window.showInformationMessage = savedInfo;
+    }
+    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmDelete("Lab"), PROFILE_TEXTS.confirmDelete("Lab")]);
+    assert.deepStrictEqual(asked, Array(2).fill(`${PROFILE_TEXTS.deleteElsewhere}|${PROFILE_TEXTS.runCli},${PROFILE_TEXTS.openWebsite}`));
+    assert.deepStrictEqual(net.seen.filter((r) => r.method === "DELETE").map((r) => new URL(r.url).pathname), ["/library/profiles/lab"]);
+    const pkg = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "..", "..", "..", "package.json"), "utf8"));
+    const del = pkg.contributes.menus["view/item/context"].filter((m: any) => m.command === ext.CMD_DELETE_PROFILE);
+    assert.deepStrictEqual(del.map((m: any) => m.when), ["view == a4sx.profiles && viewItem == a4sx.profile"], "the menu hides Delete for the default and locked profiles");
   });
 
   it("Create asks for id and model only (no address); the first profile becomes the default, so the modal names the address", async () => {
@@ -505,11 +530,14 @@ describe("Launch profile actions", () => {
   });
 
   it("api: profile refusals map to fixed messages", async () => {
-    const c = (a: Answer) => clientWith(fakeFetch({ "PUT /library/profiles/x": [a], "POST /library/profiles/x/default": [a] }).fetch);
+    const c = (a: Answer) => clientWith(fakeFetch({ "PUT /library/profiles/x": [a], "DELETE /library/profiles/x": [a] }).fetch);
     await assert.rejects(api.putProfile(c(scopeRefusal("profiles:write")), TOKEN, "x", {}), (e: any) => e.code === "insufficient-scope" && e.requiredScope === "profiles:write");
     await assert.rejects(api.putProfile(c({ status: 429, body: { error: { code: "profile_limit" } } }), TOKEN, "x", {}), (e: any) => e.code === "profile-limit");
-    await assert.rejects(api.putProfile(c({ status: 400, body: { error: { code: "bad_profile" } } }), TOKEN, "x", {}), (e: any) => e.code === "rejected");
-    await assert.rejects(api.setDefaultProfile(c({ status: 404, body: { error: { code: "no_such_profile" } } }), TOKEN, "x"), (e: any) => e.code === "not-found");
+    await assert.rejects(api.putProfile(c({ status: 400, body: { error: { code: "bad_profile" } } }), TOKEN, "x", {}), (e: any) => e.code === "rejected" && e.message === api.MESSAGES.profileRejected);
+    await assert.rejects(api.putProfile(c({ status: 400, body: { error: { code: "whatever", message: "Server says no." } } }), TOKEN, "x", {}), (e: any) => e.code === "rejected" && e.message === "Server says no.");
+    await assert.rejects(api.deleteProfile(c({ status: 409, body: { error: { code: "something_new", message: "Not with a key.\nmore" } } }), TOKEN, "x"), (e: any) => e.code === "conflict" && e.message === "Not with a key.");
+    await assert.rejects(api.deleteProfile(c({ status: 409, body: { error: { code: "something_new" } } }), TOKEN, "x"), (e: any) => e.message === api.MESSAGES.needsSignin);
+    await assert.rejects(api.deleteProfile(c({ status: 404, body: { error: { code: "no_such_profile" } } }), TOKEN, "x"), (e: any) => e.code === "not-found");
     await assert.rejects(api.putProfile(c({ status: 200, body: {} }), TOKEN, "Bad/Id", {}), (e: any) => e.code === "rejected");
   });
 });
@@ -658,7 +686,7 @@ describe("review follow-ups", () => {
     assert.ok(String(work.tooltip).includes("Flags: --verbose --api-key •••• --token=•••• ••••"));
     noSecret(String(work.tooltip));
     calls.pickQueue.push(2, 2);   // Flags, twice
-    calls.inputQueue.push("--verbose", "--verbose --debug");
+    calls.inputQueue.push("--verbose", "--verbose --model m9");
     await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
     assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 0, "nothing typed: nothing sent");
     await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
@@ -670,30 +698,8 @@ describe("review follow-ups", () => {
       noSecret(box.value + box.prompt);
     }
     const put = net.seen.find((r) => r.method === "PUT")!;
-    assert.deepStrictEqual(put.body.flags, ["--verbose", "--debug", "--api-key", "abc123def", "--token=t0k3n", "sk-ant-xyz"]);
+    assert.deepStrictEqual(put.body.flags, ["--verbose", "--model", "m9", "--api-key", "abc123def", "--token=t0k3n", "sk-ant-xyz"]);
     assert.ok(!JSON.stringify(put.body).includes("••••"));
-  });
-
-  it("the delete-the-default modal names the next default only when the order is certain", () => {
-    // The server's stored order is zeta, alpha, 10: after deleting zeta, alpha is the default. JavaScript
-    // puts the integer-like "10" first, so the client can't tell and must not guess.
-    const parsed = JSON.parse('{"profiles": {"zeta": {}, "alpha": {}, "10": {}}, "default": "zeta"}');
-    const numeric: api.ProfilesState = { profiles: Object.entries(parsed.profiles) as [string, api.Profile][], default: "zeta" };
-    assert.strictEqual(numeric.profiles[0][0], "10");
-    assert.strictEqual(api.nextDefaultAfterDelete(numeric, "zeta"), undefined);
-    const plain: api.ProfilesState = { profiles: [["zeta", {}], ["alpha", {}], ["beta", {}]], default: "zeta" };
-    assert.strictEqual(api.nextDefaultAfterDelete(plain, "zeta"), "alpha");
-    assert.strictEqual(api.nextDefaultAfterDelete({ profiles: [["zeta", {}]], default: "zeta" }, "zeta"), null);
-  });
-
-  it("deleting the default with integer-like ids says another profile becomes the default, without naming one", async () => {
-    const { sb } = await activateWith({
-      "GET /library/profiles": [{ status: 200, body: JSON.parse('{"profiles": {"zeta": {}, "alpha": {}, "10": {}}, "default": "zeta"}') }],
-    }, [...ALL, "profiles:write"]);
-    const zeta = ((await sb.profiles.getChildren()) as ProfileItem[]).find((i) => i.id === "zeta")!;
-    calls.modalChoices.push(undefined);
-    await calls.commands.get(ext.CMD_DELETE_PROFILE)!(zeta);
-    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmDeleteDefaultUnknown("zeta")]);
   });
 
   it("step-up only ever asks for profiles:read, profiles:write or library:organize", async () => {
@@ -778,7 +784,7 @@ describe("server-hidden profile values (hidden_fields, credential_in_profile)", 
       "PUT /library/profiles/work": [{ status: 200, body: hiddenBody(2) }],
     }, [...ALL, "profiles:write"]);
     const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
-    assert.ok(String(work.tooltip).endsWith(HIDDEN_FIELDS(2)));
+    assert.ok(String(work.tooltip).split("\n").includes(HIDDEN_FIELDS(2)));
     assert.strictEqual(HIDDEN_FIELDS(2), "2 other settings are hidden here and stay as they are. Change them with the a4sx CLI or on the website.");
     assert.strictEqual(HIDDEN_FIELDS(1), "1 other setting is hidden here and stays as it is. Change it with the a4sx CLI or on the website.");
     calls.nextPick = 1;
@@ -792,7 +798,8 @@ describe("server-hidden profile values (hidden_fields, credential_in_profile)", 
   });
 
   it("400 credential_in_profile keeps the edit open with the server's one-line message, prefilled with the stored value", async () => {
-    const SUBMITTED = "--x-custom=supersecretvalue";
+    // Flags are limited to a few safe additions, so the model field carries the value the server refuses.
+    const SUBMITTED = "supersecretvalue";
     const { sb, net } = await activateWith({
       "GET /library/profiles": [{ status: 200, body: hiddenBody(0) }],
       "PUT /library/profiles/work": [
@@ -801,15 +808,15 @@ describe("server-hidden profile values (hidden_fields, credential_in_profile)", 
       ],
     }, [...ALL, "profiles:write"]);
     const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
-    calls.nextPick = 2;
-    calls.inputQueue.push(`--verbose ${SUBMITTED}`, "--verbose --debug");
+    calls.nextPick = 1;
+    calls.inputQueue.push(SUBMITTED, "m2");
     await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
     assert.strictEqual(calls.inputs.length, 2, "the edit stays open");
     assert.strictEqual(calls.inputs[1].prompt, "Keep keys out of launch profiles; use a4sx launch --set-api-key.");
-    assert.strictEqual(calls.inputs[1].value, "--verbose", "the stored value, not what was sent");
+    assert.strictEqual(calls.inputs[1].value, "m", "the stored value, not what was sent");
     const shown = JSON.stringify([calls.errors, calls.infos, calls.warnings, calls.modals, calls.inputs.map((i) => [i.prompt, i.value])]);
     assert.ok(!shown.includes("supersecretvalue"));
-    assert.deepStrictEqual(net.seen.filter((r) => r.method === "PUT").map((r) => r.body.flags), [["--verbose", SUBMITTED], ["--verbose", "--debug"]]);
+    assert.deepStrictEqual(net.seen.filter((r) => r.method === "PUT").map((r) => r.body.model), [SUBMITTED, "m2"]);
   });
 
   it("the server's message is capped to one line, and replaced if it echoes a submitted value or is missing", () => {
@@ -871,31 +878,39 @@ describe("server address is read-only; permission-loosening flags (409s)", () =>
     assert.strictEqual(calls.terminals.length, 1);
   });
 
-  it("adding a permission-loosening flag is refused in any spelling; keeping or removing one is fine", async () => {
-    for (const add of ["--dangerously-skip-permissions", "--Dangerously_Skip_Permissions", "--allow-dangerously-skip-permissions",
-      "--permission-mode=bypassPermissions", "--permission-mode bypassPermissions", "--permission_mode BYPASS_PERMISSIONS"]) {
-      assert.ok(addsLooseningFlag(["--verbose"], ["--verbose", ...add.split(" ")]), add);
+  it("flags: only --verbose, --model <id> and --permission-mode default|plan may be added; any flag may be removed", async () => {
+    for (const ok of ["--verbose", "--model claude-opus-4", "--model gpt-5.1", "--permission-mode default", "--permission-mode plan"]) {
+      assert.deepStrictEqual(addedFlags([], ok.split(" ")).every(addableFlag), true, ok);
     }
-    assert.deepStrictEqual(looseningFlags(["--permission-mode", "plan"]), { skip: 0, bypass: 0 });
-    assert.ok(!addsLooseningFlag(["--dangerously-skip-permissions"], ["--dangerously-skip-permissions", "--verbose"]), "kept");
-    assert.ok(!addsLooseningFlag(["--dangerously-skip-permissions"], []), "removed");
-    assert.ok(addsLooseningFlag(["--dangerously-skip-permissions"], ["--dangerously-skip-permissions", "--permission-mode=bypassPermissions"]), "another kind added");
+    for (const bad of ["--dangerously-skip-permissions", "--permission-mode bypassPermissions", "--permission-mode=plan", "--model=x",
+      "--model", "--debug", "--add-dir /", "-v"]) {
+      assert.strictEqual(addedFlags([], bad.split(" ")).every(addableFlag), false, bad);
+    }
+    assert.deepStrictEqual(addedFlags(["--debug", "--model", "a"], ["--model", "a", "--debug"]), [], "reordering adds nothing");
+    assert.deepStrictEqual(addedFlags(["--model", "a"], ["--model", "b"]), ["--model b"], "a changed value is an addition");
 
     const { sb, net } = await activateWith({
       "GET /library/profiles": [{ status: 200, body: withAddress }],
       "PUT /library/profiles/work": [{ status: 200, body: withAddress }],
     }, [...ALL, "profiles:write"]);
     const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
-    calls.pickQueue.push(2, 2);
-    calls.inputQueue.push("--verbose --dangerously-skip-permissions --permission-mode=bypassPermissions", "--verbose");
+    calls.pickQueue.push(2, 2, 2);
+    calls.inputQueue.push("--verbose --debug", "--verbose", "--verbose --dangerously-skip-permissions --permission-mode plan --model m1");
     await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
-    assert.strictEqual(calls.inputs[0].validateInput("--verbose --dangerously-skip-permissions --permission-mode bypassPermissions"), PROFILE_TEXTS.permissionFlag);
-    assert.strictEqual(calls.inputs[0].validateInput("--verbose --dangerously-skip-permissions --debug"), null, "keeping one is fine");
-    assert.deepStrictEqual(calls.errors.map((e) => e.message), [PROFILE_TEXTS.permissionFlag]);
-    assert.strictEqual(PROFILE_TEXTS.permissionFlag, "Turning off permission prompts can only be done with the a4sx CLI or on the website.");
+    const check = calls.inputs[0].validateInput;
+    assert.strictEqual(check("--verbose --dangerously-skip-permissions --permission-mode bypassPermissions"), PROFILE_TEXTS.flagNotAllowed);
+    assert.strictEqual(check("--verbose --dangerously-skip-permissions --debug"), PROFILE_TEXTS.flagNotAllowed);
+    assert.strictEqual(check("--dangerously-skip-permissions"), null, "removing is free, keeping is fine");
+    assert.ok(calls.inputs[0].prompt.includes("--permission-mode default or plan"));
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [PROFILE_TEXTS.flagNotAllowed]);
+    assert.strictEqual(PROFILE_TEXTS.flagNotAllowed, "This flag can only be added with the a4sx CLI or on the website.");
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
     await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
     const puts = net.seen.filter((r) => r.method === "PUT");
-    assert.deepStrictEqual(puts.map((r) => r.body.flags), [["--verbose"]], "removing one is sent");
+    assert.deepStrictEqual(puts.map((r) => r.body.flags), [
+      ["--verbose"],
+      ["--verbose", "--dangerously-skip-permissions", "--permission-mode", "plan", "--model", "m1"],
+    ], "removing is sent; allowed additions are sent");
   });
 
   for (const [code, message] of [
@@ -910,7 +925,7 @@ describe("server address is read-only; permission-loosening flags (409s)", () =>
       }, [...ALL, "profiles:write"]);
       const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
       calls.nextPick = 2;
-      calls.inputQueue.push("--verbose --debug", undefined);
+      calls.inputQueue.push("--verbose --model m2", undefined);
       await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
       assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 1);
       assert.strictEqual(calls.inputs.length, 2, "the edit stays open");
@@ -973,24 +988,34 @@ describe("read-only fields beyond the address; set-default and delete refusals",
     assert.strictEqual(calls.inputs[1].value, "m");
   });
 
-  for (const [what, cmd, route] of [
-    ["set as default", ext.CMD_SET_DEFAULT_PROFILE, "POST /library/profiles/work/default"],
-    ["delete the default", ext.CMD_DELETE_PROFILE, "DELETE /library/profiles/home"],
-  ] as const) {
-    for (const code of ["permission_flag_needs_signin", "needs_signin"]) {
-      it(`${what}: a 409 ${code} shows the server's line and changes nothing here`, async () => {
-        const { sb, net } = await activateWith({
-          "GET /library/profiles": [{ status: 200, body }],
-          [route]: [{ status: 409, body: { error: { code, message: "The new default turns off permission prompts. Use the a4sx CLI or the website.\nmore" } } }],
-        }, [...ALL, "profiles:write"]);
-        const items = (await sb.profiles.getChildren()) as ProfileItem[];
-        const target = what === "set as default" ? items.find((i) => i.id === "work")! : items.find((i) => i.id === "home")!;
-        calls.modalChoices.push(what === "set as default" ? PROFILE_TEXTS.makeDefault : PROFILE_TEXTS.delete);
-        await calls.commands.get(cmd)!(target);
-        assert.strictEqual(net.seen.filter((r) => `${r.method} ${new URL(r.url).pathname}` === route).length, 1);
-        assert.deepStrictEqual(calls.errors.map((e) => e.message), ["The new default turns off permission prompts. Use the a4sx CLI or the website."]);
-        assert.deepStrictEqual(sb.profiles.data, { profiles: Object.entries(body.profiles), default: "home" }, "the local list is unchanged");
-      });
-    }
+  for (const code of ["needs_signin", "permission_flag_needs_signin", "something_new"]) {
+    it(`delete: a 409 ${code} shows the server's line and changes nothing here`, async () => {
+      const { sb, net } = await activateWith({
+        "GET /library/profiles": [{ status: 200, body }],
+        "DELETE /library/profiles/work": [{ status: 409, body: { error: { code, message: "Delete it with the a4sx CLI or on the website, please.\nmore" } } }],
+      }, [...ALL, "profiles:write"]);
+      const items = (await sb.profiles.getChildren()) as ProfileItem[];
+      calls.modalChoices.push(PROFILE_TEXTS.delete);
+      await calls.commands.get(ext.CMD_DELETE_PROFILE)!(items.find((i) => i.id === "work")!);
+      assert.strictEqual(net.seen.filter((r) => r.method === "DELETE").length, 1);
+      assert.deepStrictEqual(calls.errors.map((e) => e.message), ["Delete it with the a4sx CLI or on the website, please."]);
+      assert.deepStrictEqual(sb.profiles.data, { profiles: Object.entries(body.profiles), default: "home" }, "the local list is unchanged");
+    });
   }
+
+  it("an edit refused with any other 400 or 409 keeps the box open with the server's line", async () => {
+    const { sb } = await activateWith({
+      "GET /library/profiles": [{ status: 200, body }],
+      "PUT /library/profiles/home": [
+        { status: 400, body: { error: { code: "flag_not_allowed", message: "That flag needs the CLI." } } },
+        { status: 409, body: { error: { code: "brand_new", message: "Not with a key." } } },
+      ],
+    }, [...ALL, "profiles:write"]);
+    const home = ((await sb.profiles.getChildren()) as ProfileItem[])[0];
+    calls.nextPick = 1;
+    calls.inputQueue.push("m2", "m3", undefined);
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(home);
+    assert.deepStrictEqual(calls.inputs.slice(1).map((i) => i.prompt), ["That flag needs the CLI.", "Not with a key."]);
+    assert.strictEqual(calls.errors.length, 0);
+  });
 });

@@ -2,6 +2,8 @@
 // Copyright 2026 crossVault GmbH
 // The Launch profiles actions (create, edit one field, set default, delete) and the profile pick for
 // "Resume in terminal". Writes need `profiles:write`, asked for with a new sign-in the first time.
+// The default is changed, and the default or a profile with hidden settings deleted, only with the
+// a4sx CLI or on the website; flags may be removed freely, and only a few may be added.
 // Edit changes only the name, the model and (non-loosening) flags; the server address, harness, router
 // and headers are read-only here (a library key may not set them), and Edit offers the a4sx CLI or
 // the website for them. A changed default is confirmed in a modal that names the address. Adding a
@@ -9,11 +11,11 @@
 // No API key is ever asked for, shown or stored: a profile holds none.
 import * as vscode from "vscode";
 import {
-  ApiError, Client, deleteProfile, MESSAGES, listProfiles, nextDefaultAfterDelete, Profile, PROFILE_ID, ProfilesState, putProfile,
-  SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, setDefaultProfile,
+  ApiError, Client, deleteProfile, MESSAGES, listProfiles, Profile, PROFILE_ID, ProfilesState, putProfile,
+  SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE,
 } from "./api";
 import {
-  DEFAULT_MARK, displayAddress, HIDDEN_FIELDS, hiddenCount, MASK, NOT_SET, ProfileItem, profileName, ProfilesProvider, SECRET_FLAG, secretFlags,
+  DEFAULT_MARK, deletable, DELETE_ELSEWHERE, displayAddress, HIDDEN_FIELDS, hiddenCount, MASK, NOT_SET, ProfileItem, profileName, ProfilesProvider, SECRET_FLAG, secretFlags,
   shownFlags, sortedProfiles,
 } from "./profilesView";
 import { callWithScope, ensureScope, errorText, ScopedAuth } from "./stepUp";
@@ -31,7 +33,7 @@ export const PROFILE_TEXTS = {
   prompts: {
     name: "Name shown in the list. Leave empty to show the id.",
     model: "Model. Leave empty to use the CLI's default.",
-    flags: "Launch flags, separated by spaces. Leave empty for none.",
+    flags: "Launch flags, separated by spaces. You can add --verbose, --model <id> and --permission-mode default or plan, and remove any flag.",
   },
   readOnly: MESSAGES.needsSignin,
   routerOn: "on",
@@ -44,15 +46,12 @@ export const PROFILE_TEXTS = {
   flagsSecret: "Flags can't contain an API key or token.",
   flagsTooMany: "Use at most 20 flags of up to 128 characters each.",
   maskTyped: "Type the whole value instead of ••••.",
-  permissionFlag: MESSAGES.permissionFlagNeedsSignin,
+  flagNotAllowed: "This flag can only be added with the a4sx CLI or on the website.",
+  deleteElsewhere: DELETE_ELSEWHERE,
   cliDefaultAddress: "the CLI's default server address",
   confirmDefault: (name: string, address: string) => `New launches will use "${name}" and send their requests to ${address}. Make it the default?`,
   makeDefault: "Make default",
   confirmDelete: (name: string) => `Delete the launch profile "${name}"?`,
-  confirmDeleteDefault: (name: string, next: string, address: string) =>
-    `Delete the launch profile "${name}"? "${next}" becomes the default, and new launches send their requests to ${address}.`,
-  confirmDeleteDefaultUnknown: (name: string) =>
-    `Delete the launch profile "${name}"? Another profile becomes the default. Check which one in the list, and pick a new default if you need to.`,
   confirmReplace: (id: string) => `A launch profile "${id}" already exists. Replace it?`,
   replace: "Replace",
   loadingProfiles: "Loading launch profiles…",
@@ -108,34 +107,45 @@ export function validateFlags(raw: string, kept = 0): string | undefined {
   return flags.some((f) => SECRET_FLAG.test(f)) ? PROFILE_TEXTS.flagsSecret : undefined;
 }
 
-const squash = (f: string) => f.toLowerCase().replace(/[-_]/g, "");
-
 /**
- * The permission-loosening flags in a list, by kind, in any spelling: `--dangerously-skip-permissions`
- * (also `--dangerously_skip_permissions`, `--allow-dangerously-skip-permissions`, any case) and
- * `--permission-mode bypassPermissions` / `--permission-mode=bypassPermissions`.
+ * Flags as units: `--model ID` and `--permission-mode MODE` (two elements) count as one unit, so an
+ * added unit can be checked as a whole.
  */
-export function looseningFlags(flags: readonly string[]): { skip: number; bypass: number } {
-  const out = { skip: 0, bypass: 0 };
+export function flagUnits(flags: readonly string[]): string[] {
+  const out: string[] = [];
   for (let i = 0; i < flags.length; i++) {
-    const f = squash(flags[i]);
-    if (f.includes("dangerouslyskippermissions")) {
-      out.skip++;
-    } else if (/^permissionmode(=|$)/.test(f)) {
-      const value = f.includes("=") ? f.slice(f.indexOf("=") + 1) : squash(flags[i + 1] ?? "");
-      if (value.replace(/["']/g, "") === "bypasspermissions") {
-        out.bypass++;
-      }
+    const f = flags[i];
+    if ((f === "--model" || f === "--permission-mode") && i + 1 < flags.length && !flags[i + 1].startsWith("-")) {
+      out.push(`${f} ${flags[i + 1]}`);
+      i++;
+    } else {
+      out.push(f);
     }
   }
   return out;
 }
 
-/** True when `after` has more permission-loosening flags of some kind than `before` (adding one). */
-export function addsLooseningFlag(before: readonly string[], after: readonly string[]): boolean {
-  const a = looseningFlags(before);
-  const b = looseningFlags(after);
-  return b.skip > a.skip || b.bypass > a.bypass;
+/** The only flags a key may add: --verbose, --model ID, --permission-mode default|plan. */
+export function addableFlag(unit: string): boolean {
+  return unit === "--verbose" || /^--model [A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$/.test(unit) || /^--permission-mode (default|plan)$/.test(unit);
+}
+
+/** The units in `after` that `before` doesn't have (as a multiset): what the edit adds. */
+export function addedFlags(before: readonly string[], after: readonly string[]): string[] {
+  const left = new Map<string, number>();
+  for (const u of flagUnits(before)) {
+    left.set(u, (left.get(u) ?? 0) + 1);
+  }
+  const added: string[] = [];
+  for (const u of flagUnits(after)) {
+    const n = left.get(u) ?? 0;
+    if (n > 0) {
+      left.set(u, n - 1);
+    } else {
+      added.push(u);
+    }
+  }
+  return added;
 }
 
 export function validateField(field: EditableField, raw: string): string | undefined {
@@ -221,7 +231,9 @@ async function input(title: string, prompt: string, value: string, validate: (v:
 }
 
 /** Refusals that keep the edit open with the server's message (the box opens again). */
-const KEEP_OPEN = new Set(["credential-in-profile", "hidden-bound-to-host", "base-url-needs-signin", "permission-flag-needs-signin", "needs-signin"]);
+const KEEP_OPEN = new Set([
+  "credential-in-profile", "hidden-bound-to-host", "base-url-needs-signin", "permission-flag-needs-signin", "needs-signin", "conflict", "rejected",
+]);
 
 /**
  * Runs one profile write with a key holding profiles:write, and shows the list it returns. With
@@ -302,11 +314,11 @@ export async function createProfile(deps: ProfileDeps): Promise<void> {
   await write(deps, token, (c, tok) => putProfile(c, tok, pid, profile));
 }
 
-/** A read-only field: say where it can be changed and offer both ways. */
-async function changeElsewhere(deps: ProfileDeps, item: ProfileItem): Promise<void> {
+/** Something a key may not change: say where it can be changed and offer both ways. */
+async function changeElsewhere(deps: ProfileDeps, item: ProfileItem, message: string = PROFILE_TEXTS.readOnly): Promise<void> {
   const t = PROFILE_TEXTS;
   const buttons = deps.elsewhere ? [t.runCli, t.openWebsite] : [];
-  const choice = await vscode.window.showInformationMessage(t.readOnly, ...buttons);
+  const choice = await vscode.window.showInformationMessage(message, ...buttons);
   if (choice === t.runCli) {
     await deps.elsewhere?.cli(item.id);
   } else if (choice === t.openWebsite) {
@@ -350,10 +362,10 @@ export async function editProfile(deps: ProfileDeps, item: ProfileItem | undefin
     if (field === "flags") {
       // Flags with a key or token are never prefilled; they are kept as they are.
       const { visible, hidden } = splitFlags(item.profile);
-      const stored = flagList(item.profile);
       const prompt = notice ?? (hidden.length ? `${t.prompts.flags} ${t.flagsHiddenKept}` : t.prompts.flags);
+      // Removing is free; only the allowed flags may be added.
       const check = (v: string) => validateFlags(v, hidden.length)
-        ?? (addsLooseningFlag(stored, [...parseFlags(v), ...hidden]) ? t.permissionFlag : undefined);
+        ?? (addedFlags(visible, parseFlags(v)).every(addableFlag) ? undefined : t.flagNotAllowed);
       const value = await input(t.editTitle(name), prompt, visible.join(" "), check);
       if (value === undefined) {
         return;
@@ -382,44 +394,28 @@ export async function editProfile(deps: ProfileDeps, item: ProfileItem | undefin
   }
 }
 
-export async function setDefault(deps: ProfileDeps, item: ProfileItem | undefined): Promise<void> {
-  if (!item || item.isDefault) {
-    return;
+/** The default is changed only with the a4sx CLI or on the website: offer both. */
+export async function changeDefault(deps: ProfileDeps, item: ProfileItem | undefined): Promise<void> {
+  if (item) {
+    await changeElsewhere(deps, item);
   }
-  const token = await ensureScope(deps.auth, SCOPE_PROFILES_WRITE);
-  if (!token) {
-    return;
-  }
-  const t = PROFILE_TEXTS;
-  if (!(await confirm(t.confirmDefault(profileName(item.id, item.profile), addressOf(item.profile)), t.makeDefault))) {
-    return;
-  }
-  await write(deps, token, (c, tok) => setDefaultProfile(c, tok, item.id));
 }
 
 export async function removeProfile(deps: ProfileDeps, item: ProfileItem | undefined): Promise<void> {
   if (!item) {
     return;
   }
+  const t = PROFILE_TEXTS;
+  if (!deletable(item.isDefault, item.profile)) {
+    // The default, or a profile with hidden settings: a key may not delete it.
+    await changeElsewhere(deps, item, t.deleteElsewhere);
+    return;
+  }
   const token = await ensureScope(deps.auth, SCOPE_PROFILES_WRITE);
   if (!token) {
     return;
   }
-  const t = PROFILE_TEXTS;
-  const name = profileName(item.id, item.profile);
-  // Deleting the default makes the first remaining profile (in the server's stored order) the default.
-  let message = t.confirmDelete(name);
-  const state = deps.view.data;
-  if (item.isDefault && state) {
-    const nextId = nextDefaultAfterDelete(state, item.id);
-    const next = nextId ? state.profiles.find(([id]) => id === nextId) : undefined;
-    if (next) {
-      message = t.confirmDeleteDefault(name, profileName(next[0], next[1]), addressOf(next[1]));
-    } else if (nextId === undefined) {
-      message = t.confirmDeleteDefaultUnknown(name);
-    }
-  }
-  if (!(await confirm(message, t.delete))) {
+  if (!(await confirm(t.confirmDelete(profileName(item.id, item.profile)), t.delete))) {
     return;
   }
   await write(deps, token, (c, tok) => deleteProfile(c, tok, item.id));

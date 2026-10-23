@@ -14,7 +14,7 @@ suite("a4sx extension (in VS Code)", () => {
     for (const id of ["a4sx.saveSession", "a4sx.openLibrary", "a4sx.signIn", "a4sx.signOut", "a4sx.refreshSessions",
       "a4sx.resumeSession", "a4sx.resumeInClaude", "a4sx.openSessionOnWeb", "a4sx.copySessionId", "a4sx.searchMarketplace", "a4sx.openListing",
       "a4sx.filterSessions", "a4sx.clearSessionFilter", "a4sx.moveToFolder", "a4sx.removeFromFolder", "a4sx.refreshProfiles",
-      "a4sx.createProfile", "a4sx.editProfile", "a4sx.setDefaultProfile", "a4sx.deleteProfile", "a4sx.allowScope"]) {
+      "a4sx.createProfile", "a4sx.editProfile", "a4sx.changeDefaultElsewhere", "a4sx.deleteProfile", "a4sx.allowScope"]) {
       assert.ok(commands.includes(id), id);
     }
   });

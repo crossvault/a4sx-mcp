@@ -13,7 +13,7 @@ export type ApiErrorCode =
   | "bad-server-url" | "unreachable" | "unauthorized" | "busy" | "expired" | "too-many-tokens"
   | "bad-login-url" | "bad-response" | "http"
   | "bad-scopes" | "insufficient-scope" | "not-supported" | "rejected" | "profile-limit" | "not-found"
-  | "credential-in-profile" | "hidden-bound-to-host" | "base-url-needs-signin" | "permission-flag-needs-signin" | "needs-signin";
+  | "credential-in-profile" | "hidden-bound-to-host" | "base-url-needs-signin" | "permission-flag-needs-signin" | "needs-signin" | "conflict";
 
 export class ApiError extends Error {
   constructor(
@@ -326,10 +326,6 @@ function submittedValues(p: Profile): string[] {
 }
 
 export interface ProfilesState {
-  /**
-   * In the order the JSON answer lists them, which is the server's order, except that JavaScript puts
-   * integer-like ids ("1", "42") first (see nextDefaultAfterDelete).
-   */
   profiles: [string, Profile][];
   default: string | null;
 }
@@ -342,23 +338,6 @@ function profilesState(status: number, data: any): ProfilesState {
     .filter(([id, p]) => PROFILE_ID.test(id) && typeof p === "object" && p !== null && !Array.isArray(p)) as [string, Profile][];
   const def = typeof data.default === "string" && profiles.some(([id]) => id === data.default) ? data.default : null;
   return { profiles, default: def };
-}
-
-/**
- * The profile the server makes the default when the default `id` is deleted: the first remaining one
- * in its stored (insertion) order. Parsed JSON keeps that order unless an id is integer-like, which
- * JavaScript moves to the front, so then the answer is "unknown" (undefined), not a guess. `null`:
- * no profile remains.
- */
-export function nextDefaultAfterDelete(state: ProfilesState, id: string): string | null | undefined {
-  const rest = state.profiles.filter(([pid]) => pid !== id);
-  if (rest.length === 0) {
-    return null;
-  }
-  if (state.profiles.some(([pid]) => /^(0|[1-9][0-9]*)$/.test(pid))) {
-    return undefined;
-  }
-  return rest[0][0];
 }
 
 /** The server's rule for a profile id. */
@@ -395,8 +374,12 @@ function profileWriteFail(status: number, data: any, submitted: readonly string[
   if (status === 404 && code === "no_such_profile") {
     throw new ApiError("not-found", MESSAGES.profileGone, status);
   }
+  // Any other refusal: the server's own line (a key may change less than an account can).
+  if (status === 409) {
+    throw new ApiError("conflict", serverLine(data, submitted, MESSAGES.needsSignin), status);
+  }
   if (status === 400) {
-    throw new ApiError("rejected", MESSAGES.profileRejected, status);
+    throw new ApiError("rejected", serverLine(data, submitted, MESSAGES.profileRejected), status);
   }
   scopedFail(status, data, MESSAGES.profilesNotSupported);
 }
@@ -424,14 +407,6 @@ export async function putProfile(c: Client, token: string, id: string, profile: 
 
 export async function deleteProfile(c: Client, token: string, id: string): Promise<ProfilesState> {
   const { status, data } = await call(c, profilePath(id), { method: "DELETE", token });
-  if (status !== 200) {
-    profileWriteFail(status, data);
-  }
-  return profilesState(status, data);
-}
-
-export async function setDefaultProfile(c: Client, token: string, id: string): Promise<ProfilesState> {
-  const { status, data } = await call(c, profilePath(id, "/default"), { method: "POST", token, body: {} });
   if (status !== 200) {
     profileWriteFail(status, data);
   }

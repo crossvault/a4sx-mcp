@@ -12,7 +12,7 @@ This extension connects VS Code to a4sx. It adds:
     - **Open on the web**.
     - **Copy session id**.
     - **Move to folder…** and **Remove from folder**.
-  - **Launch profiles** lists your launch profiles. The default one is marked. You can create, edit and delete profiles, and set the default.
+  - **Launch profiles** lists your launch profiles. The default one is marked. You can create, edit and delete profiles.
   - **Marketplace** searches the sessions that others publish. A result opens on session-exchange.com. You don't need to sign in to search.
 - **The a4sx MCP servers for agent mode.** The a4sx tools show up in the tools list of agent mode in VS Code chat.
   - **a4sx** works without an account. You can search sessions and read their summaries.
@@ -36,9 +36,10 @@ A launch profile says how `a4sx launch` starts a session: the model, the server 
 
 - **Create launch profile** (the + button) asks for an id and a model.
 - **Edit** can change the name, the model and the flags. The server address (shown as `scheme://host[:port]`), harness, router and headers are shown but can't be changed here. Choose one of them to run `a4sx profile` in a terminal or open the launch profiles page on the website. Header names and values are not shown, only how many there are.
-- Flags that turn off permission prompts (`--dangerously-skip-permissions`, `--permission-mode bypassPermissions`) can't be added here; use the a4sx CLI or the website. Keeping or removing them works.
-- **Set as default** asks you to confirm first. The message names the address that launches will send their requests to. If a4sx refuses the switch, or the deletion of the default (for example because the new default turns off permission prompts), the extension shows the server's message and changes nothing.
-- **Delete** asks you to confirm first.
+- In **Flags** you can remove any flag, and add only `--verbose`, `--model <id>` and `--permission-mode default` or `plan`. Add other flags with the a4sx CLI or on the website.
+- The default can only be changed with the a4sx CLI or on the website. **Change default with the a4sx CLI or on the website** offers both.
+- **Delete** asks you to confirm first. The default profile, and profiles with hidden settings, can only be deleted with the a4sx CLI or on the website; their tooltip says so.
+- If a4sx refuses a change, the extension shows the server's message and changes nothing.
 
 The first time you change a profile, the extension asks for one more permission (`profiles:write`). Your browser opens a new sign-in that names it. The extension keeps using your current key until the new one arrives. Then it replaces the old key and asks the a4sx server to revoke it.
 

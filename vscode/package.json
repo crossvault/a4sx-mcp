@@ -151,8 +151,8 @@
         "icon": "$(edit)"
       },
       {
-        "command": "a4sx.setDefaultProfile",
-        "title": "Set as default",
+        "command": "a4sx.changeDefaultElsewhere",
+        "title": "Change default with the a4sx CLI or on the website",
         "category": "a4sx",
         "icon": "$(star-empty)"
       },
@@ -312,28 +312,28 @@
           "group": "2_folder@2"
         },
         {
-          "command": "a4sx.setDefaultProfile",
-          "when": "view == a4sx.profiles && viewItem == a4sx.profile",
+          "command": "a4sx.changeDefaultElsewhere",
+          "when": "view == a4sx.profiles && viewItem =~ /^a4sx\\.profile(\\.default|\\.locked)?$/",
           "group": "inline@1"
         },
         {
           "command": "a4sx.editProfile",
-          "when": "view == a4sx.profiles && viewItem =~ /^a4sx\\.profile(\\.default)?$/",
+          "when": "view == a4sx.profiles && viewItem =~ /^a4sx\\.profile(\\.default|\\.locked)?$/",
           "group": "inline@2"
         },
         {
           "command": "a4sx.editProfile",
-          "when": "view == a4sx.profiles && viewItem =~ /^a4sx\\.profile(\\.default)?$/",
+          "when": "view == a4sx.profiles && viewItem =~ /^a4sx\\.profile(\\.default|\\.locked)?$/",
           "group": "1_profile@1"
         },
         {
-          "command": "a4sx.setDefaultProfile",
-          "when": "view == a4sx.profiles && viewItem == a4sx.profile",
+          "command": "a4sx.changeDefaultElsewhere",
+          "when": "view == a4sx.profiles && viewItem =~ /^a4sx\\.profile(\\.default|\\.locked)?$/",
           "group": "1_profile@2"
         },
         {
           "command": "a4sx.deleteProfile",
-          "when": "view == a4sx.profiles && viewItem =~ /^a4sx\\.profile(\\.default)?$/",
+          "when": "view == a4sx.profiles && viewItem == a4sx.profile",
           "group": "2_danger@1"
         },
         {
@@ -404,7 +404,7 @@
           "when": "false"
         },
         {
-          "command": "a4sx.setDefaultProfile",
+          "command": "a4sx.changeDefaultElsewhere",
           "when": "false"
         },
         {
