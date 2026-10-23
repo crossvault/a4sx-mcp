@@ -35,6 +35,11 @@ export function isOldCli(exitCode: number | null, stderr: string): boolean {
   return exitCode === 2 && stderr.includes("unrecognized arguments") && stderr.includes("--seed-only");
 }
 
+/** The CLI's "needs a sign-in — run `a4sx login` first" (exit 1): the user has to run `a4sx login`. */
+export function isNotSignedIn(exitCode: number | null, stderr: string): boolean {
+  return exitCode !== null && exitCode !== 0 && /needs a sign-in\b.*\ba4sx login\b/.test(stderr);
+}
+
 /** The last non-empty stderr line, without terminal escapes or control characters, at most 200 chars. */
 export function lastLine(stderr: string): string {
   const lines = stderr
@@ -54,6 +59,7 @@ export type SeedResult =
   | { kind: "bad-output" }
   | { kind: "timeout" }
   | { kind: "cancelled" }
+  | { kind: "not-signed-in" }
   | { kind: "failed"; exitCode: number | null; detail: string };
 
 export interface ExecOptions {
@@ -101,6 +107,10 @@ export function seedSession(cliPath: string, name: string, cwd: string, exec: Ex
       const exitCode = typeof error.code === "number" ? error.code : null;
       if (isOldCli(exitCode, stderr)) {
         resolve({ kind: "old-cli" });
+        return;
+      }
+      if (isNotSignedIn(exitCode, stderr)) {
+        resolve({ kind: "not-signed-in" });
         return;
       }
       resolve({ kind: "failed", exitCode, detail: lastLine(stderr) });

@@ -27,7 +27,8 @@ export interface LookupEnv {
 /**
  * Where the a4sx installer puts the CLI. A VS Code started from the dock or a menu often has a PATH
  * without these (the installer adds `~/.local/bin` only in the shell's rc file), so they are tried
- * after PATH. None on Windows.
+ * after PATH. None on Windows. `home` is the home directory of the host the extension runs on: in a
+ * remote window (SSH, WSL, containers) that is the remote user's home on the remote host.
  */
 export function defaultFallbackDirs(platform: NodeJS.Platform, home: string): string[] {
   if (platform === "win32") {
