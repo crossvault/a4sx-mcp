@@ -2,10 +2,10 @@
 
 ## 0.2.2
 
-- Remote windows (SSH, WSL, dev containers, Codespaces): **Resume in Claude Code** uses the open folder on the remote host, also when VS Code hands it over as a `vscode-remote` folder. If the a4sx extension runs on this computer instead, the message says so.
-- Remote windows: when the a4sx CLI is not found, the message says it must be installed on the remote host. **Copy install command** copies the install command, and **Open settings** opens `a4sx.cliPath`.
-- Folders that are not on disk (for example virtual folders) get their own message.
-- When the a4sx CLI needs a sign-in, **Resume in Claude Code** says so. **Run a4sx login** opens a terminal that runs `a4sx login`.
+- Remote windows (SSH, WSL, dev containers, Codespaces): if the a4sx extension runs on this computer while the folder is on a remote machine, the resume and save commands now explain how to install a4sx in the remote window.
+- Remote windows: if the a4sx CLI isn't installed on the remote machine, the message says so and offers **Copy install command** and **Open settings**.
+- Folders that are not on disk (for example virtual folders) get their own message in **Resume in Claude Code**.
+- If the a4sx CLI isn't signed in, **Resume in Claude Code** says so. **Run a4sx login** opens a terminal that runs `a4sx login`.
 
 ## 0.2.1
 

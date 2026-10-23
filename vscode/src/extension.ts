@@ -63,7 +63,35 @@ export function remoteHostName(): string | undefined {
   if (!name) {
     return undefined;
   }
-  return vscode.extensions.getExtension(EXTENSION_ID)?.extensionKind === vscode.ExtensionKind.UI ? undefined : name;
+  return runsOnThisComputer() ? undefined : name;
+}
+
+/** True when this extension runs where the UI runs (this computer), as VS Code reports it. */
+function runsOnThisComputer(): boolean {
+  return vscode.extensions.getExtension(EXTENSION_ID)?.extensionKind === vscode.ExtensionKind.UI;
+}
+
+/**
+ * The remote's name when the window is remote but this extension runs on this computer. A terminal
+ * then opens on the remote host, where a CLI path found on this computer means nothing, and Claude Code
+ * reads the remote host's history; so the CLI commands stop with one message instead.
+ */
+export function remoteWindowButLocalExtension(): string | undefined {
+  const name = vscode.env.remoteName;
+  return name && runsOnThisComputer() ? name : undefined;
+}
+
+export const localExtensionMessage = (label: string) =>
+  `This window is connected to ${label}, but the a4sx extension runs on this computer. In the Extensions view, click "Install in ${label}" for a4sx, then try again.`;
+
+/** Shows the message and returns true when the CLI commands can't work from here (see above). */
+async function stopIfLocalInRemoteWindow(): Promise<boolean> {
+  const remote = remoteWindowButLocalExtension();
+  if (!remote) {
+    return false;
+  }
+  await vscode.window.showErrorMessage(localExtensionMessage(remoteLabel(remote)));
+  return true;
 }
 
 const REMOTE_LABELS: Record<string, string> = {
@@ -80,14 +108,19 @@ export function remoteLabel(name: string): string {
   return REMOTE_LABELS[name] ?? name;
 }
 
-/** The installer one-liner, from the configured a4sx server (the default site if the setting is invalid). */
+/**
+ * A server origin that is safe to paste into a shell unquoted: https, a lowercase host of letters,
+ * digits, dots and dashes, an optional port, nothing else (no userinfo, path, query or shell syntax).
+ */
+const SAFE_ORIGIN = /^https:\/\/[a-z0-9.-]+(:[0-9]{1,5})?$/;
+
+/**
+ * The installer one-liner. It uses the configured a4sx.serverUrl only if that is exactly a safe
+ * origin (a single trailing slash is allowed); anything else gets the default site.
+ */
 export function installCommand(): string {
-  let base = SITE;
-  try {
-    base = client().base;
-  } catch {
-    // An invalid a4sx.serverUrl: the sidebar reports that itself; the default site still has the installer.
-  }
+  const configured = (vscode.workspace.getConfiguration("a4sx").get<string>("serverUrl") ?? "").trim().replace(/\/$/, "");
+  const base = SAFE_ORIGIN.test(configured) ? configured : SITE;
   return `curl -fsSL ${base}/install.sh | sh`;
 }
 
@@ -95,8 +128,7 @@ export const MISSING_CLI = {
   install: "How to install",
   copyInstall: "Copy install command",
   openSettings: "Open settings",
-  remoteNotFound: (label: string) =>
-    `The ${CLI_NAME} command was not found on the remote host (${label}). In a remote window, the ${CLI_NAME} CLI must be installed on the remote host.`,
+  remoteNotFound: (label: string) => `${CLI_NAME} isn't installed on ${label}. Install it there, then try again.`,
   copied: "Copied the install command. Run it in a terminal in this window.",
 };
 
@@ -123,6 +155,9 @@ export async function reportMissingCli(result: Exclude<CliLookup, { found: true 
 }
 
 export async function saveSession(lookup: (configured: string | undefined) => CliLookup = findCli): Promise<vscode.Terminal | undefined> {
+  if (await stopIfLocalInRemoteWindow()) {
+    return undefined;
+  }
   const result = lookupCli(lookup);
   if (!result.found) {
     await reportMissingCli(result);
@@ -182,6 +217,9 @@ export async function resumeSession(item: SessionItem | undefined, lookup: (conf
   if (!item) {
     return undefined;
   }
+  if (await stopIfLocalInRemoteWindow()) {
+    return undefined;
+  }
   const result = lookupCli(lookup);
   if (!result.found) {
     await reportMissingCli(result);
@@ -205,8 +243,7 @@ export const CLAUDE_MESSAGES = {
   noClaude: "Resume in Claude Code needs the Claude Code extension.",
   noFolder: "Open a folder first. Claude Code resumes the session in that folder.",
   notOnDisk: "Resume in Claude Code needs a folder on disk. Open a local or remote folder.",
-  remoteFolderHere: "Resume in Claude Code can't use this remote folder, because the a4sx extension runs on this computer. Install a4sx in the remote window, then try again.",
-  notSignedIn: "a4sx needs a sign-in. Run a4sx login in a terminal, then try again.",
+  notSignedIn: "The a4sx CLI isn't signed in on this machine. Run a4sx login in a terminal, then try again.",
   pickFolder: "Choose the folder to resume the session in",
   progress: "Copying the session for Claude Code…",
   oldCli: 'Your a4sx CLI is too old for Resume in Claude Code. Run "a4sx update", then try again.',
@@ -264,7 +301,10 @@ async function pickFolder(targets: readonly FolderTarget[]): Promise<FolderTarge
 }
 
 /** Opens a terminal that runs `a4sx login` directly (no shell). */
-export function runLogin(cliPath: string): vscode.Terminal {
+export async function runLogin(cliPath: string): Promise<vscode.Terminal | undefined> {
+  if (await stopIfLocalInRemoteWindow()) {
+    return undefined;
+  }
   const terminal = vscode.window.createTerminal({ name: LOGIN_TERMINAL_NAME, shellPath: cliPath, shellArgs: ["login"] });
   terminal.show();
   return terminal;
@@ -283,6 +323,9 @@ export async function resumeInClaude(
   if (!item) {
     return;
   }
+  if (await stopIfLocalInRemoteWindow()) {
+    return;
+  }
   if (!vscode.extensions.getExtension(CLAUDE_EXTENSION_ID)) {
     const choice = await vscode.window.showErrorMessage(CLAUDE_MESSAGES.noClaude, SHOW_EXTENSION);
     if (choice === SHOW_EXTENSION) {
@@ -296,13 +339,7 @@ export async function resumeInClaude(
   const remote = remoteHostName();
   const targets = folderTargets(all, remote);
   if (targets.length === 0) {
-    const message =
-      all.length === 0
-        ? CLAUDE_MESSAGES.noFolder
-        : !remote && vscode.env.remoteName && all.some((f) => f.uri.scheme === "vscode-remote")
-          ? CLAUDE_MESSAGES.remoteFolderHere
-          : CLAUDE_MESSAGES.notOnDisk;
-    await vscode.window.showErrorMessage(message);
+    await vscode.window.showErrorMessage(all.length === 0 ? CLAUDE_MESSAGES.noFolder : CLAUDE_MESSAGES.notOnDisk);
     return;
   }
   const cli = lookupCli(lookup);
@@ -336,7 +373,7 @@ export async function resumeInClaude(
   if (result.kind === "not-signed-in") {
     // Resuming in a terminal needs the sign-in too, so only the login is offered.
     if ((await vscode.window.showErrorMessage(CLAUDE_MESSAGES.notSignedIn, RUN_LOGIN)) === RUN_LOGIN) {
-      runLogin(cli.path);
+      await runLogin(cli.path);
     }
     return;
   }

@@ -35,9 +35,12 @@ export function isOldCli(exitCode: number | null, stderr: string): boolean {
   return exitCode === 2 && stderr.includes("unrecognized arguments") && stderr.includes("--seed-only");
 }
 
-/** The CLI's "needs a sign-in — run `a4sx login` first" (exit 1): the user has to run `a4sx login`. */
+/**
+ * The CLI's "a4sx: seeding from a saved session needs a sign-in — run `a4sx login` first" (exit 1):
+ * the user has to run `a4sx login`. The legacy CLI name `amdx` is matched too.
+ */
 export function isNotSignedIn(exitCode: number | null, stderr: string): boolean {
-  return exitCode !== null && exitCode !== 0 && /needs a sign-in\b.*\ba4sx login\b/.test(stderr);
+  return exitCode !== null && exitCode !== 0 && /needs a sign-in\b.*\b(?:a4sx|amdx) login\b/.test(stderr);
 }
 
 /** The last non-empty stderr line, without terminal escapes or control characters, at most 200 chars. */

@@ -100,15 +100,6 @@ describe("remote windows: Resume in Claude Code folders", () => {
     assert.strictEqual(f.seen[0].cwd, "/w/proj");
   });
 
-  it("extension set to run on this computer in a remote window: remote folders are refused with their own message", async () => {
-    calls.extensionKind = UI;
-    calls.workspaceFolders = [folder("web", "/home/dev/web", "vscode-remote")];
-    const f = fakeExec({ stdout: ID });
-    await ext.resumeInClaude(item, found, f.exec);
-    assert.strictEqual(f.seen.length, 0);
-    assert.deepStrictEqual(calls.errors, [{ message: ext.CLAUDE_MESSAGES.remoteFolderHere, items: [] }]);
-  });
-
   it("remoteHostName: only when the window is remote and the extension runs there", () => {
     assert.strictEqual(ext.remoteHostName(), "ssh-remote");
     calls.extensionKind = UI;
@@ -119,13 +110,57 @@ describe("remote windows: Resume in Claude Code folders", () => {
   });
 });
 
+describe("remote window, but the extension runs on this computer", () => {
+  const message = 'This window is connected to SSH, but the a4sx extension runs on this computer. In the Extensions view, click "Install in SSH" for a4sx, then try again.';
+  beforeEach(() => {
+    remoteWindow();
+    calls.extensionKind = UI;
+    calls.workspaceFolders = [folder("web", "/home/dev/web", "vscode-remote"), folder("proj", "/w/proj")];
+  });
+
+  it("Resume in Claude Code, Resume in terminal and Save stop with one message; nothing runs", async () => {
+    let looked = 0;
+    const lookup = () => { looked++; return found(); };
+    const f = fakeExec({ stdout: ID });
+    await ext.resumeInClaude(item, lookup, f.exec);
+    await ext.resumeSession(item, lookup);
+    await ext.saveSession(lookup);
+    assert.deepStrictEqual(calls.errors, [0, 1, 2].map(() => ({ message, items: [] })));
+    assert.strictEqual(looked, 0, "no CLI lookup on this computer");
+    assert.strictEqual(f.seen.length, 0);
+    assert.strictEqual(calls.terminals.length, 0);
+    assert.deepStrictEqual(calls.opened, []);
+  });
+
+  it("the login button stops the same way", async () => {
+    assert.strictEqual(await ext.runLogin(CLI), undefined);
+    assert.deepStrictEqual(calls.errors, [{ message, items: [] }]);
+    assert.strictEqual(calls.terminals.length, 0);
+  });
+
+  it("uses the readable remote label", async () => {
+    calls.remoteName = "wsl";
+    await ext.resumeSession(item, found);
+    assert.match(calls.errors[0].message, /^This window is connected to WSL, .*"Install in WSL" for a4sx/);
+  });
+
+  it("only applies in a remote window with the extension on this computer", () => {
+    assert.strictEqual(ext.remoteWindowButLocalExtension(), "ssh-remote");
+    calls.extensionKind = WORKSPACE;
+    assert.strictEqual(ext.remoteWindowButLocalExtension(), undefined);
+    calls.extensionKind = UI;
+    calls.remoteName = undefined;
+    assert.strictEqual(ext.remoteWindowButLocalExtension(), undefined);
+  });
+});
+
 describe("remote windows: a4sx not found", () => {
   beforeEach(() => remoteWindow());
 
   it("names the remote, says to install the CLI there, and offers the two buttons", async () => {
     await ext.saveSession(missing);
     assert.deepStrictEqual(calls.errors, [{
-      message: "The a4sx command was not found on the remote host (SSH). In a remote window, the a4sx CLI must be installed on the remote host.",
+      message: "a4sx isn't installed on SSH. Install it there, then try again.",
       items: ["Copy install command", "Open settings"],
     }]);
     assert.strictEqual(calls.terminals.length, 0);
@@ -141,7 +176,7 @@ describe("remote windows: a4sx not found", () => {
     for (const [name, label] of cases) {
       remoteWindow(name);
       await ext.resumeSession(item, missing);
-      assert.match(calls.errors[0].message, new RegExp(`on the remote host \\(${label}\\)\\.`), name);
+      assert.strictEqual(calls.errors[0].message, `a4sx isn't installed on ${label}. Install it there, then try again.`, name);
     }
   });
 
@@ -153,14 +188,32 @@ describe("remote windows: a4sx not found", () => {
     assert.strictEqual(calls.terminals.length, 0);
   });
 
-  it("'Copy install command' uses the configured server's origin; an invalid setting falls back to the default", async () => {
-    calls.config["a4sx.serverUrl"] = "https://a4sx.example.org/some/path/";
+  it("'Copy install command' keeps a plain custom origin, with or without a port", async () => {
     calls.nextErrorChoice = "Copy install command";
-    await ext.saveSession(missing);
-    assert.strictEqual(calls.clipboard, "curl -fsSL https://a4sx.example.org/install.sh | sh");
-    calls.config["a4sx.serverUrl"] = "http://not-https.example.org";
-    await ext.saveSession(missing);
-    assert.strictEqual(calls.clipboard, "curl -fsSL https://session-exchange.com/install.sh | sh");
+    for (const [setting, want] of [
+      ["https://a4sx.example.org", "https://a4sx.example.org"],
+      ["https://a4sx.example.org/", "https://a4sx.example.org"],
+      ["  https://a4sx-1.example.org:8443  ", "https://a4sx-1.example.org:8443"],
+    ]) {
+      calls.config["a4sx.serverUrl"] = setting;
+      await ext.saveSession(missing);
+      assert.strictEqual(calls.clipboard, `curl -fsSL ${want}/install.sh | sh`, setting);
+    }
+  });
+
+  it("'Copy install command' falls back to the default for anything that is not a plain https origin", async () => {
+    calls.nextErrorChoice = "Copy install command";
+    for (const setting of [
+      "https://$(id).example.com", "https://`id`.example.com", "https://a.example.com;id", "https://a.example.com|sh",
+      "https://a.example.com/x", "https://a.example.com?q=1", "https://a.example.com#x", "https://u:p@a.example.com",
+      "https://A.Example.com", "http://a.example.com", "http://localhost:8080", "https://a.example.com:123456",
+      "https://a.example.com /x", "not a url", "",
+    ]) {
+      calls.config["a4sx.serverUrl"] = setting;
+      calls.clipboard = undefined;
+      await ext.saveSession(missing);
+      assert.strictEqual(calls.clipboard, "curl -fsSL https://session-exchange.com/install.sh | sh", JSON.stringify(setting));
+    }
   });
 
   it("'Open settings' opens the a4sx.cliPath setting", async () => {
@@ -185,9 +238,9 @@ describe("remote windows: a4sx not found", () => {
   });
 
   it("a local window keeps the 0.2.1 message", async () => {
-    for (const [remote, kind] of [[undefined, UI], ["ssh-remote", UI]] as const) {
+    for (const kind of [UI, WORKSPACE]) {
       remoteWindow();
-      calls.remoteName = remote;
+      calls.remoteName = undefined;
       calls.extensionKind = kind;
       await ext.saveSession(missing);
       assert.deepStrictEqual(calls.errors, [{
@@ -230,7 +283,9 @@ describe("not signed in", () => {
     assert.strictEqual(cr.isNotSignedIn(0, seedText), false);
     assert.strictEqual(cr.isNotSignedIn(null, seedText), false);
     assert.strictEqual(cr.isNotSignedIn(1, "a4sx: no session named x\n"), false);
+    assert.strictEqual(cr.isNotSignedIn(1, "amdx: seeding from a saved session needs a sign-in — run `amdx login` first\n"), true, "legacy name");
     assert.strictEqual(cr.isNotSignedIn(1, "a4sx: run `a4sx login` to switch accounts\n"), false);
+    assert.strictEqual(cr.isNotSignedIn(1, "a4sx: this needs a sign-in\n"), false);
   });
 
   it("seedSession reports not-signed-in", async () => {
@@ -245,7 +300,7 @@ describe("not signed in", () => {
       calls.workspaceFolders = [folder("proj", "/home/dev/proj")];
       const exec = fakeExec({ error: Object.assign(new Error("Command failed"), { code: 1 }), stderr: seedText }).exec;
       await ext.resumeInClaude(item, found, exec);
-      assert.deepStrictEqual(calls.errors, [{ message: "a4sx needs a sign-in. Run a4sx login in a terminal, then try again.", items: ["Run a4sx login"] }]);
+      assert.deepStrictEqual(calls.errors, [{ message: "The a4sx CLI isn't signed in on this machine. Run a4sx login in a terminal, then try again.", items: ["Run a4sx login"] }]);
       assert.strictEqual(calls.terminals.length, 0, "nothing runs until clicked");
       calls.nextErrorChoice = "Run a4sx login";
       await ext.resumeInClaude(item, found, exec);
