@@ -28,6 +28,8 @@ To sign out, run **a4sx: Sign out**. This removes the key from VS Code. The key 
 
 Saving and resuming work for Claude Code sessions.
 
+In a remote window (SSH, WSL, dev containers, Codespaces), the a4sx extension usually runs on the remote machine. Then the a4sx command-line tool must be installed and signed in on that machine too.
+
 ## Settings
 
 | Setting | Description |

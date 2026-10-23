@@ -37,6 +37,10 @@ export interface Calls {
   openResult: boolean;
   /** Set true to make withProgress's cancellation token fire right away. */
   cancelProgress: boolean;
+  /** vscode.env.remoteName: undefined in a local window, e.g. "ssh-remote" in a remote one. */
+  remoteName: string | undefined;
+  /** This extension's extensionKind (1 = UI, 2 = Workspace), as getExtension reports it. */
+  extensionKind: number;
   /** How many cancellation listeners were disposed. */
   cancelDisposed: number;
 }
@@ -67,6 +71,8 @@ export const calls: Calls = {
   openResult: true,
   cancelProgress: false,
   cancelDisposed: 0,
+  remoteName: undefined,
+  extensionKind: 1,
 };
 
 export function resetCalls(): void {
@@ -95,6 +101,8 @@ export function resetCalls(): void {
   calls.openResult = true;
   calls.cancelProgress = false;
   calls.cancelDisposed = 0;
+  calls.remoteName = undefined;
+  calls.extensionKind = 1;
 }
 
 /** An in-memory `context.secrets` that records what was stored. */
@@ -161,6 +169,7 @@ const fake = {
   TreeItemCollapsibleState,
   ThemeIcon,
   ProgressLocation: { Notification: 15 },
+  ExtensionKind: { UI: 1, Workspace: 2 },
   commands: {
     registerCommand(id: string, fn: (...args: unknown[]) => unknown) {
       calls.commands.set(id, fn);
@@ -239,6 +248,9 @@ const fake = {
     get uriScheme() {
       return calls.uriScheme;
     },
+    get remoteName() {
+      return calls.remoteName;
+    },
     clipboard: {
       async writeText(text: string) {
         calls.clipboard = text;
@@ -247,6 +259,9 @@ const fake = {
   },
   extensions: {
     getExtension(id: string) {
+      if (id.toLowerCase() === "crossvaultgmbh.a4sx") {
+        return { id, extensionKind: calls.extensionKind };
+      }
       return calls.extensions.has(id) ? { id } : undefined;
     },
   },

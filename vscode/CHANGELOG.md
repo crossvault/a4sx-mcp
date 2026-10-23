@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2
+
+- Remote windows (SSH, WSL, dev containers, Codespaces): if the a4sx extension runs on this computer while the folder is on a remote machine, the resume and save commands now explain how to install a4sx in the remote window.
+- Remote windows: if the a4sx CLI isn't installed on the remote machine, the message says so and offers **Copy install command** and **Open settings**.
+- Folders that are not on disk (for example virtual folders) get their own message in **Resume in Claude Code**.
+- If the a4sx CLI isn't signed in, **Resume in Claude Code** says so. **Run a4sx login** opens a terminal that runs `a4sx login`.
+
 ## 0.2.1
 
 - Adds **Resume in Claude Code** to the sessions in **My sessions**. It copies the session into Claude Code's local history for the open folder and opens it in the Claude Code extension. It needs the Claude Code extension and the a4sx CLI 0.10.77 or later.

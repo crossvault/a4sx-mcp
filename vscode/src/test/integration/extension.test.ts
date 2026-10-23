@@ -17,6 +17,14 @@ suite("a4sx extension (in VS Code)", () => {
     }
   });
 
+  test("the extension finds itself by id; a local window is not remote", () => {
+    // remoteHostName() looks the extension up by this id to see where it runs.
+    const self = vscode.extensions.getExtension("crossvaultGmbH.a4sx");
+    assert.ok(self, "found by publisher.name");
+    assert.strictEqual(self.extensionKind, vscode.ExtensionKind.UI);
+    assert.strictEqual(vscode.env.remoteName, undefined);
+  });
+
   test("the sidebar views open, and signed out there is no a4sx session", async () => {
     await vscode.commands.executeCommand("a4sx.sessions.focus");
     await vscode.commands.executeCommand("a4sx.marketplace.focus");

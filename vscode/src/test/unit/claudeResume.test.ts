@@ -205,8 +205,8 @@ describe("a4sx.resumeInClaude", () => {
     assert.deepStrictEqual(calls.opened, []);
   });
 
-  it("no folder open (or only remote ones): a short error, nothing runs", async () => {
-    for (const folders of [undefined, [], [folder("remote", "/r", "vscode-vfs")]]) {
+  it("no folder open: a short error, nothing runs", async () => {
+    for (const folders of [undefined, []]) {
       resetCalls();
       calls.extensions.add("anthropic.claude-code");
       calls.workspaceFolders = folders;
@@ -216,6 +216,15 @@ describe("a4sx.resumeInClaude", () => {
       assert.deepStrictEqual(calls.errors, [{ message: ext.CLAUDE_MESSAGES.noFolder, items: [] }]);
       assert.deepStrictEqual(calls.opened, []);
     }
+  });
+
+  it("only virtual folders: says a folder on disk is needed, nothing runs", async () => {
+    calls.workspaceFolders = [folder("remote", "/r", "vscode-vfs")];
+    const f = fakeExec({ stdout: ID });
+    await ext.resumeInClaude(item, found, f.exec);
+    assert.strictEqual(f.seen.length, 0);
+    assert.deepStrictEqual(calls.errors, [{ message: ext.CLAUDE_MESSAGES.notOnDisk, items: [] }]);
+    assert.deepStrictEqual(calls.opened, []);
   });
 
   it("without the Claude Code extension: says so and offers to show it in the Extensions view", async () => {
