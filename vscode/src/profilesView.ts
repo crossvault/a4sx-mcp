@@ -80,7 +80,10 @@ export interface ProfileTokenSource {
   token(): Promise<string | undefined>;
 }
 
-/** A base_url as it is shown and named in confirmations: no user name, password, query or fragment. */
+/**
+ * A base_url as it is shown and named in confirmations: scheme://host[:port] only. Newer servers send
+ * no more than that to a key; older ones may send a path, which is not shown either.
+ */
 export function displayAddress(raw: string | undefined): string | undefined {
   const value = (raw ?? "").trim();
   if (!value) {
@@ -88,10 +91,9 @@ export function displayAddress(raw: string | undefined): string | undefined {
   }
   try {
     const u = new URL(value);
-    const path = u.pathname === "/" ? "" : u.pathname;
-    return `${u.protocol}//${u.host}${path}`;
+    return `${u.protocol}//${u.host}`;
   } catch {
-    return value.replace(/[?#].*$/, "");
+    return value.replace(/[/?#].*$/, "");
   }
 }
 

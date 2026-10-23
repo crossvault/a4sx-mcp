@@ -2,8 +2,9 @@
 // Copyright 2026 crossVault GmbH
 // The Launch profiles actions (create, edit one field, set default, delete) and the profile pick for
 // "Resume in terminal". Writes need `profiles:write`, asked for with a new sign-in the first time.
-// The server address is read-only here (a library key may not set it): Edit shows it and offers the
-// a4sx CLI or the website. A changed default is confirmed in a modal that names the address. Adding a
+// Edit changes only the name, the model and (non-loosening) flags; the server address, harness, router
+// and headers are read-only here (a library key may not set them), and Edit offers the a4sx CLI or
+// the website for them. A changed default is confirmed in a modal that names the address. Adding a
 // flag that turns off permission prompts is refused; keeping or removing one is fine.
 // No API key is ever asked for, shown or stored: a profile holds none.
 import * as vscode from "vscode";
@@ -25,15 +26,17 @@ export const PROFILE_TEXTS = {
   idInvalid: "Use up to 64 lowercase letters, digits, - and _, starting with a letter or digit.",
   idTaken: "A launch profile with this id already exists.",
   pickField: "Choose what to change",
-  fields: { name: "Name", model: "Model", base_url: "Server address", harness: "Harness", flags: "Flags" },
+  fields: { name: "Name", model: "Model", flags: "Flags", base_url: "Server address", harness: "Harness", router: "Router", headers: "Headers" },
   readOnlyHere: "Read-only here",
   prompts: {
     name: "Name shown in the list. Leave empty to show the id.",
     model: "Model. Leave empty to use the CLI's default.",
-    harness: "Harness, for example claude-code. Leave empty to use the CLI's default.",
     flags: "Launch flags, separated by spaces. Leave empty for none.",
   },
-  addressReadOnly: MESSAGES.baseUrlNeedsSignin,
+  readOnly: MESSAGES.needsSignin,
+  routerOn: "on",
+  routerOff: "off",
+  headerCount: (n: number) => (n === 1 ? "1 header" : `${n} headers`),
   openWebsite: "Open on the website",
   runCli: "Run a4sx profile",
   flagsHiddenKept: "Flags with a key or token are hidden here and kept as they are.",
@@ -58,10 +61,15 @@ export const PROFILE_TEXTS = {
 };
 
 export type ProfileField = keyof typeof PROFILE_TEXTS.fields;
-/** What Edit may change. The server address is shown but not editable. */
-export type EditableField = Exclude<ProfileField, "base_url">;
-const FIELD_ORDER: ProfileField[] = ["name", "model", "base_url", "harness", "flags"];
-const MAX_LEN: Record<Exclude<EditableField, "flags">, number> = { name: 64, model: 128, harness: 64 };
+/** What Edit may change; every other field is shown read-only. */
+export type EditableField = "name" | "model" | "flags";
+const EDITABLE: readonly ProfileField[] = ["name", "model", "flags"];
+const READ_ONLY: readonly ProfileField[] = ["base_url", "harness", "router", "headers"];
+const MAX_LEN: Record<Exclude<EditableField, "flags">, number> = { name: 64, model: 128 };
+
+export function isEditable(field: ProfileField): field is EditableField {
+  return EDITABLE.includes(field);
+}
 
 /** Where the server address can be changed: the a4sx CLI in a terminal, or the website. */
 export interface AddressElsewhere {
@@ -145,6 +153,18 @@ function shownText(p: Profile, field: ProfileField): string {
   if (field === "base_url") {
     return displayAddress(typeof p.base_url === "string" ? p.base_url : undefined) ?? "";
   }
+  if (field === "router") {
+    if (typeof p.use_router !== "boolean") {
+      return "";
+    }
+    const tenant = typeof p.router_tenant === "string" && p.router_tenant ? p.router_tenant : undefined;
+    return [p.use_router ? PROFILE_TEXTS.routerOn : PROFILE_TEXTS.routerOff, tenant].filter(Boolean).join(" · ");
+  }
+  if (field === "headers") {
+    // Names and values are never shown, only how many there are.
+    const n = p.headers && typeof p.headers === "object" && !Array.isArray(p.headers) ? Object.keys(p.headers).length : 0;
+    return n ? PROFILE_TEXTS.headerCount(n) : "";
+  }
   const v = p[field];
   return typeof v === "string" ? v : "";
 }
@@ -201,7 +221,7 @@ async function input(title: string, prompt: string, value: string, validate: (v:
 }
 
 /** Refusals that keep the edit open with the server's message (the box opens again). */
-const KEEP_OPEN = new Set(["credential-in-profile", "hidden-bound-to-host", "base-url-needs-signin", "permission-flag-needs-signin"]);
+const KEEP_OPEN = new Set(["credential-in-profile", "hidden-bound-to-host", "base-url-needs-signin", "permission-flag-needs-signin", "needs-signin"]);
 
 /**
  * Runs one profile write with a key holding profiles:write, and shows the list it returns. With
@@ -282,11 +302,11 @@ export async function createProfile(deps: ProfileDeps): Promise<void> {
   await write(deps, token, (c, tok) => putProfile(c, tok, pid, profile));
 }
 
-/** The server address is read-only here: say where it can be changed and offer both ways. */
-async function addressElsewhere(deps: ProfileDeps, item: ProfileItem): Promise<void> {
+/** A read-only field: say where it can be changed and offer both ways. */
+async function changeElsewhere(deps: ProfileDeps, item: ProfileItem): Promise<void> {
   const t = PROFILE_TEXTS;
   const buttons = deps.elsewhere ? [t.runCli, t.openWebsite] : [];
-  const choice = await vscode.window.showInformationMessage(t.addressReadOnly, ...buttons);
+  const choice = await vscode.window.showInformationMessage(t.readOnly, ...buttons);
   if (choice === t.runCli) {
     await deps.elsewhere?.cli(item.id);
   } else if (choice === t.openWebsite) {
@@ -306,10 +326,10 @@ export async function editProfile(deps: ProfileDeps, item: ProfileItem | undefin
   const name = profileName(item.id, item.profile);
   const hiddenOnServer = hiddenCount(item.profile);
   const picked = await vscode.window.showQuickPick(
-    FIELD_ORDER.map((field) => ({
+    [...EDITABLE, ...READ_ONLY].map((field) => ({
       label: t.fields[field],
       description: shownText(item.profile, field) || (field === "base_url" ? t.cliDefaultAddress : NOT_SET),
-      detail: field === "base_url" ? t.readOnlyHere : undefined,
+      detail: isEditable(field) ? undefined : t.readOnlyHere,
       field,
     })),
     { title: t.editTitle(name), placeHolder: hiddenOnServer ? `${t.pickField}. ${HIDDEN_FIELDS(hiddenOnServer)}` : t.pickField },
@@ -317,8 +337,8 @@ export async function editProfile(deps: ProfileDeps, item: ProfileItem | undefin
   if (!picked) {
     return;
   }
-  if (picked.field === "base_url") {
-    await addressElsewhere(deps, item);
+  if (!isEditable(picked.field)) {
+    await changeElsewhere(deps, item);
     return;
   }
   const field: EditableField = picked.field;

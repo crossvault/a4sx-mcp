@@ -367,7 +367,7 @@ describe("sign-in scopes and older servers", () => {
 
 const profiles = {
   profiles: {
-    work: { name: "Work", model: "model-a", base_url: "https://proxy.example.com/v1", harness: "claude-code", flags: ["--verbose"], headers: { "X-Team": "blue" } },
+    work: { name: "Work", model: "model-a", base_url: "https://proxy.example.com", harness: "claude-code", flags: ["--verbose"], headers: { "X-Team": "blue" } },
     home: { model: "model-b" },
     lab: { name: "Lab", base_url: "http://localhost:8080" },
   },
@@ -383,7 +383,7 @@ describe("Launch profiles view", () => {
     assert.deepStrictEqual(items.map((i) => [i.label, i.description, i.contextValue]), [
       ["home", "default · model-b", "a4sx.profile.default"],
       ["Lab", "http://localhost:8080", "a4sx.profile"],
-      ["Work", "model-a · https://proxy.example.com/v1", "a4sx.profile"],
+      ["Work", "model-a · https://proxy.example.com", "a4sx.profile"],
     ]);
     assert.ok(!JSON.stringify(items.map((i) => [i.label, i.description, i.tooltip])).includes("blue"), "header values are not shown");
     assert.strictEqual(bearer(net.seen[0]), `Bearer ${TOKEN}`);
@@ -394,7 +394,8 @@ describe("Launch profiles view", () => {
   });
 
   it("addresses are shown without user name, password or query", () => {
-    assert.strictEqual(displayAddress("https://u:p@proxy.example.com/v1?key=1#x"), "https://proxy.example.com/v1");
+    assert.strictEqual(displayAddress("https://u:p@proxy.example.com/v1?key=1#x"), "https://proxy.example.com");
+    assert.strictEqual(displayAddress("http://localhost:8080/anthropic"), "http://localhost:8080", "scheme://host[:port] only");
     assert.strictEqual(displayAddress("https://proxy.example.com/"), "https://proxy.example.com");
     assert.strictEqual(displayAddress(""), undefined);
   });
@@ -422,8 +423,12 @@ describe("Launch profile actions", () => {
     assert.deepStrictEqual(logins, [{ scopes: [...ALL, "profiles:write"], fallback: false, adding: "profiles:write" }]);
     assert.strictEqual(storedKey(ctx).token, NEW_TOKEN);
     assert.deepStrictEqual(calls.quickPicks[0].items.map((i: any) => [i.label, i.description]), [
-      ["Name", "Work"], ["Model", "model-a"], ["Server address", "https://proxy.example.com/v1"], ["Harness", "claude-code"], ["Flags", "--verbose"],
+      ["Name", "Work"], ["Model", "model-a"], ["Flags", "--verbose"],
+      ["Server address", "https://proxy.example.com"], ["Harness", "claude-code"], ["Router", "not set"], ["Headers", "1 header"],
     ]);
+    assert.deepStrictEqual(calls.quickPicks[0].items.map((i: any) => i.detail),
+      [undefined, undefined, undefined, PROFILE_TEXTS.readOnlyHere, PROFILE_TEXTS.readOnlyHere, PROFILE_TEXTS.readOnlyHere, PROFILE_TEXTS.readOnlyHere]);
+    assert.ok(!JSON.stringify(calls.quickPicks[0].items).includes("blue"), "header values are never shown");
     const put = net.seen.find((r) => r.method === "PUT")!;
     assert.strictEqual(bearer(put), `Bearer ${NEW_TOKEN}`);
     assert.deepStrictEqual(put.body, { ...profiles.profiles.work, model: "model-c" }, "fields it doesn't edit (headers too) are sent back unchanged");
@@ -451,7 +456,7 @@ describe("Launch profile actions", () => {
     assert.strictEqual(calls.modals.length, 0, "already the default: nothing to do");
     calls.modalChoices.push(PROFILE_TEXTS.makeDefault);
     await calls.commands.get(ext.CMD_SET_DEFAULT_PROFILE)!(work);
-    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmDefault("Work", "https://proxy.example.com/v1")]);
+    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmDefault("Work", "https://proxy.example.com")]);
     assert.strictEqual(net.seen.filter((r) => r.method === "POST" && r.url.endsWith("/library/profiles/work/default")).length, 1);
     const items = (await sb.profiles.getChildren()) as ProfileItem[];
     assert.strictEqual(items[0].id, "work", "the list the server returned is shown");
@@ -470,7 +475,7 @@ describe("Launch profile actions", () => {
     await calls.commands.get(ext.CMD_DELETE_PROFILE)!(home);
     assert.deepStrictEqual(calls.modals.map((m) => [m.message, m.items]), [
       [PROFILE_TEXTS.confirmDelete("Lab"), [PROFILE_TEXTS.delete]],
-      [PROFILE_TEXTS.confirmDeleteDefault("home", "Work", "https://proxy.example.com/v1"), [PROFILE_TEXTS.delete]],
+      [PROFILE_TEXTS.confirmDeleteDefault("home", "Work", "https://proxy.example.com"), [PROFILE_TEXTS.delete]],
     ]);
     assert.deepStrictEqual(net.seen.filter((r) => r.method === "DELETE").map((r) => new URL(r.url).pathname), ["/library/profiles/home"]);
   });
@@ -521,7 +526,7 @@ describe("Resume in terminal: profile pick", () => {
     assert.deepStrictEqual(calls.quickPicks[0].items.map((i: any) => [i.label, i.description, i.detail]), [
       ["home", "default · model-b", PROFILE_TEXTS.cliDefaultAddress],
       ["Lab", "lab", "http://localhost:8080"],
-      ["Work", "work · model-a", "https://proxy.example.com/v1"],
+      ["Work", "work · model-a", "https://proxy.example.com"],
     ]);
     assert.deepStrictEqual(calls.terminals[0].options, {
       name: ext.RESUME_TERMINAL_NAME, shellPath: "/usr/local/bin/a4sx", shellArgs: ["launch", "--a4sx-session=my-base", "--profile=work"],
@@ -652,12 +657,12 @@ describe("review follow-ups", () => {
     const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
     assert.ok(String(work.tooltip).includes("Flags: --verbose --api-key •••• --token=•••• ••••"));
     noSecret(String(work.tooltip));
-    calls.pickQueue.push(4, 4);   // Flags, twice
+    calls.pickQueue.push(2, 2);   // Flags, twice
     calls.inputQueue.push("--verbose", "--verbose --debug");
     await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
     assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 0, "nothing typed: nothing sent");
     await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
-    const flagsItem = calls.quickPicks[0].items[4];
+    const flagsItem = calls.quickPicks[0].items[2];
     assert.strictEqual(flagsItem.description, "--verbose --api-key •••• --token=•••• ••••");
     for (const box of calls.inputs) {
       assert.strictEqual(box.value, "--verbose", "only the flags without a key are prefilled");
@@ -796,7 +801,7 @@ describe("server-hidden profile values (hidden_fields, credential_in_profile)", 
       ],
     }, [...ALL, "profiles:write"]);
     const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
-    calls.nextPick = 4;
+    calls.nextPick = 2;
     calls.inputQueue.push(`--verbose ${SUBMITTED}`, "--verbose --debug");
     await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
     assert.strictEqual(calls.inputs.length, 2, "the edit stays open");
@@ -829,7 +834,7 @@ describe("server-hidden profile values (hidden_fields, credential_in_profile)", 
 describe("server address is read-only; permission-loosening flags (409s)", () => {
   beforeEach(resetCalls);
 
-  const withAddress = { profiles: { work: { name: "Work", base_url: "https://proxy.example.com/v1", flags: ["--verbose", "--dangerously-skip-permissions"] } }, default: "work" };
+  const withAddress = { profiles: { work: { name: "Work", base_url: "https://proxy.example.com", flags: ["--verbose", "--dangerously-skip-permissions"] } }, default: "work" };
 
   it("Edit shows the address read-only and offers the CLI (shell-free terminal) or the website; nothing is sent", async () => {
     const { sb, net } = await activateWith({ "GET /library/profiles": [{ status: 200, body: withAddress }] }, [...ALL, "profiles:write"]);
@@ -840,17 +845,17 @@ describe("server address is read-only; permission-loosening flags (409s)", () =>
     const answers = [PROFILE_TEXTS.openWebsite, PROFILE_TEXTS.runCli];
     fake.window.showInformationMessage = async (message: string, ...items: string[]) => { asked.push({ message, items }); return answers.shift(); };
     try {
-      calls.pickQueue.push(2, 2);
+      calls.pickQueue.push(3, 3);
       await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
       await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
     } finally {
       fake.window.showInformationMessage = savedInfo;
     }
-    const pickItem = calls.quickPicks[0].items[2];
-    assert.deepStrictEqual([pickItem.label, pickItem.description, pickItem.detail], ["Server address", "https://proxy.example.com/v1", PROFILE_TEXTS.readOnlyHere]);
+    const pickItem = calls.quickPicks[0].items[3];
+    assert.deepStrictEqual([pickItem.label, pickItem.description, pickItem.detail], ["Server address", "https://proxy.example.com", PROFILE_TEXTS.readOnlyHere]);
     assert.deepStrictEqual(asked.map((a) => [a.message, a.items]), [
-      [PROFILE_TEXTS.addressReadOnly, [PROFILE_TEXTS.runCli, PROFILE_TEXTS.openWebsite]],
-      [PROFILE_TEXTS.addressReadOnly, [PROFILE_TEXTS.runCli, PROFILE_TEXTS.openWebsite]],
+      [PROFILE_TEXTS.readOnly, [PROFILE_TEXTS.runCli, PROFILE_TEXTS.openWebsite]],
+      [PROFILE_TEXTS.readOnly, [PROFILE_TEXTS.runCli, PROFILE_TEXTS.openWebsite]],
     ]);
     assert.deepStrictEqual(calls.opened, [`${BASE}/account/workspace#profiles`]);
     assert.strictEqual(calls.inputs.length, 0, "no box for the address");
@@ -881,7 +886,7 @@ describe("server address is read-only; permission-loosening flags (409s)", () =>
       "PUT /library/profiles/work": [{ status: 200, body: withAddress }],
     }, [...ALL, "profiles:write"]);
     const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
-    calls.pickQueue.push(4, 4);
+    calls.pickQueue.push(2, 2);
     calls.inputQueue.push("--verbose --dangerously-skip-permissions --permission-mode=bypassPermissions", "--verbose");
     await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
     assert.strictEqual(calls.inputs[0].validateInput("--verbose --dangerously-skip-permissions --permission-mode bypassPermissions"), PROFILE_TEXTS.permissionFlag);
@@ -904,7 +909,7 @@ describe("server address is read-only; permission-loosening flags (409s)", () =>
         "PUT /library/profiles/work": [{ status: 409, body: { error: { code, message: `${message}\nmore` } } }],
       }, [...ALL, "profiles:write"]);
       const [work] = (await sb.profiles.getChildren()) as ProfileItem[];
-      calls.nextPick = 4;
+      calls.nextPick = 2;
       calls.inputQueue.push("--verbose --debug", undefined);
       await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
       assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 1);
@@ -920,4 +925,72 @@ describe("server address is read-only; permission-loosening flags (409s)", () =>
       assert.strictEqual(api.serverLine({ error: { code } }, [], fallback), fallback);
     }
   });
+});
+
+describe("read-only fields beyond the address; set-default and delete refusals", () => {
+  beforeEach(resetCalls);
+
+  const body = { profiles: {
+    home: { name: "Home", model: "m" },
+    work: { name: "Work", base_url: "https://proxy.example.com", harness: "codex", use_router: true, router_tenant: "acme", headers: { "X-Team": "blue", "X-Org": "red" } },
+  }, default: "home" };
+
+  it("harness, router, headers and address are read-only: each offers the CLI or the website, and nothing is sent", async () => {
+    const { sb, net } = await activateWith({ "GET /library/profiles": [{ status: 200, body }] }, [...ALL, "profiles:write"]);
+    const work = ((await sb.profiles.getChildren()) as ProfileItem[]).find((i) => i.id === "work")!;
+    const fake = require("vscode");
+    const savedInfo = fake.window.showInformationMessage;
+    const asked: string[] = [];
+    fake.window.showInformationMessage = async (message: string, ...items: string[]) => { asked.push(`${message}|${items.join(",")}`); return undefined; };
+    try {
+      calls.pickQueue.push(3, 4, 5, 6);
+      for (let i = 0; i < 4; i++) {
+        await calls.commands.get(ext.CMD_EDIT_PROFILE)!(work);
+      }
+    } finally {
+      fake.window.showInformationMessage = savedInfo;
+    }
+    const items = calls.quickPicks[0].items;
+    assert.deepStrictEqual(items.map((i: any) => i.field), ["name", "model", "flags", "base_url", "harness", "router", "headers"]);
+    assert.deepStrictEqual(items.slice(3).map((i: any) => i.description), ["https://proxy.example.com", "codex", "on · acme", "2 headers"]);
+    assert.ok(!JSON.stringify(items).match(/blue|red|X-Team/), "header names and values are never shown");
+    assert.deepStrictEqual(asked, Array(4).fill(`${PROFILE_TEXTS.readOnly}|${PROFILE_TEXTS.runCli},${PROFILE_TEXTS.openWebsite}`));
+    assert.strictEqual(PROFILE_TEXTS.readOnly, "This setting can only be changed with the a4sx CLI or on the website.");
+    assert.strictEqual(calls.inputs.length, 0);
+    assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 0);
+  });
+
+  it("a 409 needs_signin on an edit keeps the edit open with the server's line", async () => {
+    const { sb } = await activateWith({
+      "GET /library/profiles": [{ status: 200, body }],
+      "PUT /library/profiles/home": [{ status: 409, body: { error: { code: "needs_signin", message: "Use the a4sx CLI or the website to change this.", details: { field: "harness" } } } }],
+    }, [...ALL, "profiles:write"]);
+    const home = ((await sb.profiles.getChildren()) as ProfileItem[])[0];
+    calls.nextPick = 1;
+    calls.inputQueue.push("m2", undefined);
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(home);
+    assert.strictEqual(calls.inputs[1].prompt, "Use the a4sx CLI or the website to change this.");
+    assert.strictEqual(calls.inputs[1].value, "m");
+  });
+
+  for (const [what, cmd, route] of [
+    ["set as default", ext.CMD_SET_DEFAULT_PROFILE, "POST /library/profiles/work/default"],
+    ["delete the default", ext.CMD_DELETE_PROFILE, "DELETE /library/profiles/home"],
+  ] as const) {
+    for (const code of ["permission_flag_needs_signin", "needs_signin"]) {
+      it(`${what}: a 409 ${code} shows the server's line and changes nothing here`, async () => {
+        const { sb, net } = await activateWith({
+          "GET /library/profiles": [{ status: 200, body }],
+          [route]: [{ status: 409, body: { error: { code, message: "The new default turns off permission prompts. Use the a4sx CLI or the website.\nmore" } } }],
+        }, [...ALL, "profiles:write"]);
+        const items = (await sb.profiles.getChildren()) as ProfileItem[];
+        const target = what === "set as default" ? items.find((i) => i.id === "work")! : items.find((i) => i.id === "home")!;
+        calls.modalChoices.push(what === "set as default" ? PROFILE_TEXTS.makeDefault : PROFILE_TEXTS.delete);
+        await calls.commands.get(cmd)!(target);
+        assert.strictEqual(net.seen.filter((r) => `${r.method} ${new URL(r.url).pathname}` === route).length, 1);
+        assert.deepStrictEqual(calls.errors.map((e) => e.message), ["The new default turns off permission prompts. Use the a4sx CLI or the website."]);
+        assert.deepStrictEqual(sb.profiles.data, { profiles: Object.entries(body.profiles), default: "home" }, "the local list is unchanged");
+      });
+    }
+  }
 });
