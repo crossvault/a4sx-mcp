@@ -7,14 +7,14 @@ import * as assert from "assert";
 import { calls, fakeSecrets, resetCalls } from "../fakeVscode";
 import * as ext from "../../extension";
 import * as api from "../../api";
-import { deviceLogin, LoginRequest, SECRET_KEY, STEP_UP_TITLE } from "../../auth";
+import { deviceLogin, LoginCancelled, LoginRequest, SECRET_KEY, STEP_UP_TITLE } from "../../auth";
 import {
   buildFolderTree, FILTER_MESSAGE, FolderItem, matchesFilter, NO_MATCH, normalizeFolder, SessionItem,
 } from "../../sessionsView";
 import { FOLDER_TEXTS } from "../../folderCommands";
 import { ALLOW_SCOPE_ITEM, displayAddress, NO_PROFILES, ProfileItem } from "../../profilesView";
 import { PROFILE_TEXTS, validateBaseUrl, validateFlags, validateProfileId, withField } from "../../profileCommands";
-import { STEP_UP } from "../../stepUp";
+import { offerStepUp, STEP_UP } from "../../stepUp";
 import type { CliLookup } from "../../cli";
 
 const TOKEN = "lib_tok_OLD_secret_111";
@@ -70,6 +70,9 @@ async function activateWith(routes: Record<string, Answer[]>, scopes: string[] |
 
 const storedKey = (ctx: { secrets: { store_: Map<string, string> } }) => JSON.parse(ctx.secrets.store_.get(SECRET_KEY) ?? "null");
 const bearer = (r: Req) => r.headers.Authorization;
+const isMeta = (r: Req) => r.method === "POST" && new URL(r.url).pathname.endsWith("/meta");
+const isRevoke = (r: Req) => r.method === "POST" && new URL(r.url).pathname === "/library/keys/self/revoke";
+const REVOKED = { status: 200, body: { id: "tok_1", status: "revoked" } };
 
 function noTokenAnywhere(): void {
   const shown = [...calls.errors.map((e) => e.message), ...calls.infos, ...calls.warnings, ...calls.modals.map((m) => m.message),
@@ -135,7 +138,7 @@ describe("folder tree", () => {
     assert.strictEqual(calls.context["a4sx.foldersSupported"], false);
     await calls.commands.get(ext.CMD_MOVE_TO_FOLDER)!(top[0]);
     assert.deepStrictEqual(calls.errors.map((e) => e.message), [api.MESSAGES.foldersNotSupported]);
-    assert.strictEqual(net.seen.filter((r) => r.method === "POST").length, 0);
+    assert.strictEqual(net.seen.filter(isMeta).length, 0);
   });
 
   it("folder names follow the server's rule", () => {
@@ -209,7 +212,7 @@ describe("Move to folder / Remove from folder", () => {
     calls.nextPick = 1;   // ["home", "work", "work/a4sx", "New folder…"]
     await calls.commands.get(ext.CMD_MOVE_TO_FOLDER)!(top[2]);
     assert.deepStrictEqual(calls.quickPicks[0].items.map((i: any) => i.label), ["home", "work", "work/a4sx", FOLDER_TEXTS.newFolder]);
-    const post = net.seen.find((r) => r.method === "POST")!;
+    const post = net.seen.find(isMeta)!;
     assert.deepStrictEqual(post.body, { folder: "work" });
     assert.strictEqual(bearer(post), `Bearer ${TOKEN}`);
     assert.strictEqual(sb.sessions.rows, undefined, "the list is fetched again");
@@ -228,7 +231,7 @@ describe("Move to folder / Remove from folder", () => {
     assert.strictEqual(calls.inputs[0].validateInput("ok/fine"), null);
     await sb.sessions.getChildren();
     await calls.commands.get(ext.CMD_REMOVE_FROM_FOLDER)!(filed);
-    assert.deepStrictEqual(net.seen.filter((r) => r.method === "POST").map((r) => r.body), [{ folder: "clients/acme" }, { folder: null }]);
+    assert.deepStrictEqual(net.seen.filter(isMeta).map((r) => r.body), [{ folder: "clients/acme" }, { folder: null }]);
   });
 
   it("without library:organize: a modal names the permission, the new sign-in asks for it, the new key replaces the old", async () => {
@@ -242,7 +245,7 @@ describe("Move to folder / Remove from folder", () => {
     assert.ok(calls.modals[0].message.includes("library:organize"));
     assert.deepStrictEqual(logins, [{ scopes: ["library:read", "profiles:read", "library:organize"], fallback: false, adding: "library:organize" }]);
     assert.strictEqual(storedKey(ctx).token, NEW_TOKEN);
-    const post = net.seen.find((r) => r.method === "POST")!;
+    const post = net.seen.find(isMeta)!;
     assert.strictEqual(bearer(post), `Bearer ${NEW_TOKEN}`);
     noTokenAnywhere();
   });
@@ -254,7 +257,7 @@ describe("Move to folder / Remove from folder", () => {
     await calls.commands.get(ext.CMD_MOVE_TO_FOLDER)!(top[2]);
     assert.strictEqual(logins.length, 0);
     assert.strictEqual(storedKey(ctx).token, TOKEN);
-    assert.strictEqual(net.seen.filter((r) => r.method === "POST").length, 0);
+    assert.strictEqual(net.seen.filter(isMeta).length, 0);
     assert.strictEqual(calls.quickPicks.length, 0);
   });
 
@@ -264,7 +267,7 @@ describe("Move to folder / Remove from folder", () => {
     calls.nextPick = 0;
     calls.modalChoices.push(STEP_UP.signIn);
     await calls.commands.get(ext.CMD_MOVE_TO_FOLDER)!(top[2]);
-    const posts = net.seen.filter((r) => r.method === "POST");
+    const posts = net.seen.filter(isMeta);
     assert.deepStrictEqual(posts.map(bearer), [`Bearer ${TOKEN}`, `Bearer ${NEW_TOKEN}`]);
     assert.strictEqual(calls.errors.length, 0);
   });
@@ -491,7 +494,7 @@ describe("Launch profile actions", () => {
     calls.modalChoices.push(PROFILE_TEXTS.makeDefault);
     await calls.commands.get(ext.CMD_SET_DEFAULT_PROFILE)!(work);
     assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmDefault("Work", "https://proxy.example.com/v1")]);
-    assert.strictEqual(net.seen.filter((r) => r.method === "POST").length, 1);
+    assert.strictEqual(net.seen.filter((r) => r.method === "POST" && r.url.endsWith("/library/profiles/work/default")).length, 1);
     const items = (await sb.profiles.getChildren()) as ProfileItem[];
     assert.strictEqual(items[0].id, "work", "the list the server returned is shown");
     assert.strictEqual(net.seen.filter((r) => r.method === "GET").length, 1);
@@ -597,5 +600,80 @@ describe("Resume in terminal: profile pick", () => {
     });
     assert.strictEqual(calls.quickPicks.length, 0);
     assert.strictEqual(net.seen.length, 0);
+  });
+});
+
+describe("revoking the key: sign-out and step-up", () => {
+  beforeEach(resetCalls);
+
+  it("sign-out revokes the stored key on the server, then deletes it here", async () => {
+    const { ctx, net } = await activateWith({ "POST /library/keys/self/revoke": [REVOKED] });
+    const order: string[] = [];
+    const del = ctx.secrets.delete.bind(ctx.secrets);
+    ctx.secrets.delete = async (k: string) => { order.push(net.seen.some(isRevoke) ? "delete-after-revoke" : "delete-first"); return del(k); };
+    await calls.commands.get(ext.CMD_SIGN_OUT)!();
+    const rev = net.seen.filter(isRevoke);
+    assert.strictEqual(rev.length, 1);
+    assert.strictEqual(bearer(rev[0]), `Bearer ${TOKEN}`);
+    assert.strictEqual(rev[0].body, undefined, "no body");
+    assert.deepStrictEqual(order, ["delete-after-revoke"]);
+    assert.strictEqual(ctx.secrets.store_.size, 0);
+    assert.deepStrictEqual(calls.infos, [ext.SIGNED_OUT_REVOKED_INFO]);
+    noTokenAnywhere();
+  });
+
+  it("a network failure, an error answer, or an older server (404/405) still deletes the key here", async () => {
+    for (const answer of [new Error("offline"), { status: 500 }, { status: 404, body: { error: { code: "not_found" } } }, { status: 405 }] as Answer[]) {
+      resetCalls();
+      const { ctx, net } = await activateWith({ "POST /library/keys/self/revoke": [answer] });
+      await calls.commands.get(ext.CMD_SIGN_OUT)!();
+      assert.strictEqual(net.seen.filter(isRevoke).length, 1);
+      assert.strictEqual(ctx.secrets.store_.size, 0);
+      assert.deepStrictEqual(calls.infos, [ext.SIGNED_OUT_INFO]);
+      assert.strictEqual(calls.errors.length, 0);
+    }
+  });
+
+  it("the revoke call uses a short timeout", async () => {
+    const seenSignals: AbortSignal[] = [];
+    const c: api.Client = { base: BASE, userAgent: "t", fetch: async (_u, init) => { seenSignals.push(init!.signal!); return { status: 200, json: async () => ({ status: "revoked" }) }; } };
+    assert.strictEqual(await api.revokeKey(c, TOKEN), "revoked");
+    assert.ok(api.REVOKE_TIMEOUT_MS <= 5000);
+    assert.strictEqual(seenSignals.length, 1);
+  });
+
+  it("a step-up revokes only the OLD key, and only after the new one is stored", async () => {
+    const { ctx, net, sb } = await activateWith({ "POST /library/keys/self/revoke": [REVOKED] }, ["library:read"]);
+    let storedAtRevoke: string | undefined;
+    const fetch = ext.runtime.fetch;
+    ext.runtime.fetch = async (url, init) => {
+      if (url.endsWith("/library/keys/self/revoke")) {
+        storedAtRevoke = storedKey(ctx).token;
+      }
+      return fetch(url, init);
+    };
+    const token = await sb.auth.stepUp("profiles:read");
+    assert.strictEqual(token, NEW_TOKEN);
+    const rev = net.seen.filter(isRevoke);
+    assert.deepStrictEqual(rev.map(bearer), [`Bearer ${TOKEN}`]);
+    assert.strictEqual(storedAtRevoke, NEW_TOKEN, "the new key was already stored");
+    assert.strictEqual(storedKey(ctx).token, NEW_TOKEN);
+    noTokenAnywhere();
+  });
+
+  it("a failed revoke after a step-up keeps the new key; a cancelled or failed step-up revokes nothing", async () => {
+    const { ctx, net, sb } = await activateWith({ "POST /library/keys/self/revoke": [new Error("offline")] }, ["library:read"]);
+    assert.strictEqual(await sb.auth.stepUp("profiles:read"), NEW_TOKEN);
+    assert.strictEqual(storedKey(ctx).token, NEW_TOKEN);
+    for (const failure of [new LoginCancelled(), new api.ApiError("bad-scopes", api.MESSAGES.badResponse, 400)]) {
+      resetCalls();
+      const run = await activateWith({ "POST /library/keys/self/revoke": [REVOKED] }, ["library:read"]);
+      ext.runtime.login = async () => { throw failure; };
+      calls.modalChoices.push(STEP_UP.signIn);
+      assert.strictEqual(await offerStepUp(run.sb.auth, "library:organize"), undefined);
+      assert.strictEqual(run.net.seen.filter(isRevoke).length, 0);
+      assert.strictEqual(storedKey(run.ctx).token, TOKEN, "the old key stays");
+    }
+    assert.ok(net.seen.filter(isRevoke).length === 1);
   });
 });

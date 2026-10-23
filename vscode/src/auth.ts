@@ -4,9 +4,10 @@
 // library token. The token lives only in VS Code's secret storage, bound to the server it was
 // issued by; it is never written to settings, logs or messages. A permission the key lacks
 // (`profiles:write`, say) is added with a new browser sign-in that asks for it; the old key is used
-// until the new one arrives.
+// until the new one is stored, then revoked (best-effort). Sign-out revokes the key (best-effort,
+// short timeout) and always deletes it here, whatever the server answers.
 import * as vscode from "vscode";
-import { ApiError, Client, LEGACY_LOGIN_SCOPES, LOGIN_SCOPES, MESSAGES, pollLogin, startLogin } from "./api";
+import { ApiError, Client, LEGACY_LOGIN_SCOPES, LOGIN_SCOPES, MESSAGES, pollLogin, revokeKey, RevokeResult, startLogin } from "./api";
 
 export const AUTH_ID = "a4sx";
 export const AUTH_LABEL = "a4sx";
@@ -160,11 +161,34 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
     await this.secrets.store(SECRET_KEY, JSON.stringify(stored));
     const session = this.toSession(stored);
     this.changed.fire({ added: [session], removed: old ? [this.toSession(old)] : [], changed: [] });
+    // A step-up replaced the key: the old one is no longer needed. Only after the new one is stored.
+    if (req.adding && old && old.token !== stored.token && old.server === stored.server) {
+      await this.revoke(old);
+    }
     return session;
   }
 
+  private async revoke(s: Stored): Promise<RevokeResult> {
+    let client: Client;
+    try {
+      client = this.client();
+    } catch {
+      return "failed";
+    }
+    // Only the server that issued the key gets it.
+    return client.base === s.server ? revokeKey(client, s.token) : "failed";
+  }
+
   async removeSession(): Promise<void> {
+    await this.signOut();
+  }
+
+  /** Sign-out: revokes the key on the server (best-effort), then deletes it here whatever the result. */
+  async signOut(): Promise<RevokeResult | undefined> {
+    const old = await this.read();
+    const result = old ? await this.revoke(old) : undefined;
     await this.clear();
+    return result;
   }
 
   /** Forgets the token on this machine (sign-out, or a 401 from the server). */

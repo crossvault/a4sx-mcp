@@ -68,7 +68,7 @@ export interface Client {
   userAgent: string;
 }
 
-async function call(c: Client, path: string, opts: { method?: string; token?: string; body?: unknown } = {}): Promise<{ status: number; data: any }> {
+async function call(c: Client, path: string, opts: { method?: string; token?: string; body?: unknown; timeoutMs?: number } = {}): Promise<{ status: number; data: any }> {
   const headers: Record<string, string> = { Accept: "application/json", "User-Agent": c.userAgent };
   if (opts.token) {
     headers.Authorization = `Bearer ${opts.token}`;
@@ -82,7 +82,7 @@ async function call(c: Client, path: string, opts: { method?: string; token?: st
       method: opts.method ?? "GET",
       headers,
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(opts.timeoutMs ?? TIMEOUT_MS),
     });
   } catch {
     throw new ApiError("unreachable", MESSAGES.unreachable);
@@ -364,4 +364,25 @@ export async function setSessionFolder(c: Client, token: string, id: string, fol
     throw new ApiError("not-found", MESSAGES.sessionGone, status);
   }
   scopedFail(status, data, MESSAGES.foldersNotSupported);
+}
+
+/** Sign-out and step-up never wait longer than this for the revoke call. */
+export const REVOKE_TIMEOUT_MS = 5_000;
+
+export type RevokeResult = "revoked" | "unsupported" | "failed";
+
+/**
+ * Revokes the calling library key (`POST /library/keys/self/revoke`), best-effort: never throws.
+ * "unsupported" is a server without the route (404/405); "failed" is any other answer or no answer.
+ */
+export async function revokeKey(c: Client, token: string): Promise<RevokeResult> {
+  try {
+    const { status, data } = await call(c, "/library/keys/self/revoke", { method: "POST", token, timeoutMs: REVOKE_TIMEOUT_MS });
+    if (status === 200 && data?.status === "revoked") {
+      return "revoked";
+    }
+    return status === 404 || status === 405 ? "unsupported" : "failed";
+  } catch {
+    return "failed";
+  }
 }

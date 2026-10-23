@@ -39,13 +39,13 @@ A launch profile says how `a4sx launch` starts a session: the model, the server 
 - **Set as default** and changing a server address ask you to confirm first. The message names the address that launches will send their requests to.
 - **Delete** asks you to confirm first.
 
-The first time you change a profile, the extension asks for one more permission (`profiles:write`). Your browser opens a new sign-in that names it. The extension keeps using your current key until the new one arrives, and then replaces it.
+The first time you change a profile, the extension asks for one more permission (`profiles:write`). Your browser opens a new sign-in that names it. The extension keeps using your current key until the new one arrives. Then it replaces the old key and asks the a4sx server to revoke it.
 
 On an older a4sx server, the view shows "Launch profiles needs a newer a4sx server." and the profile actions are hidden.
 
 ## Signing out
 
-To sign out, run **a4sx: Sign out**. This removes the key from VS Code. The key stays valid until it expires or you revoke it on session-exchange.com under Account › Agent keys.
+To sign out, run **a4sx: Sign out**. The extension asks the a4sx server to revoke the key, then removes the key from VS Code. If the server can't be reached, the key is still removed from VS Code, and it stays valid until it expires or you revoke it on session-exchange.com under Account › Agent keys.
 
 ## Requirements
 

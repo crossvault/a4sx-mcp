@@ -218,10 +218,11 @@ export async function signIn(auth: A4sxAuthProvider): Promise<void> {
 
 export const SIGNED_OUT_INFO =
   "Signed out of a4sx on this computer. The key stays valid until it expires or you revoke it on the a4sx website under Account › Agent keys.";
+export const SIGNED_OUT_REVOKED_INFO = "Signed out of a4sx. The key was revoked.";
 
 export async function signOut(auth: A4sxAuthProvider): Promise<void> {
-  await auth.clear();
-  await vscode.window.showInformationMessage(SIGNED_OUT_INFO);
+  const result = await auth.signOut();
+  await vscode.window.showInformationMessage(result === "revoked" ? SIGNED_OUT_REVOKED_INFO : SIGNED_OUT_INFO);
 }
 
 /**
