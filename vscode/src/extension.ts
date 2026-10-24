@@ -16,7 +16,7 @@ import { ProfileItem, ProfilesProvider, ProfilesViewState } from "./profilesView
 import { launchName, SessionItem, SessionsProvider, ViewState } from "./sessionsView";
 import {
   CLAUDE_INSTALL_URL, offerCliInstallOnce, offerProfilesStepUp, openClaudeTerminal, PendingAction, pickFolderWhenNoneOpen, ResumeFolder,
-  RESUME_TEXTS, seedWithProgress, State, storePending, takePending,
+  RESUME_TEXTS, sameFolder, seedWithProgress, State, storePending, takePending,
 } from "./resume";
 import { errorText, offerStepUp, STEP_UP, stepUpAllowed } from "./stepUp";
 
@@ -501,7 +501,7 @@ export async function completePendingResume(state: State, claudeLookup: () => st
     await reportMissingClaude();
     return;
   }
-  const folder = folders.find((f) => f.uri.toString() === p.folderUri);
+  const folder = folders.find((f) => sameFolder(f.uri, p.folderUri));
   if (folder) {
     openClaudeTerminal(claude, p.sessionId, folder.uri, RESUME_TERMINAL_NAME);
     void offerCliInstallOnce(state, installCommand, INSTALL_URL);

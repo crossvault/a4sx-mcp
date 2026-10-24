@@ -13,7 +13,8 @@ import * as api from "../../api";
 import * as cr from "../../claudeResume";
 import { LoginRequest, SECRET_KEY } from "../../auth";
 import {
-  CLAUDE_INSTALL_URL, CLI_HINT_KEY, offerProfilesStepUp, PENDING_KEY, RESUME_TEXTS, STEP_UP_SNOOZE_KEY, STEP_UP_SNOOZE_MS, takePending, validPending,
+  CLAUDE_INSTALL_URL, CLI_HINT_KEY, offerProfilesStepUp, PENDING_KEY, resetPromptForTests, RESUME_TEXTS, sameFolder, STEP_UP_SNOOZE_KEY,
+  STEP_UP_SNOOZE_MS, takePending, validPending,
 } from "../../resume";
 import { SessionItem } from "../../sessionsView";
 import { STEP_UP } from "../../stepUp";
@@ -76,6 +77,7 @@ function rmTree(dir: string): void {
 
 beforeEach(() => {
   resetCalls();
+  resetPromptForTests();
   home = fs.mkdtempSync(path.join(os.tmpdir(), "a4sx-home-"));
   process.env.HOME = home;
   process.env.CLAUDE_CONFIG_DIR = path.join(home, "claude-cfg");
@@ -187,6 +189,17 @@ describe("Resume in Claude Code: native, no CLI", () => {
     assert.deepStrictEqual(calls.opened, []);
   });
 
+  it("a timeout or a dropped connection while the body downloads is the network error, not 'no transcript'", async () => {
+    calls.workspaceFolders = [folder("proj", "/w/proj")];
+    await activateWith({});
+    for (const err of [Object.assign(new TypeError("terminated"), {}), Object.assign(new Error("The operation was aborted"), { name: "AbortError" })]) {
+      ext.runtime.fetch = async () => ({ status: 200, json: async () => { throw err; } });
+      await ext.resumeInClaude(item);
+    }
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [api.MESSAGES.unreachable, api.MESSAGES.unreachable]);
+    assert.deepStrictEqual(seededFiles("/w/proj"), []);
+  });
+
   it("multi-root asks which folder; virtual folders only: says a folder on disk is needed", async () => {
     calls.workspaceFolders = [folder("a", "/w/a"), folder("b", "/w/b")];
     await activateWith({ "GET /library/fetch": [fetchBody()] });
@@ -290,6 +303,13 @@ describe("no folder open: pick one, reopen on it, finish there", () => {
     }
     assert.strictEqual(validPending({ ...ok, folderUri: "x".repeat(5000) }), undefined);
   });
+
+  it("the folder matches across the reload when the window reports it as vscode-remote and the host stored file", () => {
+    const remote = { scheme: "vscode-remote", fsPath: "/home/dev/p", toString: () => "vscode-remote://ssh-remote%2Bbox/home/dev/p" };
+    assert.strictEqual(sameFolder(remote, "file:///home/dev/p"), true);
+    assert.strictEqual(sameFolder(remote, "file:///home/dev/other"), false);
+    assert.strictEqual(sameFolder({ scheme: "vscode-vfs", fsPath: "/home/dev/p", toString: () => "vscode-vfs://x/home/dev/p" }, "file:///home/dev/p"), false);
+  });
 });
 
 describe("Resume in terminal without the a4sx CLI", () => {
@@ -392,11 +412,39 @@ describe("the profiles:read prompt", () => {
     await offerProfilesStepUp(auth, ext.client, state, now);
     assert.strictEqual(state.data_.get(STEP_UP_SNOOZE_KEY), now + STEP_UP_SNOOZE_MS);
     const asked = net.seen.length;
+    resetPromptForTests();   // a new window
     await offerProfilesStepUp(auth, ext.client, state, now + STEP_UP_SNOOZE_MS - 1);
     assert.strictEqual(calls.infoPrompts.length, 1);
     assert.strictEqual(net.seen.length, asked, "snoozed: not even a request");
+    resetPromptForTests();
     await offerProfilesStepUp(auth, ext.client, state, now + STEP_UP_SNOOZE_MS + 1);
     assert.strictEqual(calls.infoPrompts.length, 2);
+  });
+
+  it("Esc (or leaving it in the notification centre) counts as 'Not now' for this window only", async () => {
+    const { net } = await activateWith({ "GET /library/profiles": [refusal] }, null);
+    const auth = await keyWith(["library:read"]);
+    const state = fakeMemento();
+    calls.nextInfoChoice = undefined;
+    await offerProfilesStepUp(auth, ext.client, state, 1);
+    assert.strictEqual(calls.infoPrompts.length, 1);
+    assert.strictEqual(state.data_.has(STEP_UP_SNOOZE_KEY), false, "no 7-day snooze");
+    const asked = net.seen.length;
+    for (let i = 0; i < 5; i++) {
+      await offerProfilesStepUp(auth, ext.client, state, 2 + i);   // sign-in, other triggers in the same window
+    }
+    assert.strictEqual(calls.infoPrompts.length, 1, "never twice in one window");
+    assert.strictEqual(net.seen.length, asked, "and no more requests");
+    resetPromptForTests();
+    await offerProfilesStepUp(auth, ext.client, state, 10);
+    assert.strictEqual(calls.infoPrompts.length, 2, "a new window asks again");
+  });
+
+  it("two triggers at once (activation and sign-in) show one prompt", async () => {
+    await activateWith({ "GET /library/profiles": [refusal] }, null);
+    const auth = await keyWith(["library:read"]);
+    await Promise.all([offerProfilesStepUp(auth, ext.client, fakeMemento(), 1), offerProfilesStepUp(auth, ext.client, fakeMemento(), 1)]);
+    assert.strictEqual(calls.infoPrompts.length, 1);
   });
 
   it("no prompt when the key has profiles:read, or the server doesn't offer launch profiles", async () => {
@@ -405,6 +453,7 @@ describe("the profiles:read prompt", () => {
     await offerProfilesStepUp(auth, ext.client, fakeMemento(), Date.now());
     assert.strictEqual(net.seen.length, 0);
     auth = await keyWith(["library:read"]);
+    resetPromptForTests();
     await offerProfilesStepUp(auth, ext.client, fakeMemento(), Date.now());
     assert.strictEqual(net.seen.length, 1);
     assert.strictEqual(calls.infoPrompts.length, 0, "an older server: nothing to offer");

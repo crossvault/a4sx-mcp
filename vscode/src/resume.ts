@@ -96,9 +96,9 @@ export async function seedWithProgress(client: Client, token: string, row: Sessi
         }
       };
       try {
-        const text = await fetchTranscript(client, token, row.id, abort.signal);
+        const b64 = await fetchTranscript(client, token, row.id, abort.signal);
         report(0);
-        const sessionId = await seedTranscript(text, { cwd }, { cid: row.id, version: row.version }, { signal: abort.signal, progress: report });
+        const sessionId = await seedTranscript(b64, { cwd }, { cid: row.id, version: row.version }, { signal: abort.signal, progress: report });
         return UUID.test(sessionId) ? { kind: "ok", sessionId } : { kind: "failed", message: failed };
       } catch (e) {
         if (abort.signal.aborted || (e instanceof SeedError && e.code === "cancelled") || (e instanceof ApiError && e.code === "cancelled")) {
@@ -197,7 +197,24 @@ export async function takePending(state: State, openFolders: readonly { uri: { t
   if (!p || now - p.at < 0 || now - p.at > PENDING_MAX_AGE_MS) {
     return undefined;
   }
-  return openFolders.some((f) => f.uri.toString() === p.folderUri) ? p : undefined;
+  return openFolders.some((f) => sameFolder(f.uri, p.folderUri)) ? p : undefined;
+}
+
+/**
+ * The stored folder URI and an open folder are the same: the same URI string, or the same path when the
+ * two use different schemes for it (a `file` URI on the remote host, `vscode-remote` in the window).
+ */
+export function sameFolder(open: { toString(): string; fsPath?: string; scheme?: string }, stored: string): boolean {
+  if (open.toString() === stored) {
+    return true;
+  }
+  try {
+    const s = vscode.Uri.parse(stored);
+    const schemes = new Set([open.scheme, s.scheme]);
+    return !!s.fsPath && s.fsPath === open.fsPath && [...schemes].every((x) => x === "file" || x === "vscode-remote");
+  } catch {
+    return false;
+  }
 }
 
 // --- the profiles:read prompt ---------------------------------------------------------------------
@@ -205,11 +222,23 @@ export async function takePending(state: State, openFolders: readonly { uri: { t
 export const STEP_UP_SNOOZE_KEY = "a4sx.profilesPromptSnoozedUntil";
 export const STEP_UP_SNOOZE_MS = 7 * 24 * 60 * 60_000;
 
+/** Set once this window has shown the prompt (or is showing it): never again in this window. */
+let promptedInThisWindow = false;
+
+/** For tests: a new window. */
+export function resetPromptForTests(): void {
+  promptedInThisWindow = false;
+}
+
 /**
  * After sign-in or activation: if the key lacks profiles:read and the server offers it (its 403 names
- * profiles:read), ask once. "Allow" runs the step-up sign-in; "Not now" is remembered for 7 days.
+ * profiles:read), ask. At most once per window: Esc (or leaving it in the notification centre) counts
+ * as "Not now" for this window only; "Not now" is remembered for 7 days; "Allow" runs the step-up.
  */
 export async function offerProfilesStepUp(auth: ScopedAuth, client: () => Client, state: State, now: number): Promise<void> {
+  if (promptedInThisWindow) {
+    return;
+  }
   const snoozed = state.get<number>(STEP_UP_SNOOZE_KEY);
   if (typeof snoozed === "number" && snoozed > now) {
     return;
@@ -226,6 +255,10 @@ export async function offerProfilesStepUp(auth: ScopedAuth, client: () => Client
       return;   // an older server (no launch profiles), offline, ...: nothing to offer
     }
   }
+  if (promptedInThisWindow) {
+    return;   // another call (sign-in and activation) got here first
+  }
+  promptedInThisWindow = true;
   const t = RESUME_TEXTS;
   const choice = await vscode.window.showInformationMessage(t.profilesStepUp, t.allow, t.notNow);
   if (choice === t.allow) {

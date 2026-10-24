@@ -88,26 +88,28 @@ async function call(
     headers["Content-Type"] = "application/json";
   }
   let res: { status: number; json(): Promise<unknown> };
+  const timeout = AbortSignal.timeout(opts.timeoutMs ?? TIMEOUT_MS);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
+  const lost = () => (opts.signal?.aborted ? new ApiError("cancelled", MESSAGES.unreachable) : new ApiError("unreachable", MESSAGES.unreachable));
   try {
     res = await c.fetch(`${c.base}${path}`, {
       method: opts.method ?? "GET",
       headers,
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-      signal: opts.signal
-        ? AbortSignal.any([opts.signal, AbortSignal.timeout(opts.timeoutMs ?? TIMEOUT_MS)])
-        : AbortSignal.timeout(opts.timeoutMs ?? TIMEOUT_MS),
+      signal,
     });
   } catch {
-    if (opts.signal?.aborted) {
-      throw new ApiError("cancelled", MESSAGES.unreachable);
-    }
-    throw new ApiError("unreachable", MESSAGES.unreachable);
+    throw lost();
   }
   let data: any = undefined;
   try {
     data = await res.json();
-  } catch {
-    // A body that isn't JSON is judged by its status below.
+  } catch (e) {
+    // A timeout, a cancel or a dropped connection while the body arrives is a network failure, not an
+    // answer; a body that isn't JSON is judged by its status below.
+    if (signal.aborted || (e instanceof Error && /terminated|aborted|ECONNRESET|socket/i.test(`${e.name} ${e.message}`))) {
+      throw lost();
+    }
   }
   return { status: res.status, data };
 }
@@ -495,7 +497,8 @@ export const FETCH_TIMEOUT_MS = 120_000;
 
 /**
  * The latest transcript of one of your saved sessions, as the CLI fetches it for `launch`:
- * GET /library/fetch?cid=, the first session member, its first `.jsonl` file.
+ * GET /library/fetch?cid=, the first session member, its first `.jsonl` file. Returned as the base64
+ * the server sends, so it is decoded a slice at a time while it is seeded (nativeSeed.ts).
  */
 export async function fetchTranscript(c: Client, token: string, cid: string, signal?: AbortSignal): Promise<string> {
   const { status, data } = await call(c, `/library/fetch?cid=${encodeURIComponent(cid)}`, { token, timeoutMs: FETCH_TIMEOUT_MS, signal });
@@ -504,6 +507,9 @@ export async function fetchTranscript(c: Client, token: string, cid: string, sig
   }
   if (status !== 200) {
     fail(status);
+  }
+  if (data === undefined) {
+    throw new ApiError("unreachable", MESSAGES.unreachable, status);   // a 200 whose body never arrived whole
   }
   const members = Array.isArray(data?.members) ? data.members : [];
   const session = members.find((m: any) => m && m.kind === "session");
@@ -515,5 +521,5 @@ export async function fetchTranscript(c: Client, token: string, cid: string, sig
   if (!session || !tf) {
     throw new ApiError("no-transcript", MESSAGES.noTranscript, status);
   }
-  return Buffer.from(tf.content_b64, "base64").toString("utf8");
+  return tf.content_b64;
 }

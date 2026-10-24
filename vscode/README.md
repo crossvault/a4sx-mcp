@@ -58,7 +58,7 @@ To sign out, run **a4sx: Sign out**. The extension asks the a4sx server to revok
 
 Saving and resuming work for Claude Code sessions.
 
-In a remote window (SSH, WSL, dev containers, Codespaces), the a4sx extension usually runs on the remote machine. Then the a4sx command-line tool must be installed and signed in on that machine too.
+In a remote window (SSH, WSL, dev containers, Codespaces), the a4sx extension usually runs on the remote machine. Resuming copies the session into Claude Code's history on that machine, and **Resume in terminal** runs `claude` there. **Save this session** and launch profiles need the a4sx command-line tool installed and signed in on that machine too.
 
 ## Settings
 
@@ -69,4 +69,4 @@ In a remote window (SSH, WSL, dev containers, Codespaces), the a4sx extension us
 
 ## Network use
 
-The sidebar connects to session-exchange.com (or your `a4sx.serverUrl`) to sign you in, list and file your sessions, manage your launch profiles and search the marketplace. It sends no telemetry. VS Code connects to session-exchange.com when agent mode uses the a4sx MCP servers. **Resume in Claude Code**, and **Resume in terminal** without the a4sx command-line tool, download the session from session-exchange.com with the sidebar's sign-in. **Save this session**, and **Resume in terminal** with the a4sx command-line tool, run that tool, which uses its own sign-in.
+The sidebar connects to session-exchange.com (or your `a4sx.serverUrl`) to sign you in, list and file your sessions, manage your launch profiles and search the marketplace. It sends no telemetry. VS Code connects to session-exchange.com when agent mode uses the a4sx MCP servers. **Resume in Claude Code**, and **Resume in terminal** without the a4sx command-line tool, download the session from session-exchange.com with the sidebar's sign-in. **Save this session**, and **Resume in terminal** with the a4sx command-line tool, run that tool, which uses its own sign-in. When a window opens and your sign-in can't read launch profiles yet, the extension asks the server once whether it offers them, to know whether to ask for that permission.

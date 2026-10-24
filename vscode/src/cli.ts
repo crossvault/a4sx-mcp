@@ -66,7 +66,9 @@ function expandHome(p: string, home: string): string {
 /** Finds `name` on PATH, then in the fallback directories. */
 function findOnPath(name: string, env: LookupEnv, platform: NodeJS.Platform, fallback: string[]): string | undefined {
   const pathEnv = env.pathEnv ?? process.env.PATH ?? "";
-  const exts = platform === "win32" ? ["", ...(env.pathExt ?? process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)] : [""];
+  // On Windows the PATHEXT forms (claude.cmd, claude.exe) come first: npm also writes an extensionless
+  // sh shim next to them, which a Windows terminal can't start. The bare name is tried last.
+  const exts = platform === "win32" ? [...(env.pathExt ?? process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean), ""] : [""];
   const sep = platform === "win32" ? ";" : ":";
   for (const dir of [...pathEnv.split(sep), ...fallback]) {
     if (!dir) {
@@ -103,11 +105,12 @@ export const CLAUDE_NAME = "claude";
 
 /**
  * Where Claude Code's own installers put `claude`, tried after PATH: the a4sx fallbacks plus
- * `~/.claude/local` (Claude Code's local install). None on Windows besides PATH.
+ * `~/.claude/local` (Claude Code's local install); on Windows, the native installer's
+ * `%USERPROFILE%\.local\bin`.
  */
 export function claudeFallbackDirs(platform: NodeJS.Platform, home: string): string[] {
   if (platform === "win32") {
-    return [];
+    return [path.win32.join(home, ".local", "bin")];
   }
   return [...defaultFallbackDirs(platform, home), path.join(home, ".claude", "local")];
 }

@@ -5,7 +5,7 @@
 - **Resume in Claude Code** no longer needs the a4sx command-line tool. The extension copies the session into Claude Code's local history itself, with the sidebar's sign-in.
 - **Resume in terminal** works without the a4sx command-line tool too: it copies the session, then runs `claude --resume` in a terminal. The first time, it offers to install a4sx, which launch profiles need.
 - With no folder open, both resume commands offer **Use my home folder** or **Choose a folder…**. The window then opens that folder, and the session opens there.
-- If your sign-in can't read launch profiles yet, the extension asks once for the extra permission. **Not now** waits 7 days before asking again.
+- If your sign-in can't read launch profiles yet, the extension asks once for the extra permission. It asks at most once per window; **Not now** waits 7 days.
 - The **Launch profiles** view is shown by default.
 
 ## 0.3.0

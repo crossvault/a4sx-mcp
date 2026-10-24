@@ -162,7 +162,8 @@ class Uri {
     return this.value.split(":")[0];
   }
   static parse(value: string): Uri {
-    return new Uri(value);
+    const m = /^(?:file|vscode-remote):\/\/[^/]*(\/.*)$/.exec(value);
+    return new Uri(value, m ? decodeURIComponent(m[1]) : "");
   }
   static file(p: string): Uri {
     return new Uri(`file://${p}`, p);
