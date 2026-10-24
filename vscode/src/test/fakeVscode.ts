@@ -51,6 +51,12 @@ export interface Calls {
   inputQueue: (string | undefined)[];
   /** What the next quick picks resolve to (indexes), in order; when empty, `nextPick` answers. */
   pickQueue: (number | undefined)[];
+  /** Non-modal information messages that offered buttons, and what the next one resolves to. */
+  infoPrompts: { message: string; items: string[] }[];
+  nextInfoChoice: string | undefined;
+  /** What the next showOpenDialog resolves to (undefined = Cancel). */
+  nextOpenDialog: unknown[] | undefined;
+  openDialogs: any[];
   /** Tree views made with createTreeView, by view id. */
   treeViews: Map<string, { message?: string; description?: string }>;
 }
@@ -88,6 +94,10 @@ export const calls: Calls = {
   inputQueue: [],
   pickQueue: [],
   treeViews: new Map(),
+  nextOpenDialog: undefined,
+  openDialogs: [],
+  infoPrompts: [],
+  nextInfoChoice: undefined,
 };
 
 export function resetCalls(): void {
@@ -123,6 +133,10 @@ export function resetCalls(): void {
   calls.inputQueue.length = 0;
   calls.pickQueue.length = 0;
   calls.treeViews.clear();
+  calls.nextOpenDialog = undefined;
+  calls.openDialogs.length = 0;
+  calls.infoPrompts.length = 0;
+  calls.nextInfoChoice = undefined;
 }
 
 function isModal(options: unknown): boolean {
@@ -143,13 +157,30 @@ export function fakeSecrets() {
 }
 
 class Uri {
-  private constructor(private readonly value: string) {}
+  private constructor(private readonly value: string, public readonly fsPath: string = "") {}
+  get scheme(): string {
+    return this.value.split(":")[0];
+  }
   static parse(value: string): Uri {
     return new Uri(value);
+  }
+  static file(p: string): Uri {
+    return new Uri(`file://${p}`, p);
   }
   toString(): string {
     return this.value;
   }
+}
+
+/** An in-memory `context.globalState` (vscode.Memento). */
+export function fakeMemento(initial: Record<string, unknown> = {}) {
+  const data = new Map<string, unknown>(Object.entries(initial));
+  return {
+    data_: data,
+    get<T>(key: string, fallback?: T): T | undefined { return data.has(key) ? (data.get(key) as T) : fallback; },
+    async update(key: string, value: unknown) { if (value === undefined) { data.delete(key); } else { data.set(key, value); } },
+    keys() { return [...data.keys()]; },
+  };
 }
 
 class EventEmitter<T> {
@@ -236,6 +267,13 @@ const fake = {
         return calls.modalChoices.shift();
       }
       calls.infos.push(message);
+      const buttons = [typeof options === "string" ? options : undefined, ...items].filter((x): x is string => typeof x === "string");
+      if (buttons.length) {
+        calls.infoPrompts.push({ message, items: buttons });
+        const choice = calls.nextInfoChoice;
+        calls.nextInfoChoice = undefined;
+        return choice;
+      }
       return undefined;
     },
     async showWarningMessage(message: string, options?: unknown, ...items: string[]) {
@@ -272,7 +310,11 @@ const fake = {
           return { dispose: () => { calls.cancelDisposed++; } };
         },
       };
-      return task({ report: (v: { message: string }) => rec.messages.push(v.message) }, token);
+      return task({ report: (v: { message?: string }) => { if (v.message !== undefined) { rec.messages.push(v.message); } } }, token);
+    },
+    async showOpenDialog(options: unknown) {
+      calls.openDialogs.push(options);
+      return calls.nextOpenDialog;
     },
     async showQuickPick(items: any[], options: unknown) {
       calls.quickPicks.push({ items, options });

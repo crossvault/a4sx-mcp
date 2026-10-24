@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 crossVault GmbH
 import * as assert from "assert";
-import { calls, fakeSecrets, resetCalls } from "../fakeVscode";
+import { calls, fakeMemento, fakeSecrets, resetCalls } from "../fakeVscode";
 import * as ext from "../../extension";
 import * as api from "../../api";
 import { A4sxAuthProvider, deviceLogin, LoginCancelled, SECRET_KEY } from "../../auth";
@@ -40,7 +40,7 @@ const stored = (over: Record<string, unknown> = {}) =>
   JSON.stringify({ token: TOKEN, server: BASE, id: "tok_1", scopes: ["library:read"], ...over });
 
 function fakeContext() {
-  return { subscriptions: [] as { dispose(): unknown }[], secrets: fakeSecrets() };
+  return { subscriptions: [] as { dispose(): unknown }[], secrets: fakeSecrets(), globalState: fakeMemento() };
 }
 
 /** Activates with a fake network; returns the context and the sidebar objects. */
@@ -332,8 +332,8 @@ describe("session commands", () => {
     assert.ok(calls.terminals.every((t) => t.shown));
   });
 
-  it("Resume without the CLI shows the install hint and runs nothing", async () => {
-    await ext.resumeSession(item, () => ({ found: false, reason: "not-on-path" }));
+  it("Resume without the a4sx CLI and without claude shows Claude Code's install hint and runs nothing", async () => {
+    await ext.resumeSession(item, () => ({ found: false, reason: "not-on-path" }), undefined, () => undefined);
     assert.strictEqual(calls.terminals.length, 0);
     assert.deepStrictEqual(calls.errors[0].items, ["How to install"]);
   });

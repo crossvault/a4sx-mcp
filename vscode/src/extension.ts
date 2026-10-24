@@ -7,14 +7,18 @@
 import * as vscode from "vscode";
 import { Client, FetchLike, listingWebUrl, normalizeServerUrl, sessionWebUrl } from "./api";
 import { A4sxAuthProvider, AUTH_ID, AUTH_LABEL, LoginCancelled, LoginRequest, SECRET_KEY, vscodeLogin } from "./auth";
-import { CLAUDE_EXTENSION_ID, claudeResumeUri, defaultExecFile, ExecFileLike, SeedResult, seedSession } from "./claudeResume";
-import { CLI_NAME, findCli, CliLookup } from "./cli";
+import { CLAUDE_EXTENSION_ID, claudeResumeUri } from "./claudeResume";
+import { CLI_NAME, findClaude, findCli, CliLookup } from "./cli";
 import { clearFilter, filterSessions, moveToFolder, removeFromFolder } from "./folderCommands";
 import { CMD_OPEN_LISTING, ListingItem, MarketplaceProvider } from "./marketplaceView";
 import { changeDefault, createProfile, editProfile, pickProfileForResume, removeProfile } from "./profileCommands";
 import { ProfileItem, ProfilesProvider, ProfilesViewState } from "./profilesView";
 import { launchName, SessionItem, SessionsProvider, ViewState } from "./sessionsView";
-import { errorText, offerStepUp, stepUpAllowed } from "./stepUp";
+import {
+  CLAUDE_INSTALL_URL, offerCliInstallOnce, offerProfilesStepUp, openClaudeTerminal, PendingAction, pickFolderWhenNoneOpen, ResumeFolder,
+  RESUME_TEXTS, seedWithProgress, State, storePending, takePending,
+} from "./resume";
+import { errorText, offerStepUp, STEP_UP, stepUpAllowed } from "./stepUp";
 
 export const SITE = "https://session-exchange.com";
 export const MCP_URL = `${SITE}/mcp`;
@@ -213,6 +217,10 @@ export async function signIn(auth: A4sxAuthProvider): Promise<void> {
     if (!(e instanceof LoginCancelled)) {
       await vscode.window.showErrorMessage(errorText(e));
     }
+    return;
+  }
+  if (native) {
+    void offerProfilesStepUp(auth, client, native.state, Date.now());
   }
 }
 
@@ -233,11 +241,19 @@ export async function signOut(auth: A4sxAuthProvider): Promise<void> {
  */
 export type ChooseProfile = () => Promise<{ id?: string } | undefined>;
 let chooseResumeProfile: ChooseProfile = async () => ({});
+/** What the CLI-free resume needs: the sidebar's sign-in and the extension's globalState. Set by activate(). */
+let native: { auth: A4sxAuthProvider; state: State } | undefined;
 
+/**
+ * Resume in terminal. With the a4sx CLI: `a4sx launch --a4sx-session=NAME [--profile=ID]` as before.
+ * Without it: the session is copied into Claude Code's history with the extension's own key, and a
+ * terminal runs `claude --resume <id>` in the folder. Both run directly, without a shell.
+ */
 export async function resumeSession(
   item: SessionItem | undefined,
   lookup: (configured: string | undefined) => CliLookup = findCli,
   choose: ChooseProfile = () => chooseResumeProfile(),
+  claudeLookup: () => string | undefined = () => findClaude(),
 ): Promise<vscode.Terminal | undefined> {
   if (!item) {
     return undefined;
@@ -247,8 +263,11 @@ export async function resumeSession(
   }
   const result = lookupCli(lookup);
   if (!result.found) {
-    await reportMissingCli(result);
-    return undefined;
+    if (result.reason === "configured-path-invalid") {
+      await reportMissingCli(result);   // the user pointed a4sx.cliPath somewhere: say so
+      return undefined;
+    }
+    return resumeWithClaude(item, claudeLookup);
   }
   const profile = await choose();
   if (!profile) {
@@ -267,6 +286,30 @@ export async function resumeSession(
   });
   terminal.show();
   return terminal;
+}
+
+/** No a4sx CLI: seed natively, then `claude --resume <id>` in a terminal (or after the window reopens on the folder). */
+async function resumeWithClaude(item: SessionItem, claudeLookup: () => string | undefined): Promise<vscode.Terminal | undefined> {
+  const claude = claudeLookup();
+  if (!claude) {
+    await reportMissingClaude();
+    return undefined;
+  }
+  const seeded = await seedForResume(item, "terminal");
+  if (!seeded) {
+    return undefined;
+  }
+  const terminal = openClaudeTerminal(claude, seeded.sessionId, seeded.folder.uri, RESUME_TERMINAL_NAME);
+  if (native) {
+    void offerCliInstallOnce(native.state, installCommand, INSTALL_URL);
+  }
+  return terminal;
+}
+
+async function reportMissingClaude(): Promise<void> {
+  if ((await vscode.window.showErrorMessage(RESUME_TEXTS.noClaude, MISSING_CLI.install)) === MISSING_CLI.install) {
+    await vscode.env.openExternal(vscode.Uri.parse(CLAUDE_INSTALL_URL));
+  }
 }
 
 export const PROFILE_TERMINAL_NAME = "a4sx: profile";
@@ -313,51 +356,26 @@ export async function openProfilesOnWeb(): Promise<void> {
 
 export const RESUME_IN_TERMINAL = "Resume in terminal";
 export const SHOW_EXTENSION = "Show extension";
-export const RUN_LOGIN = "Run a4sx login";
-export const LOGIN_TERMINAL_NAME = "a4sx: login";
 export const CLAUDE_MESSAGES = {
   noClaude: "Resume in Claude Code needs the Claude Code extension.",
-  noFolder: "Open a folder first. Claude Code resumes the session in that folder.",
   notOnDisk: "Resume in Claude Code needs a folder on disk. Open a local or remote folder.",
-  notSignedIn: "The a4sx CLI isn't signed in on this machine. Run a4sx login in a terminal, then try again.",
   pickFolder: "Choose the folder to resume the session in",
   progress: "Copying the session for Claude Code…",
-  oldCli: 'Your a4sx CLI is too old for Resume in Claude Code. Run "a4sx update", then try again.',
-  timeout: "Copying the session for Claude Code took longer than 2 minutes and was stopped.",
-  badOutput: "a4sx did not return a Claude Code session id.",
   failed: "Could not copy the session for Claude Code.",
-  failedWith: (detail: string) => `Could not copy the session for Claude Code: ${detail}`,
-  failedCode: (code: number) => `Could not copy the session for Claude Code. a4sx exited with code ${code}.`,
   openFailed: "Could not open Claude Code.",
 };
 
-function seedFailureMessage(r: Exclude<SeedResult, { kind: "ok" } | { kind: "cancelled" } | { kind: "not-signed-in" }>): string {
-  switch (r.kind) {
-    case "old-cli":
-      return CLAUDE_MESSAGES.oldCli;
-    case "timeout":
-      return CLAUDE_MESSAGES.timeout;
-    case "bad-output":
-      return CLAUDE_MESSAGES.badOutput;
-    case "failed":
-      if (r.detail) {
-        return CLAUDE_MESSAGES.failedWith(r.detail);
-      }
-      return r.exitCode !== null ? CLAUDE_MESSAGES.failedCode(r.exitCode) : CLAUDE_MESSAGES.failed;
-  }
-}
-
-/** A workspace folder the CLI can run in, and its path on the host this extension runs on. */
+/** A workspace folder the session can be copied for, and its path on the host this extension runs on. */
 export interface FolderTarget {
   folder: vscode.WorkspaceFolder;
   cwd: string;
 }
 
 /**
- * The folders the CLI can run in. `file` folders always count. On the remote host, VS Code hands an
- * extension its folders as `file` URIs already; a `vscode-remote` folder counts there too, and its
- * fsPath is the path on the remote host (the extension host's own platform rules apply). Virtual and
- * other schemes (vscode-vfs, untitled, vscode-local, ...) are not on this host's disk and never count.
+ * The folders a session can be resumed in. `file` folders always count. On the remote host, VS Code
+ * hands an extension its folders as `file` URIs already; a `vscode-remote` folder counts there too,
+ * and its fsPath is the path on the remote host (the extension host's own platform rules apply).
+ * Virtual and other schemes (vscode-vfs, untitled, vscode-local, ...) are not on this host's disk.
  */
 export function folderTargets(folders: readonly vscode.WorkspaceFolder[], remote: string | undefined): FolderTarget[] {
   return folders
@@ -376,26 +394,78 @@ async function pickFolder(targets: readonly FolderTarget[]): Promise<FolderTarge
   return picked?.target;
 }
 
-/** Opens a terminal that runs `a4sx login` directly (no shell). */
-export async function runLogin(cliPath: string): Promise<vscode.Terminal | undefined> {
-  if (await stopIfLocalInRemoteWindow()) {
+/** The folder to resume in: the open one (a pick when several), or, with none open, home or a chosen folder. */
+async function chooseResumeFolder(): Promise<ResumeFolder | undefined> {
+  const all = vscode.workspace.workspaceFolders ?? [];
+  if (all.length === 0) {
+    return pickFolderWhenNoneOpen();
+  }
+  const targets = folderTargets(all, remoteHostName());
+  if (targets.length === 0) {
+    await vscode.window.showErrorMessage(CLAUDE_MESSAGES.notOnDisk);
     return undefined;
   }
-  const terminal = vscode.window.createTerminal({ name: LOGIN_TERMINAL_NAME, shellPath: cliPath, shellArgs: ["login"] });
-  terminal.show();
-  return terminal;
+  const target = await pickFolder(targets);
+  return target && { uri: target.folder.uri, cwd: target.cwd, reopen: false };
+}
+
+/** The sidebar's key; without one, says to sign in (with a button). */
+async function keyForResume(): Promise<string | undefined> {
+  const cur = await native?.auth.current();
+  if (cur) {
+    return cur.token;
+  }
+  if ((await vscode.window.showErrorMessage(STEP_UP.signInFirst, STEP_UP.signIn)) === STEP_UP.signIn && native) {
+    await signIn(native.auth);
+  }
+  return undefined;
 }
 
 /**
- * Copies the saved session into the local Claude Code history for a workspace folder
- * (`a4sx launch --a4sx-session=NAME --seed-only`, run directly, no shell) and opens it in the
- * Claude Code extension. Only a validated session id goes into the link.
+ * Copies the saved session into Claude Code's history for a folder, with the extension's own key and
+ * no CLI. When no folder was open, the window reopens on the chosen one and the resume finishes there
+ * (a pending action, see completePendingResume); then this resolves to undefined.
  */
-export async function resumeInClaude(
-  item: SessionItem | undefined,
-  lookup: (configured: string | undefined) => CliLookup = findCli,
-  exec: ExecFileLike = defaultExecFile,
-): Promise<void> {
+async function seedForResume(item: SessionItem, kind: PendingAction["kind"]): Promise<{ sessionId: string; folder: ResumeFolder } | undefined> {
+  const token = await keyForResume();
+  if (!token) {
+    return undefined;
+  }
+  const folder = await chooseResumeFolder();
+  if (!folder) {
+    return undefined;
+  }
+  const outcome = await seedWithProgress(client(), token, item.row, folder.cwd, CLAUDE_MESSAGES.progress, CLAUDE_MESSAGES.failed);
+  if (outcome.kind === "cancelled") {
+    return undefined;
+  }
+  if (outcome.kind === "failed") {
+    await vscode.window.showErrorMessage(outcome.message);
+    return undefined;
+  }
+  if (folder.reopen) {
+    if (native) {
+      await storePending(native.state, { kind, sessionId: outcome.sessionId, folderUri: folder.uri.toString(), at: Date.now() });
+    }
+    await vscode.commands.executeCommand("vscode.openFolder", folder.uri, { forceNewWindow: false });
+    return undefined;
+  }
+  return { sessionId: outcome.sessionId, folder };
+}
+
+async function openInClaudeCode(sessionId: string): Promise<void> {
+  const opened = await vscode.env.openExternal(vscode.Uri.parse(claudeResumeUri(vscode.env.uriScheme, sessionId)));
+  if (!opened) {
+    await vscode.window.showErrorMessage(CLAUDE_MESSAGES.openFailed);
+  }
+}
+
+/**
+ * Copies the saved session into Claude Code's local history for a folder (with the extension's own
+ * key, no CLI needed) and opens it in the Claude Code extension. Only a validated session id goes into
+ * the link.
+ */
+export async function resumeInClaude(item: SessionItem | undefined): Promise<void> {
   if (!item) {
     return;
   }
@@ -409,53 +479,32 @@ export async function resumeInClaude(
     }
     return;
   }
-  // The CLI writes into the Claude Code history of the host this extension runs on, which is where
-  // Claude Code runs too (on the remote host in a remote window), so only folders on that host count.
-  const all = vscode.workspace.workspaceFolders ?? [];
-  const remote = remoteHostName();
-  const targets = folderTargets(all, remote);
-  if (targets.length === 0) {
-    await vscode.window.showErrorMessage(all.length === 0 ? CLAUDE_MESSAGES.noFolder : CLAUDE_MESSAGES.notOnDisk);
+  const seeded = await seedForResume(item, "claude");
+  if (seeded) {
+    await openInClaudeCode(seeded.sessionId);
+  }
+}
+
+/** On activation: finish a resume that reopened the window on its folder (valid, under 2 minutes, this folder). */
+export async function completePendingResume(state: State, claudeLookup: () => string | undefined = () => findClaude()): Promise<void> {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  const p = await takePending(state, folders, Date.now());
+  if (!p) {
     return;
   }
-  const cli = lookupCli(lookup);
-  if (!cli.found) {
-    await reportMissingCli(cli);
+  if (p.kind === "claude") {
+    await openInClaudeCode(p.sessionId);
     return;
   }
-  const target = await pickFolder(targets);
-  if (!target) {
+  const claude = claudeLookup();
+  if (!claude) {
+    await reportMissingClaude();
     return;
   }
-  const result = await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: CLAUDE_MESSAGES.progress, cancellable: true },
-    (_progress, token) => {
-      const abort = new AbortController();
-      const cancel = token.onCancellationRequested(() => abort.abort());
-      return seedSession(cli.path, launchName(item.row), target.cwd, exec, abort.signal).finally(() => cancel.dispose());
-    },
-  );
-  if (result.kind === "cancelled") {
-    return;
-  }
-  if (result.kind === "ok") {
-    const opened = await vscode.env.openExternal(vscode.Uri.parse(claudeResumeUri(vscode.env.uriScheme, result.sessionId)));
-    if (opened) {
-      return;
-    }
-    await vscode.window.showErrorMessage(CLAUDE_MESSAGES.openFailed);
-    return;
-  }
-  if (result.kind === "not-signed-in") {
-    // Resuming in a terminal needs the sign-in too, so only the login is offered.
-    if ((await vscode.window.showErrorMessage(CLAUDE_MESSAGES.notSignedIn, RUN_LOGIN)) === RUN_LOGIN) {
-      await runLogin(cli.path);
-    }
-    return;
-  }
-  const choice = await vscode.window.showErrorMessage(seedFailureMessage(result), RESUME_IN_TERMINAL);
-  if (choice === RESUME_IN_TERMINAL) {
-    await resumeSession(item, lookup);
+  const folder = folders.find((f) => f.uri.toString() === p.folderUri);
+  if (folder) {
+    openClaudeTerminal(claude, p.sessionId, folder.uri, RESUME_TERMINAL_NAME);
+    void offerCliInstallOnce(state, installCommand, INSTALL_URL);
   }
 }
 
@@ -548,6 +597,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const sessionsView = vscode.window.createTreeView(VIEW_SESSIONS, { treeDataProvider: sessions });
   sessions.view = sessionsView;
   chooseResumeProfile = () => pickProfileForResume(auth, client);
+  native = { auth, state: context.globalState };
   const folderDeps = { auth, client, sessions };
   const profileDeps = { auth, client, view: profiles, elsewhere: {
     website: openProfilesOnWeb,
@@ -618,6 +668,9 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   }
   sidebar = { auth, sessions, profiles, market };
+  // A resume that reopened this window on its folder finishes now; then, once, the profiles:read offer.
+  void completePendingResume(context.globalState);
+  void offerProfilesStepUp(auth, client, context.globalState, Date.now());
 }
 
 export function deactivate(): void {

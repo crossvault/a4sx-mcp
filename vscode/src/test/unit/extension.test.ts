@@ -3,12 +3,12 @@
 import * as assert from "assert";
 import * as fs from "fs";
 import * as path from "path";
-import { calls, fakeSecrets, resetCalls } from "../fakeVscode";
+import { calls, fakeMemento, fakeSecrets, resetCalls } from "../fakeVscode";
 import * as ext from "../../extension";
 import type { CliLookup } from "../../cli";
 
 const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "package.json"), "utf8"));
-const fakeContext = () => ({ subscriptions: [] as { dispose(): unknown }[], secrets: fakeSecrets() });
+const fakeContext = () => ({ subscriptions: [] as { dispose(): unknown }[], secrets: fakeSecrets(), globalState: fakeMemento() });
 const found = (p: string) => (): CliLookup => ({ found: true, path: p });
 const missing = (): CliLookup => ({ found: false, reason: "not-on-path" });
 

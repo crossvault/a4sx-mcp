@@ -2,7 +2,7 @@
   "name": "a4sx",
   "displayName": "a4sx",
   "description": "Use a4sx from VS Code: sign in, browse and resume your saved sessions, sort them into folders, manage your launch profiles, search the marketplace, and add the a4sx MCP servers for agent mode.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "crossvaultGmbH",
   "license": "Apache-2.0",
   "homepage": "https://session-exchange.com",
@@ -34,6 +34,9 @@
     "agent sessions",
     "claude code",
     "copilot"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "capabilities": {
@@ -187,7 +190,8 @@
         {
           "id": "a4sx.profiles",
           "name": "Launch profiles",
-          "icon": "media/icon.png"
+          "icon": "media/icon.png",
+          "visibility": "visible"
         },
         {
           "id": "a4sx.marketplace",
