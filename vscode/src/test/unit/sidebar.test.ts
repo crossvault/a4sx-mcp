@@ -322,12 +322,19 @@ describe("session commands", () => {
   const unlabeled = new SessionItem({ id: "c-456" });
   const found = (p: string) => (): CliLookup => ({ found: true, path: p });
 
-  it("Resume in terminal runs `a4sx launch --a4sx-session=NAME` directly, without a shell", async () => {
-    await ext.resumeSession(item, found("/usr/local/bin/a4sx"));
-    await ext.resumeSession(unlabeled, found("/usr/local/bin/a4sx"));
-    assert.deepStrictEqual(calls.terminals.map((t) => t.options), [
-      { name: ext.RESUME_TERMINAL_NAME, shellPath: "/usr/local/bin/a4sx", shellArgs: ["launch", "--a4sx-session=my-base"] },
-      { name: ext.RESUME_TERMINAL_NAME, shellPath: "/usr/local/bin/a4sx", shellArgs: ["launch", "--a4sx-session=c-456"] },
+  it("Resume in terminal types `a4sx launch --a4sx-session=<id>` into the user's shell, quoted; the id, never the label", async () => {
+    const savedPath = process.env.PATH;
+    process.env.PATH = "/usr/bin";
+    try {
+      await ext.resumeSession(item, found("/usr/local/bin/a4sx"));
+      await ext.resumeSession(unlabeled, found("/usr/local/bin/a4sx"));
+    } finally {
+      process.env.PATH = savedPath;
+    }
+    assert.deepStrictEqual(calls.terminals.map((t) => t.options), [{ name: ext.RESUME_TERMINAL_NAME }, { name: ext.RESUME_TERMINAL_NAME }]);
+    assert.deepStrictEqual(calls.terminals.map((t) => t.sent), [
+      ["'/usr/local/bin/a4sx' 'launch' '--a4sx-session=c-123'\n"],
+      ["'/usr/local/bin/a4sx' 'launch' '--a4sx-session=c-456'\n"],
     ]);
     assert.ok(calls.terminals.every((t) => t.shown));
   });

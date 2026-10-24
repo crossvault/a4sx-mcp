@@ -61,7 +61,7 @@ function fakeFetch(routes: Record<string, Answer[]>) {
 
 const savedRuntime = { ...ext.runtime };
 let home: string;
-const saved = { HOME: process.env.HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+const saved = { HOME: process.env.HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR, PATH: process.env.PATH };
 
 function rmTree(dir: string): void {
   for (const name of fs.readdirSync(dir)) {
@@ -81,12 +81,14 @@ beforeEach(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), "a4sx-home-"));
   process.env.HOME = home;
   process.env.CLAUDE_CONFIG_DIR = path.join(home, "claude-cfg");
+  process.env.PATH = "/usr/bin";   // CLAUDE's folder is not on PATH: the command uses its absolute path
   calls.extensions.add("anthropic.claude-code");
 });
 
 afterEach(() => {
   Object.assign(ext.runtime, savedRuntime);
   process.env.HOME = saved.HOME;
+  process.env.PATH = saved.PATH;
   if (saved.CLAUDE_CONFIG_DIR === undefined) {
     delete process.env.CLAUDE_CONFIG_DIR;
   } else {
@@ -313,7 +315,7 @@ describe("no folder open: pick one, reopen on it, finish there", () => {
 });
 
 describe("Resume in terminal without the a4sx CLI", () => {
-  it("seeds natively and runs `claude --resume <id>` in the folder, shell-free, with nothing secret in argv or env", async () => {
+  it("seeds natively and types `claude --resume <id>` into the user's shell in the folder, with nothing secret in it or the env", async () => {
     calls.workspaceFolders = [folder("proj", "/w/proj")];
     await activateWith({ "GET /library/fetch": [fetchBody()] });
     const t = await ext.resumeSession(item, missing, undefined, () => CLAUDE);
@@ -322,10 +324,43 @@ describe("Resume in terminal without the a4sx CLI", () => {
     const id = file.replace(/\.jsonl$/, "");
     assert.strictEqual(calls.terminals.length, 1);
     const opts = calls.terminals[0].options;
-    assert.deepStrictEqual({ ...opts, cwd: String(opts.cwd) }, { name: ext.RESUME_TERMINAL_NAME, shellPath: CLAUDE, shellArgs: ["--resume", id], cwd: "file:///w/proj" });
+    assert.deepStrictEqual({ ...opts, cwd: String(opts.cwd) }, { name: ext.RESUME_TERMINAL_NAME, cwd: "file:///w/proj" }, "a normal terminal: the user's shell");
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLAUDE}' '--resume' '${id}'\n`]);
     assert.ok(!("env" in opts), "no env: the key is never handed to claude");
     assert.ok(calls.terminals[0].shown);
     noTokenAnywhere();
+  });
+
+  it("claude found on PATH is typed by name, so the shell finds it the same way", async () => {
+    calls.workspaceFolders = [folder("proj", "/w/proj")];
+    process.env.PATH = `/usr/bin:${path.dirname(CLAUDE)}`;
+    await activateWith({ "GET /library/fetch": [fetchBody()] });
+    await ext.resumeSession(item, missing, undefined, () => CLAUDE);
+    assert.match(calls.terminals[0].sent[0], /^'claude' '--resume' '[0-9a-f-]{36}'\n$/);
+  });
+
+  it("PowerShell and cmd get their own quoting; an unknown shell falls back to the shell-less spawn", async () => {
+    calls.workspaceFolders = [folder("proj", "/w/proj")];
+    await activateWith({ "GET /library/fetch": [fetchBody()] });
+    for (const [shell, expect] of [
+      ["C:\\Program Files\\PowerShell\\7\\pwsh.exe", /^& '\/usr\/local\/bin\/claude' '--resume' '[0-9a-f-]{36}'\n$/],
+      ["C:\\Windows\\System32\\cmd.exe", /^"\/usr\/local\/bin\/claude" "--resume" "[0-9a-f-]{36}"\n$/],
+    ] as [string, RegExp][]) {
+      resetCalls();
+      calls.workspaceFolders = [folder("proj", "/w/proj")];
+      calls.shell = shell;
+      await ext.resumeSession(item, missing, undefined, () => CLAUDE);
+      assert.match(calls.terminals[0].sent[0], expect, shell);
+    }
+    for (const shell of ["/usr/bin/nu", undefined]) {
+      resetCalls();
+      calls.workspaceFolders = [folder("proj", "/w/proj")];
+      calls.shell = shell;
+      await ext.resumeSession(item, missing, undefined, () => CLAUDE);
+      const t = calls.terminals[0];
+      assert.strictEqual(t.options.shellPath, CLAUDE, String(shell));
+      assert.deepStrictEqual([t.options.shellArgs[0], t.sent], ["--resume", []]);
+    }
   });
 
   it("once: launch profiles need the a4sx CLI; 'Install a4sx' runs the safe-origin installer line", async () => {
@@ -368,8 +403,8 @@ describe("Resume in terminal without the a4sx CLI", () => {
     resetCalls();
     calls.workspaceFolders = [folder("home", home)];
     await ext.completePendingResume(state, () => CLAUDE);
-    assert.deepStrictEqual(calls.terminals.map((t) => [t.options.shellPath, t.options.shellArgs, String(t.options.cwd)]), [
-      [CLAUDE, ["--resume", pending.sessionId], vscodeFake.Uri.file(home).toString()],
+    assert.deepStrictEqual(calls.terminals.map((t) => [t.sent, String(t.options.cwd)]), [
+      [[`'${CLAUDE}' '--resume' '${pending.sessionId}'\n`], vscodeFake.Uri.file(home).toString()],
     ]);
     assert.strictEqual(state.data_.has(PENDING_KEY), false);
   });
@@ -378,7 +413,8 @@ describe("Resume in terminal without the a4sx CLI", () => {
     calls.workspaceFolders = [folder("proj", "/w/proj")];
     const { net } = await activateWith({});
     await ext.resumeSession(item, foundCli, async () => ({}), () => CLAUDE);
-    assert.deepStrictEqual(calls.terminals[0].options, { name: ext.RESUME_TERMINAL_NAME, shellPath: "/usr/local/bin/a4sx", shellArgs: ["launch", "--a4sx-session=my-base"] });
+    assert.deepStrictEqual(calls.terminals[0].options, { name: ext.RESUME_TERMINAL_NAME });
+    assert.deepStrictEqual(calls.terminals[0].sent, ["'/usr/local/bin/a4sx' 'launch' '--a4sx-session=c-123'\n"]);
     await ext.resumeSession(item, () => ({ found: false, reason: "configured-path-invalid", configured: "/nope/a4sx" }), undefined, () => CLAUDE);
     assert.match(calls.errors[0].message, /a4sx\.cliPath setting points to "\/nope\/a4sx"/);
     assert.strictEqual(net.seen.length, 0);
@@ -474,7 +510,7 @@ describe("manifest", () => {
   it("activates at startup (to finish a pending resume) and shows Launch profiles expanded", () => {
     assert.deepStrictEqual(pkg.activationEvents, ["onStartupFinished"]);
     assert.strictEqual(pkg.contributes.views.a4sx.find((v: any) => v.id === "a4sx.profiles").visibility, "visible");
-    assert.strictEqual(pkg.version, "0.3.1");
+    assert.strictEqual(pkg.version, "0.3.2");
   });
 
   it("the registered command, without an item (palette), does nothing", async () => {

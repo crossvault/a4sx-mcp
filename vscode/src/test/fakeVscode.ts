@@ -51,6 +51,8 @@ export interface Calls {
   inputQueue: (string | undefined)[];
   /** What the next quick picks resolve to (indexes), in order; when empty, `nextPick` answers. */
   pickQueue: (number | undefined)[];
+  /** vscode.env.shell: the default shell of the terminals (undefined = unknown). */
+  shell: string | undefined;
   /** Non-modal information messages that offered buttons, and what the next one resolves to. */
   infoPrompts: { message: string; items: string[] }[];
   nextInfoChoice: string | undefined;
@@ -98,6 +100,7 @@ export const calls: Calls = {
   openDialogs: [],
   infoPrompts: [],
   nextInfoChoice: undefined,
+  shell: "/bin/bash",
 };
 
 export function resetCalls(): void {
@@ -137,6 +140,7 @@ export function resetCalls(): void {
   calls.openDialogs.length = 0;
   calls.infoPrompts.length = 0;
   calls.nextInfoChoice = undefined;
+  calls.shell = "/bin/bash";
 }
 
 function isModal(options: unknown): boolean {
@@ -254,7 +258,7 @@ const fake = {
   },
   window: {
     createTerminal(options: unknown) {
-      const t = { options, shown: false, show() { this.shown = true; }, sendText() { throw new Error("sendText must not be used"); } };
+      const t = { options, shown: false, sent: [] as string[], show() { this.shown = true; }, sendText(text: string, addNewLine?: boolean) { this.sent.push(addNewLine === false ? text : `${text}\n`); } };
       calls.terminals.push(t);
       return t;
     },
@@ -333,6 +337,9 @@ const fake = {
     },
     get remoteName() {
       return calls.remoteName;
+    },
+    get shell() {
+      return calls.shell;
     },
     clipboard: {
       async writeText(text: string) {

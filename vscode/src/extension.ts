@@ -5,7 +5,7 @@
 // is the only part that calls the a4sx server itself; its scoped token lives only in VS Code's secret storage.
 // VS Code connects to the MCP servers when chat uses them, and runs their sign-in itself.
 import * as vscode from "vscode";
-import { Client, FetchLike, listingWebUrl, normalizeServerUrl, sessionWebUrl } from "./api";
+import { Client, FetchLike, listingWebUrl, MESSAGES, normalizeServerUrl, PROFILE_ID, sessionWebUrl } from "./api";
 import { A4sxAuthProvider, AUTH_ID, AUTH_LABEL, LoginCancelled, LoginRequest, SECRET_KEY, vscodeLogin } from "./auth";
 import { CLAUDE_EXTENSION_ID, claudeResumeUri } from "./claudeResume";
 import { CLI_NAME, findClaude, findCli, CliLookup } from "./cli";
@@ -13,12 +13,13 @@ import { clearFilter, filterSessions, moveToFolder, removeFromFolder } from "./f
 import { CMD_OPEN_LISTING, ListingItem, MarketplaceProvider } from "./marketplaceView";
 import { changeDefault, createProfile, editProfile, pickProfileForResume, removeProfile } from "./profileCommands";
 import { ProfileItem, ProfilesProvider, ProfilesViewState } from "./profilesView";
-import { launchName, SessionItem, SessionsProvider, ViewState } from "./sessionsView";
+import { SessionItem, SessionsProvider, ViewState } from "./sessionsView";
 import {
-  CLAUDE_INSTALL_URL, offerCliInstallOnce, offerProfilesStepUp, openClaudeTerminal, PendingAction, pickFolderWhenNoneOpen, ResumeFolder,
+  CLAUDE_INSTALL_URL, offerCliInstallOnce, offerProfilesStepUp, openClaudeTerminal, openCommandTerminal, PendingAction, pickFolderWhenNoneOpen, ResumeFolder,
   RESUME_TEXTS, sameFolder, seedWithProgress, State, storePending, takePending,
 } from "./resume";
 import { errorText, offerStepUp, STEP_UP, stepUpAllowed } from "./stepUp";
+import { SESSION_ID } from "./terminalCommand";
 
 export const SITE = "https://session-exchange.com";
 export const MCP_URL = `${SITE}/mcp`;
@@ -273,19 +274,18 @@ export async function resumeSession(
   if (!profile) {
     return undefined;
   }
-  // `a4sx launch` starts Claude Code on a copy of the saved session; run directly, no shell. Each
-  // option is one argv element, so a name or profile id can never become another option.
-  const shellArgs = ["launch", `--a4sx-session=${launchName(item.row)}`];
-  if (profile.id) {
-    shellArgs.push(`--profile=${profile.id}`);
+  // `a4sx launch` starts Claude Code on a copy of the saved session, in the user's shell. Only
+  // validated pieces go into the command: the session's id (never its free-text label) and the
+  // profile id, each one quoted argument with its flag.
+  if (!SESSION_ID.test(item.row.id) || (profile.id !== undefined && !PROFILE_ID.test(profile.id))) {
+    await vscode.window.showErrorMessage(MESSAGES.badResponse);
+    return undefined;
   }
-  const terminal = vscode.window.createTerminal({
-    name: RESUME_TERMINAL_NAME,
-    shellPath: result.path,
-    shellArgs,
-  });
-  terminal.show();
-  return terminal;
+  const args = ["launch", `--a4sx-session=${item.row.id}`];
+  if (profile.id) {
+    args.push(`--profile=${profile.id}`);
+  }
+  return openCommandTerminal(RESUME_TERMINAL_NAME, result.path, CLI_NAME, args);
 }
 
 /** No a4sx CLI: seed natively, then `claude --resume <id>` in a terminal (or after the window reopens on the folder). */
