@@ -21,7 +21,10 @@ describe("activate: wiring", () => {
     const contributed = pkg.contributes.commands.map((c: { command: string }) => c.command).sort();
     assert.deepStrictEqual(contributed, [
       ext.CMD_OPEN_LIBRARY, ext.CMD_SAVE, ext.CMD_SIGN_IN, ext.CMD_SIGN_OUT, ext.CMD_REFRESH, ext.CMD_RESUME, ext.CMD_RESUME_CLAUDE,
-      ext.CMD_OPEN_SESSION, ext.CMD_COPY_ID, ext.CMD_SEARCH, ext.CMD_OPEN_LISTING].sort());
+      ext.CMD_OPEN_SESSION, ext.CMD_COPY_ID, ext.CMD_SEARCH, ext.CMD_OPEN_LISTING,
+      ext.CMD_FILTER, ext.CMD_CLEAR_FILTER, ext.CMD_MOVE_TO_FOLDER, ext.CMD_REMOVE_FROM_FOLDER,
+      ext.CMD_REFRESH_PROFILES, ext.CMD_CREATE_PROFILE, ext.CMD_EDIT_PROFILE, ext.CMD_CHANGE_DEFAULT,
+      ext.CMD_DELETE_PROFILE, ext.CMD_ALLOW_SCOPE].sort());
     assert.deepStrictEqual([...calls.commands.keys()].sort(), contributed);
   });
 

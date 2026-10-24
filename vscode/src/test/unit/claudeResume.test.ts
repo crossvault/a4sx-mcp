@@ -312,7 +312,7 @@ describe("a4sx.resumeInClaude", () => {
 
   it("the manifest puts Resume in Claude Code next to Resume in terminal and hides it from the palette", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "package.json"), "utf8"));
-    const menu = pkg.contributes.menus["view/item/context"].filter((m: any) => m.when === "view == a4sx.sessions && viewItem == a4sx.session");
+    const menu = pkg.contributes.menus["view/item/context"].filter((m: any) => m.when === "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/");
     const group = (cmd: string, prefix: string) => menu.find((m: any) => m.command === cmd && m.group.startsWith(prefix))?.group;
     assert.strictEqual(group(ext.CMD_RESUME, "inline"), "inline@1");
     assert.strictEqual(group(ext.CMD_RESUME_CLAUDE, "inline"), "inline@2");

@@ -11,10 +11,18 @@ export type FetchLike = (url: string, init?: { method?: string; headers?: Record
 
 export type ApiErrorCode =
   | "bad-server-url" | "unreachable" | "unauthorized" | "busy" | "expired" | "too-many-tokens"
-  | "bad-login-url" | "bad-response" | "http";
+  | "bad-login-url" | "bad-response" | "http"
+  | "bad-scopes" | "insufficient-scope" | "not-supported" | "rejected" | "profile-limit" | "not-found"
+  | "credential-in-profile" | "hidden-bound-to-host" | "base-url-needs-signin" | "permission-flag-needs-signin" | "needs-signin" | "conflict";
 
 export class ApiError extends Error {
-  constructor(public readonly code: ApiErrorCode, message: string, public readonly status?: number) {
+  constructor(
+    public readonly code: ApiErrorCode,
+    message: string,
+    public readonly status?: number,
+    /** For "insufficient-scope": the scope the server says the route needs. */
+    public readonly requiredScope?: string,
+  ) {
     super(message);
   }
 }
@@ -29,6 +37,19 @@ export const MESSAGES = {
   badLoginUrl: "a4sx sent a sign-in link for a different site, so the extension did not open it.",
   badResponse: "a4sx sent an answer this extension doesn't understand. Update the extension or try again later.",
   http: (status: number) => `a4sx answered with an error (HTTP ${status}). Try again later.`,
+  needsScope: (scope: string) => `This needs the a4sx permission ${scope}.`,
+  profilesNotSupported: "Launch profiles need a newer a4sx server.",
+  foldersNotSupported: "Folders need a newer a4sx server.",
+  profileRejected: "a4sx did not accept this launch profile.",
+  credentialInProfile: "Keep keys out of launch profiles. Use a4sx launch --set-api-key instead.",
+  needsSignin: "This setting can only be changed with the a4sx CLI or on the website.",
+  baseUrlNeedsSignin: "The server address can only be changed with the a4sx CLI or on the website.",
+  permissionFlagNeedsSignin: "Turning off permission prompts can only be done with the a4sx CLI or on the website.",
+  hiddenBoundToHost: "This profile's hidden settings belong to its current address. Change the address with the a4sx CLI or on the website.",
+  folderRejected: "a4sx did not accept this folder name.",
+  profileLimit: "You have the maximum number of launch profiles. Delete one first.",
+  profileGone: "This launch profile no longer exists. Refresh the list.",
+  sessionGone: "This session no longer exists. Refresh the list.",
 } as const;
 
 /** The server origin from the a4sx.serverUrl setting: https only (plain http only for this machine). */
@@ -53,7 +74,7 @@ export interface Client {
   userAgent: string;
 }
 
-async function call(c: Client, path: string, opts: { method?: string; token?: string; body?: unknown } = {}): Promise<{ status: number; data: any }> {
+async function call(c: Client, path: string, opts: { method?: string; token?: string; body?: unknown; timeoutMs?: number } = {}): Promise<{ status: number; data: any }> {
   const headers: Record<string, string> = { Accept: "application/json", "User-Agent": c.userAgent };
   if (opts.token) {
     headers.Authorization = `Bearer ${opts.token}`;
@@ -67,7 +88,7 @@ async function call(c: Client, path: string, opts: { method?: string; token?: st
       method: opts.method ?? "GET",
       headers,
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(opts.timeoutMs ?? TIMEOUT_MS),
     });
   } catch {
     throw new ApiError("unreachable", MESSAGES.unreachable);
@@ -99,6 +120,9 @@ export interface SessionRow {
   id: string;
   title?: string;
   label?: string;
+  tags?: string[];
+  /** One folder path such as "work/a4sx", or null when unfiled. Servers before folders send no key at all. */
+  folder?: string | null;
   created_at?: string;
   updated_at?: string;
   tokens?: { current?: number; peak?: number };
@@ -147,14 +171,25 @@ export interface LoginStart {
   expiresIn: number;
 }
 
-export const LOGIN_SCOPES = ["library:read"];
+export const SCOPE_READ = "library:read";
+export const SCOPE_ORGANIZE = "library:organize";
+export const SCOPE_PROFILES_READ = "profiles:read";
+export const SCOPE_PROFILES_WRITE = "profiles:write";
+/** What sign-in asks for. `profiles:write` is asked for separately, the first time a profile is changed. */
+export const LOGIN_SCOPES = [SCOPE_READ, SCOPE_PROFILES_READ, SCOPE_ORGANIZE];
+/** What sign-in falls back to when the server does not offer the newer scopes. */
+export const LEGACY_LOGIN_SCOPES = [SCOPE_READ];
 export const LOGIN_LABEL = "a4sx for VS Code";
 
-export async function startLogin(c: Client): Promise<LoginStart> {
+export async function startLogin(c: Client, scopes: readonly string[] = LOGIN_SCOPES): Promise<LoginStart> {
   const { status, data } = await call(c, "/auth/cli/start", {
     method: "POST",
-    body: { token_type: "library", scopes: LOGIN_SCOPES, label: LOGIN_LABEL },
+    body: { token_type: "library", scopes: [...scopes], label: LOGIN_LABEL },
   });
+  if (status === 400 && errorCode(data) === "bad_scopes") {
+    // A server that doesn't offer one of these scopes yet.
+    throw new ApiError("bad-scopes", MESSAGES.badResponse, status);
+  }
   if (status !== 200) {
     fail(status);
   }
@@ -176,7 +211,7 @@ export async function startLogin(c: Client): Promise<LoginStart> {
 
 export type PollResult =
   | { status: "pending" | "awaiting_approval" | "retry" }
-  | { status: "ok"; token: string; tokenId?: string; scopes: string[]; expiresAt?: string };
+  | { status: "ok"; token: string; tokenId?: string; scopes?: string[]; expiresAt?: string };
 
 export async function pollLogin(c: Client, code: string): Promise<PollResult> {
   let r: { status: number; data: any };
@@ -197,7 +232,7 @@ export async function pollLogin(c: Client, code: string): Promise<PollResult> {
       status: "ok",
       token: data.token,
       tokenId: typeof data.token_id === "string" ? data.token_id : undefined,
-      scopes: Array.isArray(data.scopes) ? data.scopes.filter((s: unknown) => typeof s === "string") : LOGIN_SCOPES,
+      scopes: Array.isArray(data.scopes) ? data.scopes.filter((s: unknown) => typeof s === "string") : undefined,
       expiresAt: typeof data.expires_at === "string" ? data.expires_at : undefined,
     };
   }
@@ -220,4 +255,205 @@ export function sessionWebUrl(base: string, id: string): string {
 export function listingWebUrl(base: string, row: { id: string; tenant?: string }): string {
   const t = row.tenant && row.tenant !== "default" ? `?t=${encodeURIComponent(row.tenant)}` : "";
   return `${base}/marketplace/${encodeURIComponent(row.id)}${t}`;
+}
+
+/**
+ * The refusals of a route that a scoped key may lack, or that an older server doesn't have:
+ * a 403 naming `required_scope` is "insufficient-scope" (the caller can offer a new sign-in);
+ * any other 401/403, and a 404/405 for the route itself, mean the server doesn't offer it yet.
+ */
+function scopedFail(status: number, data: any, notSupported: string): never {
+  const code = errorCode(data);
+  const need = data?.error?.details?.required_scope;
+  if (status === 403 && code === "insufficient_scope" && typeof need === "string" && need) {
+    throw new ApiError("insufficient-scope", MESSAGES.needsScope(need), status, need);
+  }
+  if (status === 401 || status === 403 || status === 405 || (status === 404 && code !== "no_such_profile")) {
+    throw new ApiError("not-supported", notSupported, status);
+  }
+  fail(status);
+}
+
+/** The non-secret fields of a launch profile. The server never stores an API key in one. */
+export interface Profile {
+  name?: string;
+  harness?: string;
+  model?: string;
+  base_url?: string;
+  flags?: string[];
+  /** Newer servers: how many credential-like header entries and flags were left out of this answer. */
+  hidden_fields?: number;
+  [field: string]: unknown;
+}
+
+/** Stands for a hidden value on screen; it is never sent. */
+export const MASK = "••••";
+const SERVER_MESSAGE_MAX = 200;
+
+/**
+ * A server refusal's text, shown as sent but on one short line. If it is missing, or contains any
+ * value that was submitted, `fallback` is used instead, so a key is never echoed.
+ */
+export function serverLine(data: any, submitted: readonly string[], fallback: string): string {
+  const raw = data?.error?.message;
+  if (typeof raw !== "string") {
+    return fallback;
+  }
+  let line = raw.split(/\r?\n/)[0].replace(/\s+/g, " ").trim();
+  if (!line || submitted.some((v) => v.length >= 4 && raw.includes(v))) {
+    return fallback;
+  }
+  if (line.length > SERVER_MESSAGE_MAX) {
+    line = `${line.slice(0, SERVER_MESSAGE_MAX - 1)}…`;
+  }
+  return line;
+}
+
+/** Every string value a profile body carries (flags, header values, fields), for the echo check. */
+function submittedValues(p: Profile): string[] {
+  const out: string[] = [];
+  const walk = (v: unknown) => {
+    if (typeof v === "string") {
+      out.push(v);
+    } else if (Array.isArray(v)) {
+      v.forEach(walk);
+    } else if (v && typeof v === "object") {
+      Object.values(v).forEach(walk);
+    }
+  };
+  walk(p);
+  return out;
+}
+
+export interface ProfilesState {
+  profiles: [string, Profile][];
+  default: string | null;
+}
+
+/** A write's reply: the list, or undefined for a bare `{"ok": true, ...}` (a key that may write but not read). */
+function writeReply(status: number, data: any): ProfilesState | undefined {
+  if (data && data.ok === true && !("profiles" in data)) {
+    return undefined;
+  }
+  return profilesState(status, data);
+}
+
+function profilesState(status: number, data: any): ProfilesState {
+  if (!data || typeof data.profiles !== "object" || data.profiles === null || Array.isArray(data.profiles)) {
+    throw new ApiError("bad-response", MESSAGES.badResponse, status);
+  }
+  const profiles = Object.entries(data.profiles as Record<string, unknown>)
+    .filter(([id, p]) => PROFILE_ID.test(id) && typeof p === "object" && p !== null && !Array.isArray(p)) as [string, Profile][];
+  const def = typeof data.default === "string" && profiles.some(([id]) => id === data.default) ? data.default : null;
+  return { profiles, default: def };
+}
+
+/** The server's rule for a profile id. */
+export const PROFILE_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+export async function listProfiles(c: Client, token: string): Promise<ProfilesState> {
+  const { status, data } = await call(c, "/library/profiles", { token });
+  if (status !== 200) {
+    scopedFail(status, data, MESSAGES.profilesNotSupported);
+  }
+  return profilesState(status, data);
+}
+
+function profileWriteFail(status: number, data: any, submitted: readonly string[] = []): never {
+  const code = errorCode(data);
+  if (status === 400 && code === "credential_in_profile") {
+    throw new ApiError("credential-in-profile", serverLine(data, submitted, MESSAGES.credentialInProfile), status);
+  }
+  if (status === 409 && code === "needs_signin") {
+    throw new ApiError("needs-signin", serverLine(data, submitted, MESSAGES.needsSignin), status);
+  }
+  if (status === 409 && code === "base_url_needs_signin") {
+    throw new ApiError("base-url-needs-signin", serverLine(data, submitted, MESSAGES.baseUrlNeedsSignin), status);
+  }
+  if (status === 409 && code === "permission_flag_needs_signin") {
+    throw new ApiError("permission-flag-needs-signin", serverLine(data, submitted, MESSAGES.permissionFlagNeedsSignin), status);
+  }
+  if (status === 409 && code === "hidden_fields_bound_to_host") {
+    throw new ApiError("hidden-bound-to-host", serverLine(data, submitted, MESSAGES.hiddenBoundToHost), status);
+  }
+  if (status === 429 && code === "profile_limit") {
+    throw new ApiError("profile-limit", serverLine(data, submitted, MESSAGES.profileLimit), status);
+  }
+  if (status === 404 && code === "no_such_profile") {
+    throw new ApiError("not-found", MESSAGES.profileGone, status);
+  }
+  // Any other refusal: the server's own line (a key may change less than an account can).
+  if (status === 409) {
+    throw new ApiError("conflict", serverLine(data, submitted, MESSAGES.needsSignin), status);
+  }
+  if (status === 400) {
+    throw new ApiError("rejected", serverLine(data, submitted, MESSAGES.profileRejected), status);
+  }
+  scopedFail(status, data, MESSAGES.profilesNotSupported);
+}
+
+function profilePath(id: string, suffix = ""): string {
+  if (!PROFILE_ID.test(id)) {
+    throw new ApiError("rejected", MESSAGES.profileRejected);
+  }
+  return `/library/profiles/${encodeURIComponent(id)}${suffix}`;
+}
+
+export async function putProfile(c: Client, token: string, id: string, profile: Profile): Promise<ProfilesState | undefined> {
+  // `hidden_fields` is the server's count, not a field; the server keeps the hidden entries itself.
+  const { hidden_fields: _hidden, ...body } = profile;
+  const values = submittedValues(body);
+  if (values.some((v) => v.includes(MASK))) {
+    throw new ApiError("rejected", MESSAGES.profileRejected);   // a masked value is never written back
+  }
+  const { status, data } = await call(c, profilePath(id), { method: "PUT", token, body });
+  if (status !== 200) {
+    profileWriteFail(status, data, values);
+  }
+  return writeReply(status, data);
+}
+
+export async function deleteProfile(c: Client, token: string, id: string): Promise<ProfilesState | undefined> {
+  const { status, data } = await call(c, profilePath(id), { method: "DELETE", token });
+  if (status !== 200) {
+    profileWriteFail(status, data);
+  }
+  return writeReply(status, data);
+}
+
+/** Files a saved session in `folder`, or takes it out of its folder (null). */
+export async function setSessionFolder(c: Client, token: string, id: string, folder: string | null): Promise<void> {
+  const { status, data } = await call(c, `/library/session/${encodeURIComponent(id)}/meta`, { method: "POST", token, body: { folder } });
+  if (status === 200) {
+    return;
+  }
+  if (status === 400) {
+    throw new ApiError("rejected", MESSAGES.folderRejected, status);
+  }
+  if (status === 404) {
+    // The meta route exists on every server, so a 404 is about the session.
+    throw new ApiError("not-found", MESSAGES.sessionGone, status);
+  }
+  scopedFail(status, data, MESSAGES.foldersNotSupported);
+}
+
+/** Sign-out and step-up never wait longer than this for the revoke call. */
+export const REVOKE_TIMEOUT_MS = 5_000;
+
+export type RevokeResult = "revoked" | "unsupported" | "failed";
+
+/**
+ * Revokes the calling library key (`POST /library/keys/self/revoke`), best-effort: never throws.
+ * "unsupported" is a server without the route (404/405); "failed" is any other answer or no answer.
+ */
+export async function revokeKey(c: Client, token: string): Promise<RevokeResult> {
+  try {
+    const { status, data } = await call(c, "/library/keys/self/revoke", { method: "POST", token, timeoutMs: REVOKE_TIMEOUT_MS });
+    if (status === 200 && data?.status === "revoked") {
+      return "revoked";
+    }
+    return status === 404 || status === 405 ? "unsupported" : "failed";
+  } catch {
+    return "failed";
+  }
 }
