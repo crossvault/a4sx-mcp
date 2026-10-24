@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2
+
+- **Resume in terminal** now runs in a normal terminal with your default shell, so Claude Code gets your shell, `PATH` and profile. In 0.3.1, `claude --resume` could stop with exit code 1 on Claude Code's first run. The terminal also stays open after an error.
+
 ## 0.3.1
 
 - **Resume in Claude Code** no longer needs the a4sx command-line tool. The extension copies the session into Claude Code's local history itself, with the sidebar's sign-in.

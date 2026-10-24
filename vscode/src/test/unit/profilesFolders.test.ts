@@ -579,6 +579,9 @@ describe("Launch profile actions", () => {
 
 describe("Resume in terminal: profile pick", () => {
   beforeEach(resetCalls);
+  const savedPath = process.env.PATH;
+  before(() => { process.env.PATH = "/usr/bin"; });
+  after(() => { process.env.PATH = savedPath; });
   const item = new SessionItem({ id: "c-123", label: "my-base" });
   const found = (): CliLookup => ({ found: true, path: "/usr/local/bin/a4sx" });
 
@@ -591,9 +594,8 @@ describe("Resume in terminal: profile pick", () => {
       ["Lab", "lab", "http://localhost:8080"],
       ["Work", "work · model-a", "https://proxy.example.com"],
     ]);
-    assert.deepStrictEqual(calls.terminals[0].options, {
-      name: ext.RESUME_TERMINAL_NAME, shellPath: "/usr/local/bin/a4sx", shellArgs: ["launch", "--a4sx-session=my-base", "--profile=work"],
-    });
+    assert.deepStrictEqual(calls.terminals[0].options, { name: ext.RESUME_TERMINAL_NAME });
+    assert.deepStrictEqual(calls.terminals[0].sent, ["'/usr/local/bin/a4sx' 'launch' '--a4sx-session=c-123' '--profile=work'\n"]);
   });
 
   it("Esc in the pick starts nothing; one profile, no profiles:read, or an error: no pick and no --profile", async () => {
@@ -611,7 +613,7 @@ describe("Resume in terminal: profile pick", () => {
       const { net } = await activateWith(routes, scopes);
       await ext.resumeSession(item, found);
       assert.strictEqual(calls.quickPicks.length, 0);
-      assert.deepStrictEqual(calls.terminals[0].options.shellArgs, ["launch", "--a4sx-session=my-base"]);
+      assert.deepStrictEqual(calls.terminals[0].sent, ["'/usr/local/bin/a4sx' 'launch' '--a4sx-session=c-123'\n"]);
       if (scopes.length === 1) {
         assert.strictEqual(net.seen.length, 0, "no request without profiles:read");
       }

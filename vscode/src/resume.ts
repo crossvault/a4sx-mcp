@@ -8,7 +8,9 @@
 import * as os from "os";
 import * as vscode from "vscode";
 import { ApiError, Client, fetchTranscript, listProfiles, MESSAGES, otherHarness, SCOPE_PROFILES_READ, SessionRow } from "./api";
+import { CLAUDE_NAME } from "./cli";
 import { seedTranscript, SeedError } from "./nativeSeed";
+import { commandLine, programName, shellKind } from "./terminalCommand";
 import { offerStepUp, ScopedAuth } from "./stepUp";
 
 export const RESUME_TEXTS = {
@@ -120,14 +122,36 @@ export async function seedWithProgress(client: Client, token: string, row: Sessi
 
 // --- the claude terminal --------------------------------------------------------------------------
 
-/** Opens a terminal that runs `claude --resume <id>` directly (no shell) in `cwd`. Nothing secret in argv or env. */
+/**
+ * Opens a normal terminal (the user's default shell, with its PATH, $SHELL and profile) and types the
+ * command into it: `program` (bare when found on PATH, else its absolute path) and `args`, each quoted
+ * for that shell. When the shell is unknown, or a piece can't be quoted safely for it, the program
+ * runs directly without a shell as before. Nothing secret is in the command or the environment.
+ */
+export function openCommandTerminal(
+  name: string, found: string, programBase: string, args: readonly string[], cwd?: string | vscode.Uri,
+): vscode.Terminal {
+  const kind = shellKind(vscode.env.shell);
+  const line = kind && commandLine(programName(found, programBase), args, kind);
+  if (line) {
+    const terminal = vscode.window.createTerminal(cwd === undefined ? { name } : { name, cwd });
+    terminal.sendText(line, true);
+    terminal.show();
+    return terminal;
+  }
+  const terminal = vscode.window.createTerminal(cwd === undefined
+    ? { name, shellPath: found, shellArgs: [...args] }
+    : { name, shellPath: found, shellArgs: [...args], cwd });
+  terminal.show();
+  return terminal;
+}
+
+/** Opens a terminal that runs `claude --resume <id>` in `cwd`. Nothing secret in the command or env. */
 export function openClaudeTerminal(claudePath: string, sessionId: string, cwd: string | vscode.Uri, name: string): vscode.Terminal | undefined {
   if (!UUID.test(sessionId)) {
     return undefined;
   }
-  const terminal = vscode.window.createTerminal({ name, shellPath: claudePath, shellArgs: ["--resume", sessionId], cwd });
-  terminal.show();
-  return terminal;
+  return openCommandTerminal(name, claudePath, CLAUDE_NAME, ["--resume", sessionId], cwd);
 }
 
 export const CLI_HINT_KEY = "a4sx.cliHintShown";
