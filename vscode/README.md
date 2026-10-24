@@ -7,8 +7,8 @@ This extension connects VS Code to a4sx. It adds:
 - **The a4sx sidebar.** Click the a4sx icon in the activity bar.
   - **Sign in to a4sx.** Your browser opens the a4sx sign-in page. Check that it shows the same code as VS Code, then confirm. VS Code keeps the resulting key in its secret storage. The key can read your library and your launch profiles. It can also rename your saved sessions, change their tags and move them between folders.
   - **My sessions** lists the sessions in your library, newest first, with their date and size, in folders. For each session you can:
-    - **Resume in terminal**, which runs `a4sx launch --a4sx-session=NAME` and continues the session in Claude Code. If you have more than one launch profile, VS Code asks which one to use.
-    - **Resume in Claude Code**, which copies the session into Claude Code's local history for the open folder and opens it in the Claude Code extension's panel. If more than one folder is open, VS Code asks which one.
+    - **Resume in terminal**. With the a4sx command-line tool, this runs `a4sx launch --a4sx-session=NAME`, and VS Code asks which launch profile to use if you have more than one. Without it, the extension copies the session into Claude Code's local history and runs `claude --resume` in a terminal.
+    - **Resume in Claude Code**, which copies the session into Claude Code's local history for the open folder and opens it in the Claude Code extension's panel. It doesn't need the a4sx command-line tool. If more than one folder is open, VS Code asks which one. If no folder is open, you can use your home folder or choose one; the window then opens that folder and the session opens there.
     - **Open on the web**.
     - **Copy session id**.
     - **Move to folder…** and **Remove from folder**.
@@ -51,12 +51,14 @@ To sign out, run **a4sx: Sign out**. The extension asks the a4sx server to revok
 ## Requirements
 
 - VS Code 1.101 or later. The MCP servers are used by agent mode in VS Code chat.
-- For **Save this session** and **Resume in terminal**: the a4sx command-line tool, installed and signed in with `a4sx login`. See the [install guide](https://session-exchange.com/guide/cli). The extension does not install it for you. It looks for `a4sx` on your `PATH`, then in `~/.local/bin`, `/usr/local/bin` and `/opt/homebrew/bin`. If it can't find `a4sx`, it tells you and links to the guide.
-- For **Resume in Claude Code**: the Claude Code extension, and the a4sx command-line tool 0.10.77 or later (run `a4sx update`). The resumed session runs on the Claude Code extension's own sign-in, not on your a4sx launch profile or router.
+- For **Save this session** and for launch profiles in **Resume in terminal**: the a4sx command-line tool, installed and signed in with `a4sx login`. See the [install guide](https://session-exchange.com/guide/cli). The extension looks for `a4sx` on your `PATH`, then in `~/.local/bin`, `/usr/local/bin` and `/opt/homebrew/bin`. The first time you resume in a terminal without it, the extension offers to install it.
+- For **Resume in terminal** without the a4sx command-line tool: Claude Code's `claude` command. The extension looks for it on your `PATH`, then in the same folders and in `~/.claude/local`.
+- For **Resume in Claude Code**: the Claude Code extension. The resumed session runs on the Claude Code extension's own sign-in, not on your a4sx launch profile or router.
+- For resuming without the a4sx command-line tool: sign in to a4sx in the sidebar. The extension copies the session with that sign-in.
 
 Saving and resuming work for Claude Code sessions.
 
-In a remote window (SSH, WSL, dev containers, Codespaces), the a4sx extension usually runs on the remote machine. Then the a4sx command-line tool must be installed and signed in on that machine too.
+In a remote window (SSH, WSL, dev containers, Codespaces), the a4sx extension usually runs on the remote machine. Resuming copies the session into Claude Code's history on that machine, and **Resume in terminal** runs `claude` there. **Save this session** and launch profiles need the a4sx command-line tool installed and signed in on that machine too.
 
 ## Settings
 
@@ -67,4 +69,4 @@ In a remote window (SSH, WSL, dev containers, Codespaces), the a4sx extension us
 
 ## Network use
 
-The sidebar connects to session-exchange.com (or your `a4sx.serverUrl`) to sign you in, list and file your sessions, manage your launch profiles and search the marketplace. It sends no telemetry. VS Code connects to session-exchange.com when agent mode uses the a4sx MCP servers. **Save this session**, **Resume in terminal** and **Resume in Claude Code** run the a4sx command-line tool, which uses its own sign-in.
+The sidebar connects to session-exchange.com (or your `a4sx.serverUrl`) to sign you in, list and file your sessions, manage your launch profiles and search the marketplace. It sends no telemetry. VS Code connects to session-exchange.com when agent mode uses the a4sx MCP servers. **Resume in Claude Code**, and **Resume in terminal** without the a4sx command-line tool, download the session from session-exchange.com with the sidebar's sign-in. **Save this session**, and **Resume in terminal** with the a4sx command-line tool, run that tool, which uses its own sign-in. When a window opens and your sign-in can't read launch profiles yet, the extension asks the server once whether it offers them, to know whether to ask for that permission.

@@ -5,9 +5,8 @@ import * as assert from "assert";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { calls, resetCalls } from "../fakeVscode";
+import { calls, fakeMemento, fakeSecrets, resetCalls } from "../fakeVscode";
 import * as ext from "../../extension";
-import * as cr from "../../claudeResume";
 import { findCli, type CliLookup } from "../../cli";
 import { SessionItem } from "../../sessionsView";
 
@@ -20,16 +19,6 @@ const missing = (): CliLookup => ({ found: false, reason: "not-on-path" });
 const folder = (name: string, fsPath: string, scheme = "file") => ({ name, uri: { scheme, fsPath } });
 const item = new SessionItem({ id: "c-123", label: "my-base", title: "Fix the login bug" });
 
-function fakeExec(outcome: { error?: (Error & { code?: unknown }) | null; stdout?: string; stderr?: string }) {
-  const seen: { file: string; args: string[]; cwd: string }[] = [];
-  const exec: cr.ExecFileLike = (file, args, options, callback) => {
-    seen.push({ file, args, cwd: options.cwd });
-    setImmediate(() => callback(outcome.error ?? null, outcome.stdout ?? "", outcome.stderr ?? ""));
-    return { stdin: { end: () => undefined } };
-  };
-  return { exec, seen };
-}
-
 /** A remote window with the extension on the remote host (VS Code's default for this extension). */
 function remoteWindow(name = "ssh-remote"): void {
   resetCalls();
@@ -38,66 +27,37 @@ function remoteWindow(name = "ssh-remote"): void {
   calls.extensionKind = WORKSPACE;
 }
 
-describe("remote windows: Resume in Claude Code folders", () => {
+describe("remote windows: the folders a session can be resumed in", () => {
   beforeEach(() => remoteWindow());
+  const targets = (folders: any[]) => ext.folderTargets(folders as any, ext.remoteHostName()).map((t) => [t.folder.name, t.cwd]);
 
-  it("a vscode-remote folder is accepted; the CLI runs in its path on the remote host", async () => {
-    calls.workspaceFolders = [folder("proj", "/home/dev/proj", "vscode-remote")];
-    const f = fakeExec({ stdout: `${ID}\n` });
-    await ext.resumeInClaude(item, found, f.exec);
-    assert.deepStrictEqual(f.seen, [{ file: CLI, args: ["launch", "--a4sx-session=my-base", "--seed-only"], cwd: "/home/dev/proj" }]);
-    assert.deepStrictEqual(calls.errors, []);
-    assert.deepStrictEqual(calls.opened, [`vscode://anthropic.claude-code/open?session=${ID}`]);
+  it("on the remote host: file and vscode-remote folders count, at their paths on that host", () => {
+    assert.deepStrictEqual(targets([folder("proj", "/home/dev/proj", "vscode-remote"), folder("api", "/home/dev/api")]),
+      [["proj", "/home/dev/proj"], ["api", "/home/dev/api"]]);
   });
 
-  it("a file folder (how the remote extension host sees its folders) works as before", async () => {
-    calls.workspaceFolders = [folder("proj", "/home/dev/proj")];
-    const f = fakeExec({ stdout: ID });
-    await ext.resumeInClaude(item, found, f.exec);
-    assert.strictEqual(f.seen[0].cwd, "/home/dev/proj");
-    assert.deepStrictEqual(calls.errors, []);
-  });
-
-  it("multi-root with mixed schemes: offers only the folders on the remote host", async () => {
-    calls.workspaceFolders = [
-      folder("api", "/home/dev/api"),
-      folder("docs", "/docs", "vscode-vfs"),
-      folder("web", "/home/dev/web", "vscode-remote"),
-      folder("laptop", "/Users/me/notes", "vscode-local"),
-      folder("scratch", "/Untitled-1", "untitled"),
-    ];
-    calls.nextPick = 1;
-    const f = fakeExec({ stdout: ID });
-    await ext.resumeInClaude(item, found, f.exec);
-    assert.deepStrictEqual(calls.quickPicks[0].items.map((i) => [i.label, i.description]), [["api", "/home/dev/api"], ["web", "/home/dev/web"]]);
-    assert.strictEqual(f.seen[0].cwd, "/home/dev/web");
-  });
-
-  it("virtual and other schemes are refused with a clear message, in remote and local windows", async () => {
+  it("virtual and other schemes never count, in remote and local windows", () => {
     for (const remote of ["ssh-remote", undefined]) {
+      calls.remoteName = remote;
       for (const scheme of ["vscode-vfs", "untitled", "vscode-local"]) {
-        remoteWindow();
-        calls.remoteName = remote;
-        calls.workspaceFolders = [folder("x", "/x", scheme)];
-        let looked = false;
-        const f = fakeExec({ stdout: ID });
-        await ext.resumeInClaude(item, () => { looked = true; return found(); }, f.exec);
-        assert.strictEqual(f.seen.length, 0, scheme);
-        assert.strictEqual(looked, false, "no CLI lookup");
-        assert.deepStrictEqual(calls.errors, [{ message: ext.CLAUDE_MESSAGES.notOnDisk, items: [] }], `${remote} ${scheme}`);
-        assert.deepStrictEqual(calls.opened, []);
+        assert.deepStrictEqual(targets([folder("x", "/x", scheme)]), [], `${remote} ${scheme}`);
       }
     }
   });
 
-  it("a local window ignores vscode-remote folders, as in 0.2.1", async () => {
+  it("a local window ignores vscode-remote folders, as in 0.2.1", () => {
     calls.remoteName = undefined;
     calls.extensionKind = UI;
-    calls.workspaceFolders = [folder("web", "/home/dev/web", "vscode-remote"), folder("proj", "/w/proj")];
-    const f = fakeExec({ stdout: ID });
-    await ext.resumeInClaude(item, found, f.exec);
-    assert.strictEqual(calls.quickPicks.length, 0, "one usable folder: no picker");
-    assert.strictEqual(f.seen[0].cwd, "/w/proj");
+    assert.deepStrictEqual(targets([folder("web", "/home/dev/web", "vscode-remote"), folder("proj", "/w/proj")]), [["proj", "/w/proj"]]);
+  });
+
+  it("only virtual folders: Resume in Claude Code says a folder on disk is needed", async () => {
+    calls.workspaceFolders = [folder("x", "/x", "vscode-vfs")];
+    ext.activate({ subscriptions: [], secrets: fakeSecrets(), globalState: fakeMemento() } as any);
+    await (ext.sidebar!.auth as any).secrets.store("a4sx.auth", JSON.stringify({ token: "t", server: "https://session-exchange.com", id: "i", scopes: ["library:read"] }));
+    await ext.resumeInClaude(item);
+    assert.deepStrictEqual(calls.errors, [{ message: ext.CLAUDE_MESSAGES.notOnDisk, items: [] }]);
+    assert.deepStrictEqual(calls.opened, []);
   });
 
   it("remoteHostName: only when the window is remote and the extension runs there", () => {
@@ -121,19 +81,19 @@ describe("remote window, but the extension runs on this computer", () => {
   it("Resume in Claude Code, Resume in terminal and Save stop with one message; nothing runs", async () => {
     let looked = 0;
     const lookup = () => { looked++; return found(); };
-    const f = fakeExec({ stdout: ID });
-    await ext.resumeInClaude(item, lookup, f.exec);
-    await ext.resumeSession(item, lookup);
+    let claudeLooked = 0;
+    await ext.resumeInClaude(item);
+    await ext.resumeSession(item, lookup, undefined, () => { claudeLooked++; return "/usr/bin/claude"; });
     await ext.saveSession(lookup);
     assert.deepStrictEqual(calls.errors, [0, 1, 2].map(() => ({ message, items: [] })));
     assert.strictEqual(looked, 0, "no CLI lookup on this computer");
-    assert.strictEqual(f.seen.length, 0);
+    assert.strictEqual(claudeLooked, 0, "no claude lookup either");
     assert.strictEqual(calls.terminals.length, 0);
     assert.deepStrictEqual(calls.opened, []);
   });
 
-  it("the login button stops the same way", async () => {
-    assert.strictEqual(await ext.runLogin(CLI), undefined);
+  it("the profile terminal stops the same way", async () => {
+    assert.strictEqual(await ext.runProfileCli("work", found), undefined);
     assert.deepStrictEqual(calls.errors, [{ message, items: [] }]);
     assert.strictEqual(calls.terminals.length, 0);
   });
@@ -175,14 +135,14 @@ describe("remote windows: a4sx not found", () => {
     ];
     for (const [name, label] of cases) {
       remoteWindow(name);
-      await ext.resumeSession(item, missing);
+      await ext.saveSession(missing);
       assert.strictEqual(calls.errors[0].message, `a4sx isn't installed on ${label}. Install it there, then try again.`, name);
     }
   });
 
   it("'Copy install command' copies the installer line for the default server", async () => {
     calls.nextErrorChoice = "Copy install command";
-    await ext.resumeSession(item, missing);
+    await ext.saveSession(missing);
     assert.strictEqual(calls.clipboard, "curl -fsSL https://session-exchange.com/install.sh | sh");
     assert.deepStrictEqual(calls.infos, ["Copied the install command. Run it in a terminal in this window."]);
     assert.strictEqual(calls.terminals.length, 0);
@@ -223,12 +183,12 @@ describe("remote windows: a4sx not found", () => {
     assert.strictEqual(calls.clipboard, undefined);
   });
 
-  it("Resume in Claude Code shows the same remote message", async () => {
+  it("Resume in terminal without a4sx on the remote host goes CLI-free: it looks for claude there instead", async () => {
     calls.workspaceFolders = [folder("proj", "/home/dev/proj")];
-    const f = fakeExec({ stdout: ID });
-    await ext.resumeInClaude(item, missing, f.exec);
-    assert.strictEqual(f.seen.length, 0);
-    assert.deepStrictEqual(calls.errors[0].items, ["Copy install command", "Open settings"]);
+    let claudeLooked = 0;
+    await ext.resumeSession(item, missing, undefined, () => { claudeLooked++; return undefined; });
+    assert.strictEqual(claudeLooked, 1);
+    assert.deepStrictEqual(calls.errors.map((e) => e.items), [["How to install"]], "Claude Code's install hint, not a4sx's");
   });
 
   it("an invalid a4sx.cliPath keeps the 0.2.1 message", async () => {
@@ -271,42 +231,4 @@ describe("remote windows: a4sx not found", () => {
       fs.rmdirSync(home);
     }
   });
-});
-
-describe("not signed in", () => {
-  const routerText = "a4sx: the router needs a sign-in — run `a4sx login` first\n";
-  const seedText = "a4sx: seeding from a saved session needs a sign-in — run `a4sx login` first\n";
-
-  it("classifies the CLI's sign-in errors", () => {
-    assert.strictEqual(cr.isNotSignedIn(1, seedText), true);
-    assert.strictEqual(cr.isNotSignedIn(1, `working\n${routerText}`), true);
-    assert.strictEqual(cr.isNotSignedIn(0, seedText), false);
-    assert.strictEqual(cr.isNotSignedIn(null, seedText), false);
-    assert.strictEqual(cr.isNotSignedIn(1, "a4sx: no session named x\n"), false);
-    assert.strictEqual(cr.isNotSignedIn(1, "amdx: seeding from a saved session needs a sign-in — run `amdx login` first\n"), true, "legacy name");
-    assert.strictEqual(cr.isNotSignedIn(1, "a4sx: run `a4sx login` to switch accounts\n"), false);
-    assert.strictEqual(cr.isNotSignedIn(1, "a4sx: this needs a sign-in\n"), false);
-  });
-
-  it("seedSession reports not-signed-in", async () => {
-    const r = await cr.seedSession(CLI, "n", "/w", fakeExec({ error: Object.assign(new Error("Command failed"), { code: 1 }), stderr: seedText }).exec);
-    assert.deepStrictEqual(r, { kind: "not-signed-in" });
-  });
-
-  for (const remote of [undefined, "ssh-remote"]) {
-    it(`Resume in Claude Code says to run a4sx login; the button opens a terminal running it (${remote ?? "local"})`, async () => {
-      remoteWindow();
-      calls.remoteName = remote;
-      calls.workspaceFolders = [folder("proj", "/home/dev/proj")];
-      const exec = fakeExec({ error: Object.assign(new Error("Command failed"), { code: 1 }), stderr: seedText }).exec;
-      await ext.resumeInClaude(item, found, exec);
-      assert.deepStrictEqual(calls.errors, [{ message: "The a4sx CLI isn't signed in on this machine. Run a4sx login in a terminal, then try again.", items: ["Run a4sx login"] }]);
-      assert.strictEqual(calls.terminals.length, 0, "nothing runs until clicked");
-      calls.nextErrorChoice = "Run a4sx login";
-      await ext.resumeInClaude(item, found, exec);
-      assert.deepStrictEqual(calls.terminals.map((t) => t.options), [{ name: ext.LOGIN_TERMINAL_NAME, shellPath: CLI, shellArgs: ["login"] }]);
-      assert.ok(calls.terminals[0].shown);
-      assert.deepStrictEqual(calls.opened, []);
-    });
-  }
 });

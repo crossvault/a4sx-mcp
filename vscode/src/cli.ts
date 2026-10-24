@@ -63,6 +63,27 @@ function expandHome(p: string, home: string): string {
   return p;
 }
 
+/** Finds `name` on PATH, then in the fallback directories. */
+function findOnPath(name: string, env: LookupEnv, platform: NodeJS.Platform, fallback: string[]): string | undefined {
+  const pathEnv = env.pathEnv ?? process.env.PATH ?? "";
+  // On Windows the PATHEXT forms (claude.cmd, claude.exe) come first: npm also writes an extensionless
+  // sh shim next to them, which a Windows terminal can't start. The bare name is tried last.
+  const exts = platform === "win32" ? [...(env.pathExt ?? process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean), ""] : [""];
+  const sep = platform === "win32" ? ";" : ":";
+  for (const dir of [...pathEnv.split(sep), ...fallback]) {
+    if (!dir) {
+      continue;
+    }
+    for (const ext of exts) {
+      const candidate = path.join(dir, name + ext);
+      if (isExecutableFile(candidate, platform)) {
+        return candidate;
+      }
+    }
+  }
+  return undefined;
+}
+
 /**
  * Resolve the a4sx executable. A non-empty `configured` path (the `a4sx.cliPath` user setting) wins
  * and must point at an executable file; otherwise `a4sx` is looked up on PATH, then in the fallback
@@ -76,20 +97,27 @@ export function findCli(configured: string | undefined, env: LookupEnv = {}): Cl
     const p = expandHome(want, home);
     return isExecutableFile(p, platform) ? { found: true, path: p } : { found: false, reason: "configured-path-invalid", configured: want };
   }
-  const pathEnv = env.pathEnv ?? process.env.PATH ?? "";
-  const exts = platform === "win32" ? ["", ...(env.pathExt ?? process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)] : [""];
-  const sep = platform === "win32" ? ";" : ":";
-  const fallback = env.fallbackDirs ?? defaultFallbackDirs(platform, home);
-  for (const dir of [...pathEnv.split(sep), ...fallback]) {
-    if (!dir) {
-      continue;
-    }
-    for (const ext of exts) {
-      const candidate = path.join(dir, CLI_NAME + ext);
-      if (isExecutableFile(candidate, platform)) {
-        return { found: true, path: candidate };
-      }
-    }
+  const found = findOnPath(CLI_NAME, env, platform, env.fallbackDirs ?? defaultFallbackDirs(platform, home));
+  return found ? { found: true, path: found } : { found: false, reason: "not-on-path" };
+}
+
+export const CLAUDE_NAME = "claude";
+
+/**
+ * Where Claude Code's own installers put `claude`, tried after PATH: the a4sx fallbacks plus
+ * `~/.claude/local` (Claude Code's local install); on Windows, the native installer's
+ * `%USERPROFILE%\.local\bin`.
+ */
+export function claudeFallbackDirs(platform: NodeJS.Platform, home: string): string[] {
+  if (platform === "win32") {
+    return [path.win32.join(home, ".local", "bin")];
   }
-  return { found: false, reason: "not-on-path" };
+  return [...defaultFallbackDirs(platform, home), path.join(home, ".claude", "local")];
+}
+
+/** The `claude` command (Claude Code's CLI), found like a4sx: PATH, then the common install folders. */
+export function findClaude(env: LookupEnv = {}): string | undefined {
+  const platform = env.platform ?? process.platform;
+  const home = env.homeDir ?? os.homedir();
+  return findOnPath(CLAUDE_NAME, env, platform, env.fallbackDirs ?? claudeFallbackDirs(platform, home));
 }

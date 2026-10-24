@@ -13,6 +13,7 @@ export type ApiErrorCode =
   | "bad-server-url" | "unreachable" | "unauthorized" | "busy" | "expired" | "too-many-tokens"
   | "bad-login-url" | "bad-response" | "http"
   | "bad-scopes" | "insufficient-scope" | "not-supported" | "rejected" | "profile-limit" | "not-found"
+  | "cancelled" | "not-claude-code" | "no-transcript"
   | "credential-in-profile" | "hidden-bound-to-host" | "base-url-needs-signin" | "permission-flag-needs-signin" | "needs-signin" | "conflict";
 
 export class ApiError extends Error {
@@ -50,6 +51,8 @@ export const MESSAGES = {
   profileLimit: "You have the maximum number of launch profiles. Delete one first.",
   profileGone: "This launch profile no longer exists. Refresh the list.",
   sessionGone: "This session no longer exists. Refresh the list.",
+  noTranscript: "This saved session has no transcript to resume.",
+  notClaudeCode: "Only Claude Code sessions can be resumed.",
 } as const;
 
 /** The server origin from the a4sx.serverUrl setting: https only (plain http only for this machine). */
@@ -74,7 +77,9 @@ export interface Client {
   userAgent: string;
 }
 
-async function call(c: Client, path: string, opts: { method?: string; token?: string; body?: unknown; timeoutMs?: number } = {}): Promise<{ status: number; data: any }> {
+async function call(
+  c: Client, path: string, opts: { method?: string; token?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<{ status: number; data: any }> {
   const headers: Record<string, string> = { Accept: "application/json", "User-Agent": c.userAgent };
   if (opts.token) {
     headers.Authorization = `Bearer ${opts.token}`;
@@ -83,21 +88,28 @@ async function call(c: Client, path: string, opts: { method?: string; token?: st
     headers["Content-Type"] = "application/json";
   }
   let res: { status: number; json(): Promise<unknown> };
+  const timeout = AbortSignal.timeout(opts.timeoutMs ?? TIMEOUT_MS);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
+  const lost = () => (opts.signal?.aborted ? new ApiError("cancelled", MESSAGES.unreachable) : new ApiError("unreachable", MESSAGES.unreachable));
   try {
     res = await c.fetch(`${c.base}${path}`, {
       method: opts.method ?? "GET",
       headers,
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-      signal: AbortSignal.timeout(opts.timeoutMs ?? TIMEOUT_MS),
+      signal,
     });
   } catch {
-    throw new ApiError("unreachable", MESSAGES.unreachable);
+    throw lost();
   }
   let data: any = undefined;
   try {
     data = await res.json();
-  } catch {
-    // A body that isn't JSON is judged by its status below.
+  } catch (e) {
+    // A timeout, a cancel or a dropped connection while the body arrives is a network failure, not an
+    // answer; a body that isn't JSON is judged by its status below.
+    if (signal.aborted || (e instanceof Error && /terminated|aborted|ECONNRESET|socket/i.test(`${e.name} ${e.message}`))) {
+      throw lost();
+    }
   }
   return { status: res.status, data };
 }
@@ -126,8 +138,9 @@ export interface SessionRow {
   created_at?: string;
   updated_at?: string;
   tokens?: { current?: number; peak?: number };
-  harness?: string;
+  harness?: string | { id?: string };
   versions?: number;
+  version?: string;
 }
 
 export async function listSessions(c: Client, token: string): Promise<SessionRow[]> {
@@ -456,4 +469,57 @@ export async function revokeKey(c: Client, token: string): Promise<RevokeResult>
   } catch {
     return "failed";
   }
+}
+
+/** A harness id from the server (`"claude-code"` or `{id, version}`); "unknown" when never identified. */
+export function harnessId(value: unknown): string {
+  const hid = value && typeof value === "object" ? (value as { id?: unknown }).id : value;
+  return typeof hid === "string" && hid.trim() ? hid.trim().toLowerCase() : "unknown";
+}
+
+/**
+ * True when a saved session was recorded with a harness other than Claude Code (the CLI's
+ * _refuse_other_harness): the server's label, or, when that is "unknown", a `native/<harness>.<ext>` file.
+ */
+export function otherHarness(value: unknown, files: readonly unknown[] = []): boolean {
+  let hid = harnessId(value);
+  if (hid === "unknown") {
+    const p = files.find((f): f is string => typeof f === "string" && f.startsWith("native/") && !f.startsWith("native/claude-code."));
+    if (p) {
+      hid = p.slice("native/".length).replace(/\.[^.]*$/, "") || "unknown";
+    }
+  }
+  return hid !== "claude-code" && hid !== "unknown";
+}
+
+/** Downloading a large transcript may take a while. */
+export const FETCH_TIMEOUT_MS = 120_000;
+
+/**
+ * The latest transcript of one of your saved sessions, as the CLI fetches it for `launch`:
+ * GET /library/fetch?cid=, the first session member, its first `.jsonl` file. Returned as the base64
+ * the server sends, so it is decoded a slice at a time while it is seeded (nativeSeed.ts).
+ */
+export async function fetchTranscript(c: Client, token: string, cid: string, signal?: AbortSignal): Promise<string> {
+  const { status, data } = await call(c, `/library/fetch?cid=${encodeURIComponent(cid)}`, { token, timeoutMs: FETCH_TIMEOUT_MS, signal });
+  if (status === 404) {
+    throw new ApiError("not-found", MESSAGES.sessionGone, status);
+  }
+  if (status !== 200) {
+    fail(status);
+  }
+  if (data === undefined) {
+    throw new ApiError("unreachable", MESSAGES.unreachable, status);   // a 200 whose body never arrived whole
+  }
+  const members = Array.isArray(data?.members) ? data.members : [];
+  const session = members.find((m: any) => m && m.kind === "session");
+  const files: any[] = Array.isArray(session?.files) ? session.files.filter((f: any) => f && typeof f === "object") : [];
+  if (otherHarness(data?.harness, files.map((f) => f.path))) {
+    throw new ApiError("not-claude-code", MESSAGES.notClaudeCode, status);
+  }
+  const tf = files.find((f) => typeof f.path === "string" && f.path.endsWith(".jsonl") && typeof f.content_b64 === "string");
+  if (!session || !tf) {
+    throw new ApiError("no-transcript", MESSAGES.noTranscript, status);
+  }
+  return tf.content_b64;
 }

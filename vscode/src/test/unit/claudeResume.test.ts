@@ -1,323 +1,486 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 crossVault GmbH
+// 0.3.1 zero-setup resume: Resume in Claude Code and Resume in terminal without the a4sx CLI, the
+// no-folder pick and the pending action that finishes after the window reopens, the one-time CLI hint
+// and the profiles:read prompt. The server is faked; files go to a temp HOME / CLAUDE_CONFIG_DIR.
 import * as assert from "assert";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { calls, resetCalls } from "../fakeVscode";
+import { calls, fakeMemento, fakeSecrets, resetCalls } from "../fakeVscode";
 import * as ext from "../../extension";
+import * as api from "../../api";
 import * as cr from "../../claudeResume";
+import { LoginRequest, SECRET_KEY } from "../../auth";
+import {
+  CLAUDE_INSTALL_URL, CLI_HINT_KEY, offerProfilesStepUp, PENDING_KEY, resetPromptForTests, RESUME_TEXTS, sameFolder, STEP_UP_SNOOZE_KEY,
+  STEP_UP_SNOOZE_MS, takePending, validPending,
+} from "../../resume";
 import { SessionItem } from "../../sessionsView";
+import { STEP_UP } from "../../stepUp";
 import type { CliLookup } from "../../cli";
 
 const ID = "3f2b8c1e-9a4d-4e6f-8b2a-0c1d2e3f4a5b";
-const CLI = "/home/u/.local/bin/a4sx";
-const found = (): CliLookup => ({ found: true, path: CLI });
-const folder = (name: string, fsPath: string, scheme = "file") => ({ name, uri: { scheme, fsPath } });
+const TOKEN = "lib_tok_SECRET_resume_777";
+const BASE = "https://session-exchange.com";
+const UUID4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const CLAUDE = "/usr/local/bin/claude";
+const missing = (): CliLookup => ({ found: false, reason: "not-on-path" });
+const foundCli = (): CliLookup => ({ found: true, path: "/usr/local/bin/a4sx" });
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const vscodeFake = require("vscode");
+const folder = (name: string, p: string) => ({ name, uri: vscodeFake.Uri.file(p) });
 
-interface ExecCall { file: string; args: string[]; options: cr.ExecOptions; stdinEnded: boolean }
+const transcript = [
+  JSON.stringify({ type: "user", sessionId: "base-1", message: { content: "hello" } }),
+  JSON.stringify({ type: "assistant", sessionId: "base-1", message: { content: "hi" } }),
+].join("\n");
+const fetchBody = (t = transcript, harness: unknown = "claude-code") => ({
+  status: 200, body: { harness, members: [{ kind: "session", id: "s1", files: [{ path: "transcript.jsonl", content_b64: Buffer.from(t).toString("base64") }] }] },
+});
 
-/** A fake execFile that answers with one canned outcome and records how it was called. */
-function fakeExec(outcome: { error?: (Error & { code?: unknown; killed?: boolean }) | null; stdout?: string; stderr?: string }) {
-  const seen: ExecCall[] = [];
-  const exec: cr.ExecFileLike = (file, args, options, callback) => {
-    const rec: ExecCall = { file, args, options, stdinEnded: false };
-    seen.push(rec);
-    setImmediate(() => callback(outcome.error ?? null, outcome.stdout ?? "", outcome.stderr ?? ""));
-    return { stdin: { end: () => { rec.stdinEnded = true; } } };
+interface Req { url: string; method: string; headers: Record<string, string> }
+type Answer = { status: number; body?: unknown } | Error;
+function fakeFetch(routes: Record<string, Answer[]>) {
+  const seen: Req[] = [];
+  const fetch: api.FetchLike = async (url, init) => {
+    const u = new URL(url);
+    seen.push({ url, method: init?.method ?? "GET", headers: init?.headers ?? {} });
+    const queue = routes[`${init?.method ?? "GET"} ${u.pathname}`];
+    if (!queue || queue.length === 0) {
+      throw new Error("unexpected request");
+    }
+    const next = queue.length > 1 ? queue.shift()! : queue[0];
+    if (next instanceof Error) {
+      throw next;
+    }
+    return { status: next.status, json: async () => (next.body === undefined ? Promise.reject(new Error("no body")) : next.body) };
   };
-  return { exec, seen };
+  return { fetch, seen };
 }
 
-function exitError(code: number | string, extra: Record<string, unknown> = {}) {
-  return Object.assign(new Error(`Command failed`), { code, ...extra });
+const savedRuntime = { ...ext.runtime };
+let home: string;
+const saved = { HOME: process.env.HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+
+function rmTree(dir: string): void {
+  for (const name of fs.readdirSync(dir)) {
+    const p = path.join(dir, name);
+    if (fs.lstatSync(p).isDirectory()) {
+      rmTree(p);
+    } else {
+      fs.unlinkSync(p);
+    }
+  }
+  fs.rmdirSync(dir);
+}
+
+beforeEach(() => {
+  resetCalls();
+  resetPromptForTests();
+  home = fs.mkdtempSync(path.join(os.tmpdir(), "a4sx-home-"));
+  process.env.HOME = home;
+  process.env.CLAUDE_CONFIG_DIR = path.join(home, "claude-cfg");
+  calls.extensions.add("anthropic.claude-code");
+});
+
+afterEach(() => {
+  Object.assign(ext.runtime, savedRuntime);
+  process.env.HOME = saved.HOME;
+  if (saved.CLAUDE_CONFIG_DIR === undefined) {
+    delete process.env.CLAUDE_CONFIG_DIR;
+  } else {
+    process.env.CLAUDE_CONFIG_DIR = saved.CLAUDE_CONFIG_DIR;
+  }
+  rmTree(home);
+});
+
+const FULL = ["library:read", "profiles:read", "library:organize"];
+
+async function activateWith(routes: Record<string, Answer[]>, scopes: string[] | null = FULL, state = fakeMemento()) {
+  const net = fakeFetch(routes);
+  ext.runtime.fetch = net.fetch;
+  const logins: LoginRequest[] = [];
+  ext.runtime.login = async (_c, req) => {
+    logins.push(req);
+    return { token: "lib_tok_NEW_888", server: BASE, id: "t2", scopes: [...req.scopes] };
+  };
+  const ctx = { subscriptions: [] as { dispose(): unknown }[], secrets: fakeSecrets(), globalState: state };
+  ext.activate(ctx as any);
+  if (scopes) {
+    await ctx.secrets.store(SECRET_KEY, JSON.stringify({ token: TOKEN, server: BASE, id: "t1", scopes }));
+  }
+  return { ctx, net, logins, state };
+}
+
+const seededFiles = (cwd: string) => {
+  const dir = path.join(home, "claude-cfg", "projects", cwd.replace(/[^A-Za-z0-9]/gu, "-"));
+  return fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+};
+const item = new SessionItem({ id: "c-123", label: "my-base", title: "Fix the login bug", version: "v7" });
+const tick = () => new Promise((r) => setImmediate(r));
+
+function noTokenAnywhere(): void {
+  const shown = JSON.stringify([calls.errors, calls.infos, calls.warnings, calls.modals, calls.progress, calls.terminals.map((t) => t.options), calls.opened]);
+  assert.ok(!shown.includes(TOKEN), "the key never shows up in a message, a terminal or a link");
 }
 
 describe("Resume in Claude Code: helpers", () => {
-  it("accepts exactly one UUID line (surrounding whitespace allowed)", () => {
-    assert.strictEqual(cr.parseSessionId(`${ID}\n`), ID);
-    assert.strictEqual(cr.parseSessionId(`  ${ID.toUpperCase()}\r\n`), ID.toUpperCase());
-  });
-
-  it("rejects extra lines, whitespace-only output and anything that is not a UUID", () => {
-    for (const bad of [
-      "", "   \n\t", `${ID}\n${ID}\n`, `note\n${ID}`, `${ID} extra`, `${ID}x`, "not-a-uuid",
-      "3f2b8c1e9a4d4e6f8b2a0c1d2e3f4a5b", "3f2b8c1e-9a4d-4e6f-8b2a-0c1d2e3f4a5", "3f2b8c1e-9a4d-4e6f-8b2a-0c1d2e3f4a5g",
-      `${ID}&foo=bar`, `{${ID}}`,
-    ]) {
-      assert.strictEqual(cr.parseSessionId(bad), undefined, JSON.stringify(bad));
+  it("only a UUID goes into the link; the link uses the editor's own scheme", () => {
+    assert.strictEqual(cr.parseSessionId(`  ${ID}\n`), ID);
+    for (const bad of ["", `${ID}\n${ID}`, `${ID}&x=1`, "not-a-uuid", "../x"]) {
+      assert.strictEqual(cr.parseSessionId(bad), undefined, bad);
     }
-  });
-
-  it("builds the Claude Code link from the editor's URI scheme, with the session id encoded", () => {
-    assert.strictEqual(cr.claudeResumeUri("vscode", ID), `vscode://anthropic.claude-code/open?session=${ID}`);
     assert.strictEqual(cr.claudeResumeUri("vscode-insiders", ID), `vscode-insiders://anthropic.claude-code/open?session=${ID}`);
-    assert.strictEqual(cr.claudeResumeUri("cursor", "a b&c=d#e"), "cursor://anthropic.claude-code/open?session=a%20b%26c%3Dd%23e");
-  });
-
-  it("detects a CLI from before --seed-only (argparse exit 2)", () => {
-    const argparse = "usage: a4sx [-h] ...\na4sx: error: unrecognized arguments: --seed-only\n";
-    assert.strictEqual(cr.isOldCli(2, argparse), true);
-    assert.strictEqual(cr.isOldCli(1, argparse), false);
-    assert.strictEqual(cr.isOldCli(2, "a4sx: error: no session named x\n"), false);
-    assert.strictEqual(cr.isOldCli(null, argparse), false);
-    // A newer CLI that fails for another reason and merely mentions the flag is not "old".
-    assert.strictEqual(cr.isOldCli(2, "a4sx: error: --seed-only needs a saved session\n"), false);
-    assert.strictEqual(cr.isOldCli(2, "a4sx: error: unrecognized arguments: --other\n"), false);
-  });
-
-  it("the error detail is the last stderr line, one line, no escapes, capped", () => {
-    assert.strictEqual(cr.lastLine("first\n\x1b[31msecond\tline\x1b[0m\n\n"), "second line");
-    assert.strictEqual(cr.lastLine(""), "");
-    const long = cr.lastLine("x".repeat(500));
-    assert.strictEqual(long.length, 200);
-    assert.ok(long.endsWith("…"));
-  });
-
-  it("the CLI arguments name the session and ask for --seed-only", () => {
-    assert.deepStrictEqual(cr.seedArgs("my-base"), ["launch", "--a4sx-session=my-base", "--seed-only"]);
   });
 });
 
-describe("Resume in Claude Code: seedSession", () => {
-  it("runs the CLI with an args array in the folder, a timeout and no input", async () => {
-    const f = fakeExec({ stdout: `${ID}\n`, stderr: "Copied 12 messages.\n" });
-    assert.deepStrictEqual(await cr.seedSession(CLI, "my base; rm x", "/w/proj", f.exec), { kind: "ok", sessionId: ID });
-    assert.strictEqual(f.seen.length, 1);
-    assert.strictEqual(f.seen[0].file, CLI);
-    assert.deepStrictEqual(f.seen[0].args, ["launch", "--a4sx-session=my base; rm x", "--seed-only"]);
-    assert.strictEqual(f.seen[0].options.cwd, "/w/proj");
-    assert.strictEqual(f.seen[0].options.timeout, cr.SEED_TIMEOUT_MS);
-    assert.strictEqual(f.seen[0].options.maxBuffer, 64 * 1024);
-    assert.ok(f.seen[0].stdinEnded, "stdin is closed so a question can't hang it");
+describe("Resume in Claude Code: native, no CLI", () => {
+  it("fetches the session with the extension's key, copies it into the open folder's history and opens it", async () => {
+    calls.workspaceFolders = [folder("proj", "/w/proj")];
+    const { net } = await activateWith({ "GET /library/fetch": [fetchBody()] });
+    await ext.resumeInClaude(item);
+    const req = net.seen.find((r) => r.url.includes("/library/fetch"))!;
+    assert.strictEqual(new URL(req.url).searchParams.get("cid"), "c-123");
+    assert.strictEqual(req.headers.Authorization, `Bearer ${TOKEN}`);
+    const [file] = seededFiles("/w/proj");
+    const id = file.replace(/\.jsonl$/, "");
+    assert.match(id, UUID4);
+    const recs = fs.readFileSync(path.join(home, "claude-cfg", "projects", "-w-proj", file), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    assert.deepStrictEqual(recs.map((r) => r.sessionId), [id, id]);
+    assert.deepStrictEqual(calls.opened, [`vscode://anthropic.claude-code/open?session=${id}`]);
+    assert.deepStrictEqual(calls.progress.map((p) => [p.title, p.options.cancellable]), [[ext.CLAUDE_MESSAGES.progress, true]]);
+    assert.strictEqual(calls.terminals.length, 0, "no CLI runs");
+    assert.deepStrictEqual(calls.errors, []);
+    noTokenAnywhere();
   });
 
-  it("classifies the failures", async () => {
-    const run = (o: Parameters<typeof fakeExec>[0]) => cr.seedSession(CLI, "n", "/w", fakeExec(o).exec);
-    assert.deepStrictEqual(await run({ stdout: "Session copied.\n" }), { kind: "bad-output" });
-    assert.deepStrictEqual(await run({ error: exitError(2), stderr: "a4sx: error: unrecognized arguments: --seed-only\n" }), { kind: "old-cli" });
-    assert.deepStrictEqual(await run({ error: exitError(1), stderr: "working\na4sx: no session named n\n" }),
-      { kind: "failed", exitCode: 1, detail: "a4sx: no session named n" });
-    assert.deepStrictEqual(await run({ error: exitError("ENOENT") }), { kind: "failed", exitCode: null, detail: "" });
-    assert.deepStrictEqual(await run({ error: exitError(null as any, { killed: true, signal: "SIGTERM" }) }), { kind: "timeout" });
-    const abortErr = Object.assign(new Error("aborted"), { name: "AbortError", code: "ABORT_ERR" });
-    assert.deepStrictEqual(await run({ error: abortErr }), { kind: "cancelled" });
-    const tooMuch = Object.assign(new Error("stdout maxBuffer length exceeded"), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" });
-    assert.deepStrictEqual(await run({ error: tooMuch, stderr: "partial note\n" }), { kind: "failed", exitCode: null, detail: "" });
-    assert.deepStrictEqual(await run({ error: exitError(2), stderr: "a4sx: error: --seed-only needs a saved session\n" }),
-      { kind: "failed", exitCode: 2, detail: "a4sx: error: --seed-only needs a saved session" });
+  it("not signed in: says so with a Sign in button; nothing is fetched", async () => {
+    calls.workspaceFolders = [folder("proj", "/w/proj")];
+    const { net } = await activateWith({}, null);
+    await ext.resumeInClaude(item);
+    assert.deepStrictEqual(calls.errors, [{ message: STEP_UP.signInFirst, items: [STEP_UP.signIn] }]);
+    assert.strictEqual(net.seen.length, 0);
   });
 
-  it("a synchronous throw from execFile is an ordinary failure", async () => {
-    const throwing: cr.ExecFileLike = () => { throw new TypeError("The argument 'args[1]' must be a string without null bytes"); };
-    assert.deepStrictEqual(await cr.seedSession(CLI, "n", "/w", throwing), { kind: "failed", exitCode: null, detail: "" });
-    // The real execFile throws synchronously for a NUL byte in an argument.
-    assert.deepStrictEqual(await cr.seedSession(process.execPath, "bad\0name", os.tmpdir()), { kind: "failed", exitCode: null, detail: "" });
-  });
-
-  // The real child_process.execFile, against a small script: arguments arrive verbatim (no shell)
-  // and the working directory is the folder.
-  (process.platform === "win32" ? it.skip : it)("the real execFile passes arguments verbatim and runs in the folder", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "a4sx-vscode-seed-"));
-    const script = path.join(dir, "fake-a4sx");
-    const out = path.join(dir, "args.txt");
-    fs.writeFileSync(script, `#!/bin/sh\nprintf '%s\\n' "$PWD" "$@" > args.txt\necho "note on stderr" >&2\necho ${ID}\n`);
-    fs.chmodSync(script, 0o755);
-    const old = path.join(dir, "old-a4sx");
-    fs.writeFileSync(old, "#!/bin/sh\necho 'usage: a4sx' >&2\necho 'a4sx: error: unrecognized arguments: --seed-only' >&2\nexit 2\n");
-    fs.chmodSync(old, 0o755);
-    try {
-      const r = await cr.seedSession(script, "x $(touch pwned); `id`", dir);
-      assert.deepStrictEqual(r, { kind: "ok", sessionId: ID });
-      const lines = fs.readFileSync(out, "utf8").split("\n");
-      assert.strictEqual(fs.realpathSync(lines[0]), fs.realpathSync(dir));
-      assert.deepStrictEqual(lines.slice(1, 4), ["launch", "--a4sx-session=x $(touch pwned); `id`", "--seed-only"]);
-      assert.ok(!fs.existsSync(path.join(dir, "pwned")), "no shell ran the name");
-      assert.deepStrictEqual(await cr.seedSession(old, "x", dir), { kind: "old-cli" });
-      const chatty = path.join(dir, "chatty-a4sx");
-      fs.writeFileSync(chatty, "#!/bin/sh\nhead -c 200000 /dev/zero | tr '\\0' x\n");
-      fs.chmodSync(chatty, 0o755);
-      try {
-        assert.deepStrictEqual(await cr.seedSession(chatty, "x", dir), { kind: "failed", exitCode: null, detail: "" });
-      } finally {
-        fs.unlinkSync(chatty);
-      }
-    } finally {
-      fs.unlinkSync(out);
-      fs.unlinkSync(script);
-      fs.unlinkSync(old);
-      fs.rmdirSync(dir);
-    }
-  });
-});
-
-describe("a4sx.resumeInClaude", () => {
-  beforeEach(() => {
+  it("failures are short messages: another harness, a gone session, a bad transcript; a cancel shows nothing", async () => {
+    calls.workspaceFolders = [folder("proj", "/w/proj")];
+    await activateWith({ "GET /library/fetch": [
+      { status: 404, body: { error: { code: "not_found" } } },
+      fetchBody(JSON.stringify({ sessionId: "../../etc/passwd" })),
+      fetchBody(transcript, { id: "codex-cli" }),
+    ] });
+    await ext.resumeInClaude(new SessionItem({ id: "c-x", harness: "codex-cli" }));
+    await ext.resumeInClaude(item);
+    await ext.resumeInClaude(item);
+    await ext.resumeInClaude(item);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [
+      api.MESSAGES.notClaudeCode, api.MESSAGES.sessionGone, RESUME_TEXTS.badSessionId, api.MESSAGES.notClaudeCode,
+    ]);
+    assert.deepStrictEqual(seededFiles("/w/proj"), []);
+    assert.deepStrictEqual(calls.opened, []);
     resetCalls();
     calls.extensions.add("anthropic.claude-code");
     calls.workspaceFolders = [folder("proj", "/w/proj")];
-  });
-  const item = new SessionItem({ id: "c-123", label: "my-base", title: "Fix the login bug" });
-  const unlabeled = new SessionItem({ id: "c-456" });
-
-  it("copies the session in the open folder and opens it in Claude Code", async () => {
-    const f = fakeExec({ stdout: `${ID}\n` });
-    await ext.resumeInClaude(item, found, f.exec);
-    assert.deepStrictEqual(f.seen.map((c) => [c.file, c.args, c.options.cwd]), [[CLI, ["launch", "--a4sx-session=my-base", "--seed-only"], "/w/proj"]]);
-    assert.deepStrictEqual(calls.progress.map((p) => [p.title, p.options.cancellable]), [[ext.CLAUDE_MESSAGES.progress, true]]);
-    assert.deepStrictEqual(calls.opened, [`vscode://anthropic.claude-code/open?session=${ID}`]);
-    assert.strictEqual(calls.errors.length, 0);
-    assert.strictEqual(calls.terminals.length, 0);
-  });
-
-  it("uses the editor's own URI scheme and the session id when the push set no label", async () => {
-    calls.uriScheme = "vscode-insiders";
-    const f = fakeExec({ stdout: ID });
-    await ext.resumeInClaude(unlabeled, found, f.exec);
-    assert.deepStrictEqual(f.seen[0].args, ["launch", "--a4sx-session=c-456", "--seed-only"]);
-    assert.deepStrictEqual(calls.opened, [`vscode-insiders://anthropic.claude-code/open?session=${ID}`]);
-  });
-
-  it("output that is not exactly one session id opens nothing", async () => {
-    for (const stdout of [`${ID}\nextra\n`, "  \n", "done", `${ID}&x=y`]) {
-      resetCalls();
-      calls.extensions.add("anthropic.claude-code");
-      calls.workspaceFolders = [folder("proj", "/w/proj")];
-      await ext.resumeInClaude(item, found, fakeExec({ stdout }).exec);
-      assert.deepStrictEqual(calls.opened, [], JSON.stringify(stdout));
-      assert.deepStrictEqual(calls.errors, [{ message: ext.CLAUDE_MESSAGES.badOutput, items: [ext.RESUME_IN_TERMINAL] }]);
-    }
-  });
-
-  it("multi-root: asks which folder, runs there; Esc runs nothing", async () => {
-    calls.workspaceFolders = [folder("api", "/w/api"), folder("remote", "/r", "vscode-vfs"), folder("web", "/w/web")];
-    calls.nextPick = 1;
-    const f = fakeExec({ stdout: ID });
-    await ext.resumeInClaude(item, found, f.exec);
-    assert.deepStrictEqual(calls.quickPicks[0].items.map((i) => i.label), ["api", "web"], "only local folders are offered");
-    assert.strictEqual(calls.quickPicks[0].options.placeHolder, ext.CLAUDE_MESSAGES.pickFolder);
-    assert.strictEqual(f.seen[0].options.cwd, "/w/web");
-    calls.nextPick = undefined;
-    calls.opened.length = 0;
-    const g = fakeExec({ stdout: ID });
-    await ext.resumeInClaude(item, found, g.exec);
-    assert.strictEqual(g.seen.length, 0);
-    assert.deepStrictEqual(calls.opened, []);
-  });
-
-  it("no folder open: a short error, nothing runs", async () => {
-    for (const folders of [undefined, []]) {
-      resetCalls();
-      calls.extensions.add("anthropic.claude-code");
-      calls.workspaceFolders = folders;
-      const f = fakeExec({ stdout: ID });
-      await ext.resumeInClaude(item, found, f.exec);
-      assert.strictEqual(f.seen.length, 0);
-      assert.deepStrictEqual(calls.errors, [{ message: ext.CLAUDE_MESSAGES.noFolder, items: [] }]);
-      assert.deepStrictEqual(calls.opened, []);
-    }
-  });
-
-  it("only virtual folders: says a folder on disk is needed, nothing runs", async () => {
-    calls.workspaceFolders = [folder("remote", "/r", "vscode-vfs")];
-    const f = fakeExec({ stdout: ID });
-    await ext.resumeInClaude(item, found, f.exec);
-    assert.strictEqual(f.seen.length, 0);
-    assert.deepStrictEqual(calls.errors, [{ message: ext.CLAUDE_MESSAGES.notOnDisk, items: [] }]);
-    assert.deepStrictEqual(calls.opened, []);
-  });
-
-  it("without the Claude Code extension: says so and offers to show it in the Extensions view", async () => {
-    calls.extensions.clear();
-    const f = fakeExec({ stdout: ID });
-    await ext.resumeInClaude(item, found, f.exec);
-    assert.strictEqual(f.seen.length, 0);
-    assert.deepStrictEqual(calls.errors, [{ message: ext.CLAUDE_MESSAGES.noClaude, items: [ext.SHOW_EXTENSION] }]);
-    assert.deepStrictEqual(calls.executed, []);
-    calls.nextErrorChoice = ext.SHOW_EXTENSION;
-    await ext.resumeInClaude(item, found, f.exec);
-    assert.deepStrictEqual(calls.executed, [{ id: "workbench.extensions.search", args: ["@id:anthropic.claude-code"] }]);
-    assert.strictEqual(f.seen.length, 0);
-  });
-
-  it("without the CLI: the install hint, nothing runs", async () => {
-    const f = fakeExec({ stdout: ID });
-    await ext.resumeInClaude(item, () => ({ found: false, reason: "not-on-path" }), f.exec);
-    assert.strictEqual(f.seen.length, 0);
-    assert.deepStrictEqual(calls.errors[0].items, ["How to install"]);
-  });
-
-  it("an old CLI is told to update; 'Resume in terminal' falls back to the terminal", async () => {
-    const f = fakeExec({ error: exitError(2), stderr: "a4sx: error: unrecognized arguments: --seed-only\n" });
-    calls.nextErrorChoice = ext.RESUME_IN_TERMINAL;
-    await ext.resumeInClaude(item, found, f.exec);
-    assert.deepStrictEqual(calls.errors, [{ message: ext.CLAUDE_MESSAGES.oldCli, items: [ext.RESUME_IN_TERMINAL] }]);
-    assert.match(calls.errors[0].message, /a4sx update/);
-    assert.deepStrictEqual(calls.terminals.map((t) => t.options), [
-      { name: ext.RESUME_TERMINAL_NAME, shellPath: CLI, shellArgs: ["launch", "--a4sx-session=my-base"] },
-    ]);
-    assert.deepStrictEqual(calls.opened, []);
-  });
-
-  it("other failures show the CLI's last stderr line, or the exit code", async () => {
-    await ext.resumeInClaude(item, found, fakeExec({ error: exitError(1), stderr: "step 1\nNo session named my-base in your library.\n" }).exec);
-    await ext.resumeInClaude(item, found, fakeExec({ error: exitError(3) }).exec);
-    await ext.resumeInClaude(item, found, fakeExec({ error: exitError(null as any, { killed: true }) }).exec);
-    assert.deepStrictEqual(calls.errors.map((e) => e.message), [
-      "Could not copy the session for Claude Code: No session named my-base in your library.",
-      "Could not copy the session for Claude Code. a4sx exited with code 3.",
-      ext.CLAUDE_MESSAGES.timeout,
-    ]);
-    assert.ok(calls.errors.every((e) => e.items.length === 1 && e.items[0] === ext.RESUME_IN_TERMINAL));
-    assert.strictEqual(calls.terminals.length, 0, "nothing falls back unless clicked");
-    assert.deepStrictEqual(calls.opened, []);
-  });
-
-  it("a synchronous throw from execFile shows the error with the terminal fallback", async () => {
-    const throwing: cr.ExecFileLike = () => { throw new Error("spawn EINVAL"); };
-    calls.nextErrorChoice = ext.RESUME_IN_TERMINAL;
-    await ext.resumeInClaude(item, found, throwing);
-    assert.deepStrictEqual(calls.errors, [{ message: ext.CLAUDE_MESSAGES.failed, items: [ext.RESUME_IN_TERMINAL] }]);
-    assert.strictEqual(calls.terminals.length, 1, "the fallback runs the terminal resume");
-    assert.deepStrictEqual(calls.opened, []);
-    assert.strictEqual(calls.cancelDisposed, 1, "the cancellation listener is disposed");
-  });
-
-  it("cancelling the progress notification shows nothing", async () => {
     calls.cancelProgress = true;
-    let signal: AbortSignal | undefined;
-    const exec: cr.ExecFileLike = (_f, _a, options, callback) => {
-      signal = options.signal;
-      setImmediate(() => callback(Object.assign(new Error("aborted"), { name: "AbortError" }), "", ""));
-    };
-    await ext.resumeInClaude(item, found, exec);
-    assert.ok(signal?.aborted, "the child is aborted");
-    assert.strictEqual(calls.cancelDisposed, 1);
+    await activateWith({ "GET /library/fetch": [fetchBody()] });
+    await ext.resumeInClaude(item);
     assert.deepStrictEqual(calls.errors, []);
     assert.deepStrictEqual(calls.opened, []);
+  });
+
+  it("a timeout or a dropped connection while the body downloads is the network error, not 'no transcript'", async () => {
+    calls.workspaceFolders = [folder("proj", "/w/proj")];
+    await activateWith({});
+    for (const err of [Object.assign(new TypeError("terminated"), {}), Object.assign(new Error("The operation was aborted"), { name: "AbortError" })]) {
+      ext.runtime.fetch = async () => ({ status: 200, json: async () => { throw err; } });
+      await ext.resumeInClaude(item);
+    }
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [api.MESSAGES.unreachable, api.MESSAGES.unreachable]);
+    assert.deepStrictEqual(seededFiles("/w/proj"), []);
+  });
+
+  it("multi-root asks which folder; virtual folders only: says a folder on disk is needed", async () => {
+    calls.workspaceFolders = [folder("a", "/w/a"), folder("b", "/w/b")];
+    await activateWith({ "GET /library/fetch": [fetchBody()] });
+    calls.nextPick = 1;
+    await ext.resumeInClaude(item);
+    assert.deepStrictEqual(calls.quickPicks[0].items.map((i: any) => i.label), ["a", "b"]);
+    assert.strictEqual(seededFiles("/w/b").length, 1);
+    calls.workspaceFolders = [{ name: "v", uri: { scheme: "vscode-vfs", fsPath: "/v", toString: () => "vscode-vfs:/v" } } as any];
+    await ext.resumeInClaude(item);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [ext.CLAUDE_MESSAGES.notOnDisk]);
+  });
+
+  it("without the Claude Code extension: says so and offers to show it", async () => {
+    calls.extensions.clear();
+    await activateWith({});
+    calls.nextErrorChoice = ext.SHOW_EXTENSION;
+    await ext.resumeInClaude(item);
+    assert.deepStrictEqual(calls.errors, [{ message: ext.CLAUDE_MESSAGES.noClaude, items: [ext.SHOW_EXTENSION] }]);
+    assert.deepStrictEqual(calls.executed.filter((e) => e.id === "workbench.extensions.search"), [{ id: "workbench.extensions.search", args: ["@id:anthropic.claude-code"] }]);
   });
 
   it("if the editor can't open the link, a short error", async () => {
+    calls.workspaceFolders = [folder("proj", "/w/proj")];
     calls.openResult = false;
-    await ext.resumeInClaude(item, found, fakeExec({ stdout: ID }).exec);
+    await activateWith({ "GET /library/fetch": [fetchBody()] });
+    await ext.resumeInClaude(item);
     assert.deepStrictEqual(calls.errors, [{ message: ext.CLAUDE_MESSAGES.openFailed, items: [] }]);
   });
+});
 
-  it("the registered command, without an item (palette), does nothing", async () => {
-    ext.activate({ subscriptions: [], secrets: { get: async () => undefined, store: async () => undefined, delete: async () => undefined, onDidChange: () => ({ dispose() {} }) } } as any);
-    await calls.commands.get(ext.CMD_RESUME_CLAUDE)!();
-    assert.deepStrictEqual(calls.errors, []);
-    assert.strictEqual(calls.progress.length, 0);
+describe("no folder open: pick one, reopen on it, finish there", () => {
+  it("offers the home folder, a folder from the dialog, or Cancel", async () => {
+    await activateWith({ "GET /library/fetch": [fetchBody()] });
+    calls.nextPick = 2;
+    await ext.resumeInClaude(item);
+    assert.deepStrictEqual(calls.quickPicks[0].items.map((i: any) => i.label), [RESUME_TEXTS.useHome, RESUME_TEXTS.chooseFolder, RESUME_TEXTS.cancel]);
+    calls.nextPick = 1;
+    calls.nextOpenDialog = undefined;
+    await ext.resumeInClaude(item);
+    assert.deepStrictEqual(calls.openDialogs.map((o) => [o.canSelectFolders, o.canSelectFiles, o.canSelectMany, o.defaultUri.fsPath, o.openLabel]),
+      [[true, false, false, home, RESUME_TEXTS.openLabel]], "the dialog starts at the home of the host the extension runs on");
+    assert.deepStrictEqual(calls.executed.filter((e) => e.id === "vscode.openFolder"), [], "Cancel and Esc do nothing");
+    assert.deepStrictEqual(seededFiles(home), []);
   });
 
-  it("the manifest puts Resume in Claude Code next to Resume in terminal and hides it from the palette", () => {
-    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "package.json"), "utf8"));
+  it("'Use my home folder' seeds there, stores the pending action, reopens the window; the new window opens Claude Code", async () => {
+    const state = fakeMemento();
+    await activateWith({ "GET /library/fetch": [fetchBody()] }, FULL, state);
+    calls.nextPick = 0;
+    const before = Date.now();
+    await ext.resumeInClaude(item);
+    const [file] = seededFiles(home);
+    const id = file.replace(/\.jsonl$/, "");
+    const pending = state.data_.get(PENDING_KEY) as any;
+    assert.deepStrictEqual({ ...pending, at: undefined }, { kind: "claude", sessionId: id, folderUri: vscodeFake.Uri.file(home).toString(), at: undefined });
+    assert.ok(pending.at >= before && pending.at <= Date.now());
+    const open = calls.executed.filter((e) => e.id === "vscode.openFolder");
+    assert.strictEqual(open.length, 1);
+    assert.strictEqual(String(open[0].args[0]), vscodeFake.Uri.file(home).toString());
+    assert.deepStrictEqual(open[0].args[1], { forceNewWindow: false });
+    assert.deepStrictEqual(calls.opened, [], "nothing opens before the window reopens");
+
+    // the window reloads on the folder: the extension activates again with the same globalState
+    resetCalls();
+    calls.extensions.add("anthropic.claude-code");
+    calls.workspaceFolders = [folder("home", home)];
+    await activateWith({}, null, state);
+    await tick();
+    assert.deepStrictEqual(calls.opened, [`vscode://anthropic.claude-code/open?session=${id}`]);
+    assert.strictEqual(state.data_.has(PENDING_KEY), false, "done: cleared");
+  });
+
+  it("'Choose a folder…' seeds into the folder from the dialog", async () => {
+    await activateWith({ "GET /library/fetch": [fetchBody()] });
+    calls.nextPick = 1;
+    calls.nextOpenDialog = [vscodeFake.Uri.file("/w/other")];
+    await ext.resumeInClaude(item);
+    assert.strictEqual(seededFiles("/w/other").length, 1);
+    assert.strictEqual(String(calls.executed.find((e) => e.id === "vscode.openFolder")!.args[0]), "file:///w/other");
+  });
+
+  it("a pending action is validated, runs only in its folder within 2 minutes, and is always cleared", async () => {
+    const uri = vscodeFake.Uri.file("/w/p").toString();
+    const open = [{ uri: vscodeFake.Uri.file("/w/p") }];
+    const now = 1_000_000;
+    const ok = { kind: "terminal", sessionId: ID, folderUri: uri, at: now - 1000 };
+    for (const [raw, expect] of [
+      [ok, true],
+      [{ ...ok, at: now - 2 * 60_000 - 1 }, false],
+      [{ ...ok, at: now + 5000 }, false],
+      [{ ...ok, folderUri: "file:///w/other" }, false],
+      [{ ...ok, sessionId: "../../x" }, false],
+      [{ ...ok, kind: "shell" }, false],
+      [{ ...ok, at: "soon" }, false],
+      ["junk", false],
+    ] as [unknown, boolean][]) {
+      const state = fakeMemento({ [PENDING_KEY]: raw });
+      const got = await takePending(state, open, now);
+      assert.strictEqual(!!got, expect, JSON.stringify(raw));
+      assert.strictEqual(state.data_.has(PENDING_KEY), false, "cleared either way");
+    }
+    assert.strictEqual(validPending({ ...ok, folderUri: "x".repeat(5000) }), undefined);
+  });
+
+  it("the folder matches across the reload when the window reports it as vscode-remote and the host stored file", () => {
+    const remote = { scheme: "vscode-remote", fsPath: "/home/dev/p", toString: () => "vscode-remote://ssh-remote%2Bbox/home/dev/p" };
+    assert.strictEqual(sameFolder(remote, "file:///home/dev/p"), true);
+    assert.strictEqual(sameFolder(remote, "file:///home/dev/other"), false);
+    assert.strictEqual(sameFolder({ scheme: "vscode-vfs", fsPath: "/home/dev/p", toString: () => "vscode-vfs://x/home/dev/p" }, "file:///home/dev/p"), false);
+  });
+});
+
+describe("Resume in terminal without the a4sx CLI", () => {
+  it("seeds natively and runs `claude --resume <id>` in the folder, shell-free, with nothing secret in argv or env", async () => {
+    calls.workspaceFolders = [folder("proj", "/w/proj")];
+    await activateWith({ "GET /library/fetch": [fetchBody()] });
+    const t = await ext.resumeSession(item, missing, undefined, () => CLAUDE);
+    assert.ok(t);
+    const [file] = seededFiles("/w/proj");
+    const id = file.replace(/\.jsonl$/, "");
+    assert.strictEqual(calls.terminals.length, 1);
+    const opts = calls.terminals[0].options;
+    assert.deepStrictEqual({ ...opts, cwd: String(opts.cwd) }, { name: ext.RESUME_TERMINAL_NAME, shellPath: CLAUDE, shellArgs: ["--resume", id], cwd: "file:///w/proj" });
+    assert.ok(!("env" in opts), "no env: the key is never handed to claude");
+    assert.ok(calls.terminals[0].shown);
+    noTokenAnywhere();
+  });
+
+  it("once: launch profiles need the a4sx CLI; 'Install a4sx' runs the safe-origin installer line", async () => {
+    calls.workspaceFolders = [folder("proj", "/w/proj")];
+    const { state } = await activateWith({ "GET /library/fetch": [fetchBody()] });
+    calls.nextInfoChoice = RESUME_TEXTS.installA4sx;
+    await ext.resumeSession(item, missing, undefined, () => CLAUDE);
+    await tick();
+    assert.deepStrictEqual(calls.infoPrompts, [{ message: RESUME_TEXTS.cliForProfiles, items: [RESUME_TEXTS.installA4sx, RESUME_TEXTS.notNow] }]);
+    assert.strictEqual(state.data_.get(CLI_HINT_KEY), true);
+    if (process.platform !== "win32") {
+      assert.deepStrictEqual(calls.terminals[1].options, {
+        name: RESUME_TEXTS.installTerminal, shellPath: "/bin/sh", shellArgs: ["-c", "curl -fsSL https://session-exchange.com/install.sh | sh"],
+      });
+    }
+    await ext.resumeSession(item, missing, undefined, () => CLAUDE);
+    await tick();
+    assert.strictEqual(calls.infoPrompts.length, 1, "only once");
+  });
+
+  it("without claude either: a short message whose button opens the Claude Code install docs; nothing is fetched", async () => {
+    calls.workspaceFolders = [folder("proj", "/w/proj")];
+    const { net } = await activateWith({});
+    calls.nextErrorChoice = "How to install";
+    await ext.resumeSession(item, missing, undefined, () => undefined);
+    assert.deepStrictEqual(calls.errors, [{ message: RESUME_TEXTS.noClaude, items: ["How to install"] }]);
+    assert.deepStrictEqual(calls.opened, [CLAUDE_INSTALL_URL]);
+    assert.strictEqual(net.seen.length, 0);
+    assert.strictEqual(calls.terminals.length, 0);
+  });
+
+  it("no folder open: seeds into the picked folder, reopens, then the terminal starts in the new window", async () => {
+    const state = fakeMemento();
+    await activateWith({ "GET /library/fetch": [fetchBody()] }, FULL, state);
+    calls.nextPick = 0;
+    await ext.resumeSession(item, missing, undefined, () => CLAUDE);
+    assert.strictEqual(calls.terminals.length, 0);
+    const pending = state.data_.get(PENDING_KEY) as any;
+    assert.strictEqual(pending.kind, "terminal");
+    resetCalls();
+    calls.workspaceFolders = [folder("home", home)];
+    await ext.completePendingResume(state, () => CLAUDE);
+    assert.deepStrictEqual(calls.terminals.map((t) => [t.options.shellPath, t.options.shellArgs, String(t.options.cwd)]), [
+      [CLAUDE, ["--resume", pending.sessionId], vscodeFake.Uri.file(home).toString()],
+    ]);
+    assert.strictEqual(state.data_.has(PENDING_KEY), false);
+  });
+
+  it("with the a4sx CLI, Resume in terminal is unchanged; an invalid a4sx.cliPath still says so", async () => {
+    calls.workspaceFolders = [folder("proj", "/w/proj")];
+    const { net } = await activateWith({});
+    await ext.resumeSession(item, foundCli, async () => ({}), () => CLAUDE);
+    assert.deepStrictEqual(calls.terminals[0].options, { name: ext.RESUME_TERMINAL_NAME, shellPath: "/usr/local/bin/a4sx", shellArgs: ["launch", "--a4sx-session=my-base"] });
+    await ext.resumeSession(item, () => ({ found: false, reason: "configured-path-invalid", configured: "/nope/a4sx" }), undefined, () => CLAUDE);
+    assert.match(calls.errors[0].message, /a4sx\.cliPath setting points to "\/nope\/a4sx"/);
+    assert.strictEqual(net.seen.length, 0);
+  });
+});
+
+describe("the profiles:read prompt", () => {
+  const refusal = { status: 403, body: { error: { code: "insufficient_scope", details: { required_scope: "profiles:read" } } } };
+  const keyWith = async (scopes: string[]) => {
+    const auth = ext.sidebar!.auth;
+    await (auth as any).secrets.store(SECRET_KEY, JSON.stringify({ token: TOKEN, server: BASE, id: "t1", scopes }));
+    return auth;
+  };
+
+  it("a key without profiles:read on a server that offers it: one prompt; Allow runs the step-up", async () => {
+    const { logins } = await activateWith({ "GET /library/profiles": [refusal] }, null);
+    const auth = await keyWith(["library:read"]);
+    calls.nextInfoChoice = RESUME_TEXTS.allow;
+    await offerProfilesStepUp(auth, ext.client, fakeMemento(), Date.now());
+    assert.deepStrictEqual(calls.infoPrompts, [{ message: RESUME_TEXTS.profilesStepUp, items: [RESUME_TEXTS.allow, RESUME_TEXTS.notNow] }]);
+    assert.deepStrictEqual(logins.map((l) => l.adding), ["profiles:read"]);
+    assert.strictEqual(calls.modals.length, 0, "the prompt already named the permission");
+  });
+
+  it("'Not now' is remembered for 7 days; then it asks again", async () => {
+    const { net } = await activateWith({ "GET /library/profiles": [refusal] }, null);
+    const auth = await keyWith(["library:read"]);
+    const state = fakeMemento();
+    const now = 5_000_000;
+    calls.nextInfoChoice = RESUME_TEXTS.notNow;
+    await offerProfilesStepUp(auth, ext.client, state, now);
+    assert.strictEqual(state.data_.get(STEP_UP_SNOOZE_KEY), now + STEP_UP_SNOOZE_MS);
+    const asked = net.seen.length;
+    resetPromptForTests();   // a new window
+    await offerProfilesStepUp(auth, ext.client, state, now + STEP_UP_SNOOZE_MS - 1);
+    assert.strictEqual(calls.infoPrompts.length, 1);
+    assert.strictEqual(net.seen.length, asked, "snoozed: not even a request");
+    resetPromptForTests();
+    await offerProfilesStepUp(auth, ext.client, state, now + STEP_UP_SNOOZE_MS + 1);
+    assert.strictEqual(calls.infoPrompts.length, 2);
+  });
+
+  it("Esc (or leaving it in the notification centre) counts as 'Not now' for this window only", async () => {
+    const { net } = await activateWith({ "GET /library/profiles": [refusal] }, null);
+    const auth = await keyWith(["library:read"]);
+    const state = fakeMemento();
+    calls.nextInfoChoice = undefined;
+    await offerProfilesStepUp(auth, ext.client, state, 1);
+    assert.strictEqual(calls.infoPrompts.length, 1);
+    assert.strictEqual(state.data_.has(STEP_UP_SNOOZE_KEY), false, "no 7-day snooze");
+    const asked = net.seen.length;
+    for (let i = 0; i < 5; i++) {
+      await offerProfilesStepUp(auth, ext.client, state, 2 + i);   // sign-in, other triggers in the same window
+    }
+    assert.strictEqual(calls.infoPrompts.length, 1, "never twice in one window");
+    assert.strictEqual(net.seen.length, asked, "and no more requests");
+    resetPromptForTests();
+    await offerProfilesStepUp(auth, ext.client, state, 10);
+    assert.strictEqual(calls.infoPrompts.length, 2, "a new window asks again");
+  });
+
+  it("two triggers at once (activation and sign-in) show one prompt", async () => {
+    await activateWith({ "GET /library/profiles": [refusal] }, null);
+    const auth = await keyWith(["library:read"]);
+    await Promise.all([offerProfilesStepUp(auth, ext.client, fakeMemento(), 1), offerProfilesStepUp(auth, ext.client, fakeMemento(), 1)]);
+    assert.strictEqual(calls.infoPrompts.length, 1);
+  });
+
+  it("no prompt when the key has profiles:read, or the server doesn't offer launch profiles", async () => {
+    const { net } = await activateWith({ "GET /library/profiles": [{ status: 403, body: { error: { code: "insufficient_scope", details: { required_scope: null } } } }] }, null);
+    let auth = await keyWith(["library:read", "profiles:read"]);
+    await offerProfilesStepUp(auth, ext.client, fakeMemento(), Date.now());
+    assert.strictEqual(net.seen.length, 0);
+    auth = await keyWith(["library:read"]);
+    resetPromptForTests();
+    await offerProfilesStepUp(auth, ext.client, fakeMemento(), Date.now());
+    assert.strictEqual(net.seen.length, 1);
+    assert.strictEqual(calls.infoPrompts.length, 0, "an older server: nothing to offer");
+  });
+});
+
+describe("manifest", () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "package.json"), "utf8"));
+
+  it("Resume in Claude Code sits next to Resume in terminal and is hidden from the palette", () => {
     const menu = pkg.contributes.menus["view/item/context"].filter((m: any) => m.when === "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/");
     const group = (cmd: string, prefix: string) => menu.find((m: any) => m.command === cmd && m.group.startsWith(prefix))?.group;
     assert.strictEqual(group(ext.CMD_RESUME, "inline"), "inline@1");
     assert.strictEqual(group(ext.CMD_RESUME_CLAUDE, "inline"), "inline@2");
-    assert.strictEqual(group(ext.CMD_RESUME, "1_session"), "1_session@1");
-    assert.strictEqual(group(ext.CMD_RESUME_CLAUDE, "1_session"), "1_session@2");
     assert.ok(pkg.contributes.menus.commandPalette.some((m: any) => m.command === ext.CMD_RESUME_CLAUDE && m.when === "false"));
+  });
+
+  it("activates at startup (to finish a pending resume) and shows Launch profiles expanded", () => {
+    assert.deepStrictEqual(pkg.activationEvents, ["onStartupFinished"]);
+    assert.strictEqual(pkg.contributes.views.a4sx.find((v: any) => v.id === "a4sx.profiles").visibility, "visible");
+    assert.strictEqual(pkg.version, "0.3.1");
+  });
+
+  it("the registered command, without an item (palette), does nothing", async () => {
+    await activateWith({});
+    await calls.commands.get(ext.CMD_RESUME_CLAUDE)!();
+    assert.deepStrictEqual(calls.errors, []);
+    assert.strictEqual(calls.progress.length, 0);
   });
 });

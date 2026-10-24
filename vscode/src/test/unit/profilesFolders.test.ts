@@ -4,7 +4,7 @@
 // step-up sign-in. The server is faked; old-server answers are faked too (no `folder` key, 400
 // bad_scopes at sign-in, 401/403/404 on the profile routes).
 import * as assert from "assert";
-import { calls, fakeSecrets, resetCalls } from "../fakeVscode";
+import { calls, fakeMemento, fakeSecrets, resetCalls } from "../fakeVscode";
 import * as ext from "../../extension";
 import * as api from "../../api";
 import { deviceLogin, LoginCancelled, LoginRequest, SECRET_KEY, STEP_UP_TITLE } from "../../auth";
@@ -60,7 +60,7 @@ async function activateWith(routes: Record<string, Answer[]>, scopes: string[] |
     logins.push(req);
     return { token: NEW_TOKEN, server: BASE, id: "tok_2", scopes: [...req.scopes] };
   };
-  const ctx = { subscriptions: [] as { dispose(): unknown }[], secrets: fakeSecrets() };
+  const ctx = { subscriptions: [] as { dispose(): unknown }[], secrets: fakeSecrets(), globalState: fakeMemento() };
   ext.activate(ctx as any);
   if (scopes) {
     await ctx.secrets.store(SECRET_KEY, stored(scopes));
@@ -622,11 +622,9 @@ describe("Resume in terminal: profile pick", () => {
     const { net } = await activateWith({ "GET /library/profiles": [{ status: 200, body: profiles }] });
     calls.extensions.add("anthropic.claude-code");
     calls.workspaceFolders = [{ name: "p", uri: { scheme: "file", fsPath: "/p" } }];
-    await ext.resumeInClaude(item, found, (_file, _args, _options, callback) => {
-      callback(null, "11111111-2222-3333-4444-555555555555\n", "");
-    });
+    await ext.resumeInClaude(item);   // the fetch has no fake route here: it fails before anything is written
     assert.strictEqual(calls.quickPicks.length, 0);
-    assert.strictEqual(net.seen.length, 0);
+    assert.ok(!net.seen.some((r) => r.url.includes("/library/profiles")), "no profile list, no pick");
   });
 });
 
