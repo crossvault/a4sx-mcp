@@ -42,8 +42,6 @@ export const PROFILE_TEXTS = {
   runCli: "Run a4sx profile",
   deleteElsewhere: DELETE_ELSEWHERE,
   cliDefaultAddress: "the CLI's default server address",
-  confirmDefault: (name: string, address: string) => `New launches will use "${name}" and send their requests to ${address}. Make it the default?`,
-  makeDefault: "Make default",
   confirmDelete: (name: string) => `Delete the launch profile "${name}"?`,
   confirmReplace: (id: string) => `A launch profile "${id}" already exists. Change its name and model?`,
   replace: "Change",
@@ -216,10 +214,6 @@ export async function createProfile(deps: ProfileDeps): Promise<void> {
   }
   const existing = now.profiles.find(([pid2]) => pid2 === pid)?.[1];
   if (existing && !(await confirm(t.confirmReplace(pid), t.replace))) {
-    return;
-  }
-  // The server makes the first profile the default.
-  if (!now.default && !existing && !(await confirm(t.confirmDefault(profileName(pid, profile), addressOf(profile)), t.makeDefault))) {
     return;
   }
   await write(deps, token, (c, tok) => putProfile(c, tok, pid, profile));

@@ -369,7 +369,7 @@ function profileWriteFail(status: number, data: any, submitted: readonly string[
     throw new ApiError("hidden-bound-to-host", serverLine(data, submitted, MESSAGES.hiddenBoundToHost), status);
   }
   if (status === 429 && code === "profile_limit") {
-    throw new ApiError("profile-limit", MESSAGES.profileLimit, status);
+    throw new ApiError("profile-limit", serverLine(data, submitted, MESSAGES.profileLimit), status);
   }
   if (status === 404 && code === "no_such_profile") {
     throw new ApiError("not-found", MESSAGES.profileGone, status);

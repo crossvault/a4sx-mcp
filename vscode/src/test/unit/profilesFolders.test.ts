@@ -526,19 +526,33 @@ describe("Launch profile actions", () => {
     const del = pkg.contributes.menus["view/item/context"].filter((m: any) => m.command === ext.CMD_DELETE_PROFILE);
     assert.deepStrictEqual(del.map((m: any) => m.when), ["view == a4sx.profiles && viewItem == a4sx.profile"], "the menu hides Delete for the default and locked profiles");
   });
-  it("Create asks for id, name and model only; the first profile becomes the default, so the modal names the address", async () => {
+  it("Create asks for id, name and model only, with no default modal (there is no set-default for keys)", async () => {
     const { sb, net } = await activateWith({
       "GET /library/profiles": [{ status: 200, body: { profiles: {}, default: null } }],
       "PUT /library/profiles/work": [{ status: 200, body: { profiles: { work: { model: "m" } }, default: "work" } }],
     }, [...ALL, "profiles:write"]);
     await sb.profiles.getChildren();
     calls.inputQueue.push("work", "", "m");
-    calls.modalChoices.push(PROFILE_TEXTS.makeDefault);
     await calls.commands.get(ext.CMD_CREATE_PROFILE)!();
     assert.strictEqual(calls.inputs.length, 3, "id, name, model: no address or flags box");
     assert.strictEqual(calls.inputs[0].validateInput("Bad Id"), PROFILE_TEXTS.idInvalid);
-    assert.deepStrictEqual(calls.modals.map((m) => m.message), [PROFILE_TEXTS.confirmDefault("work", PROFILE_TEXTS.cliDefaultAddress)]);
+    assert.strictEqual(calls.modals.length, 0, "no default modal, even for the first profile");
+    assert.ok(!("makeDefault" in PROFILE_TEXTS) && !("confirmDefault" in PROFILE_TEXTS));
     assert.deepStrictEqual(net.seen.find((r) => r.method === "PUT")!.body, { name: "work", model: "m" }, "an empty name shows the id");
+  });
+
+  it("Create past the key's profile cap (429 profile_limit) shows the server's line", async () => {
+    const { sb, net } = await activateWith({
+      "GET /library/profiles": [{ status: 200, body: { profiles: { home: {} }, default: "home" } }],
+      "PUT /library/profiles/eleven": [{ status: 429, body: { error: { code: "profile_limit", message: "Create more profiles with the a4sx CLI or on the website." } } }],
+    }, [...ALL, "profiles:write"]);
+    await sb.profiles.getChildren();
+    calls.inputQueue.push("eleven", "", "m");
+    await calls.commands.get(ext.CMD_CREATE_PROFILE)!();
+    assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 1);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), ["Create more profiles with the a4sx CLI or on the website."]);
+    const noLine = fakeFetch({ "PUT /library/profiles/x": [{ status: 429, body: { error: { code: "profile_limit" } } }] });
+    await assert.rejects(api.putProfile(clientWith(noLine.fetch), TOKEN, "x", { name: "x" }), (e: any) => e.code === "profile-limit" && e.message === api.MESSAGES.profileLimit);
   });
 
   it("an older server answers writes with a refusal: one short message, no crash", async () => {
