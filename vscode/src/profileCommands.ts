@@ -64,6 +64,8 @@ export function isEditable(field: ProfileField): field is EditableField {
 export interface AddressElsewhere {
   website(): Promise<void>;
   cli(profileId: string): Promise<void>;
+  /** Runs the CLI's own set-default command for the profile. */
+  setDefault(profileId: string): Promise<void>;
 }
 
 export interface ProfileDeps {
@@ -93,10 +95,16 @@ export function validateField(field: EditableField, raw: string): string | undef
   return /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,63}$/.test(value) ? undefined : PROFILE_TEXTS.modelInvalid;
 }
 
-/** The body of a key write: only the field changed. An empty name shows the id; an empty model is the CLI's default. */
-export function fieldBody(id: string, field: EditableField, raw: string): Profile {
+/**
+ * The body of a key write: only the field changed. An empty name is left out (the list then shows
+ * the id); an empty model is "" (the CLI's default).
+ */
+export function fieldBody(field: EditableField, raw: string): Profile {
   const value = raw.trim();
-  return field === "name" ? { name: value || id } : { model: value };
+  if (field === "name") {
+    return value ? { name: value } : {};
+  }
+  return { model: value };
 }
 
 /** A field as it may be shown: flags with a key or token are masked; header names and values never. */
@@ -153,13 +161,15 @@ const KEEP_OPEN = new Set([
  * `keepOpen`, a refusal in KEEP_OPEN is returned (not shown), so the caller can open the box again.
  */
 async function write(
-  deps: ProfileDeps, token: string, call: (c: Client, token: string) => Promise<ProfilesState>, keepOpen = false,
+  deps: ProfileDeps, token: string, call: (c: Client, token: string) => Promise<ProfilesState | undefined>, keepOpen = false,
 ): Promise<ApiError | undefined> {
   try {
     const client = deps.client();
     const done = await callWithScope(deps.auth, token, (t) => call(client, t));
-    if (done) {
+    if (done?.value) {
       deps.view.show(done.value);
+    } else if (done) {
+      deps.view.refresh();   // the write succeeded but the reply has no list (a key that can't read)
     }
   } catch (e) {
     if (keepOpen && e instanceof ApiError && KEEP_OPEN.has(e.code)) {
@@ -203,7 +213,7 @@ export async function createProfile(deps: ProfileDeps): Promise<void> {
     return;
   }
   // Only a name and a model: a key sets nothing else (no flags, no server address).
-  const profile: Profile = { ...fieldBody(pid, "name", name), ...(model.trim() ? { model: model.trim() } : {}) };
+  const profile: Profile = { ...fieldBody("name", name), ...(model.trim() ? { model: model.trim() } : {}) };
   // The list may have changed while the boxes were open (another window, the CLI, the web).
   let now: ProfilesState;
   try {
@@ -220,12 +230,14 @@ export async function createProfile(deps: ProfileDeps): Promise<void> {
 }
 
 /** Something a key may not change: say where it can be changed and offer both ways. */
-async function changeElsewhere(deps: ProfileDeps, item: ProfileItem, message: string = PROFILE_TEXTS.readOnly): Promise<void> {
+async function changeElsewhere(
+  deps: ProfileDeps, item: ProfileItem, message: string = PROFILE_TEXTS.readOnly, runCli?: (id: string) => Promise<void>,
+): Promise<void> {
   const t = PROFILE_TEXTS;
   const buttons = deps.elsewhere ? [t.runCli, t.openWebsite] : [];
   const choice = await vscode.window.showInformationMessage(message, ...buttons);
   if (choice === t.runCli) {
-    await deps.elsewhere?.cli(item.id);
+    await (runCli ?? deps.elsewhere?.cli)?.(item.id);
   } else if (choice === t.openWebsite) {
     await deps.elsewhere?.website();
   }
@@ -268,9 +280,9 @@ export async function editProfile(deps: ProfileDeps, item: ProfileItem | undefin
     if (value === undefined) {
       return;
     }
-    const body = fieldBody(item.id, field, value);
-    if ((body[field] ?? "") === (field === "name" ? name : before)) {
-      return;   // unchanged
+    const body = fieldBody(field, value);
+    if (!(field in body) || body[field] === before) {
+      return;   // unchanged (an empty name sends nothing: the server keeps the stored one)
     }
     const refused = await write(deps, token, (c, tok) => putProfile(c, tok, item.id, body), true);
     if (!refused) {
@@ -280,10 +292,10 @@ export async function editProfile(deps: ProfileDeps, item: ProfileItem | undefin
   }
 }
 
-/** The default is changed only with the a4sx CLI or on the website: offer both. */
+/** The default is changed only with the a4sx CLI or on the website: offer both. The CLI button runs `a4sx profile --set-default ID`. */
 export async function changeDefault(deps: ProfileDeps, item: ProfileItem | undefined): Promise<void> {
   if (item) {
-    await changeElsewhere(deps, item);
+    await changeElsewhere(deps, item, PROFILE_TEXTS.readOnly, deps.elsewhere?.setDefault);
   }
 }
 

@@ -4,7 +4,11 @@
 // flags), with the default marked. Profiles never hold an API key, and this view shows none of a
 // profile's headers.
 import * as vscode from "vscode";
-import { ApiError, Client, listProfiles, MESSAGES, Profile, ProfilesState } from "./api";
+import { ApiError, Client, listProfiles, MESSAGES, Profile, ProfilesState, SCOPE_ORGANIZE, SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE } from "./api";
+
+/** The scopes the "Sign in again to allow" item may offer (the step-up allow-list). */
+const STEP_UP_SCOPES: readonly string[] = [SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, SCOPE_ORGANIZE];
+const SERVER_LINE_MAX = 200;
 import { MessageItem } from "./sessionsView";
 
 export const PROFILE_CONTEXT = "a4sx.profile";
@@ -207,7 +211,11 @@ export class ProfilesProvider implements vscode.TreeDataProvider<vscode.TreeItem
       this.data = undefined;
       if (e instanceof ApiError && e.code === "insufficient-scope" && e.requiredScope) {
         this.set("needs-scope");
-        return [new MessageItem(ALLOW_SCOPE_ITEM(e.requiredScope), "key", { command: "a4sx.allowScope", title: "Sign in", arguments: [e.requiredScope] })];
+        const scope = e.requiredScope.slice(0, SERVER_LINE_MAX);
+        if (!STEP_UP_SCOPES.includes(scope)) {
+          return [new MessageItem(MESSAGES.needsScope(scope), "info")];   // never offered as a sign-in
+        }
+        return [new MessageItem(ALLOW_SCOPE_ITEM(scope), "key", { command: "a4sx.allowScope", title: "Sign in", arguments: [scope] })];
       }
       if (e instanceof ApiError && e.code === "not-supported") {
         this.set("unsupported");

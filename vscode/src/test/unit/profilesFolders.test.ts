@@ -453,9 +453,9 @@ describe("Launch profile actions", () => {
     for (const bad of ["-m", "a b", "x".repeat(65), "sk ant"]) {
       assert.strictEqual(validateField("model", bad), PROFILE_TEXTS.modelInvalid, bad);
     }
-    assert.deepStrictEqual(fieldBody("work", "name", "  "), { name: "work" });
-    assert.deepStrictEqual(fieldBody("work", "name", " Work "), { name: "Work" });
-    assert.deepStrictEqual(fieldBody("work", "model", ""), { model: "" });
+    assert.deepStrictEqual(fieldBody("name", "  "), {}, "an empty name is left out, never sent as the id");
+    assert.deepStrictEqual(fieldBody("name", " Work "), { name: "Work" });
+    assert.deepStrictEqual(fieldBody("model", ""), { model: "" });
   });
 
   it("the default is changed only elsewhere: the button offers the CLI or the website, and nothing is sent", async () => {
@@ -538,7 +538,7 @@ describe("Launch profile actions", () => {
     assert.strictEqual(calls.inputs[0].validateInput("Bad Id"), PROFILE_TEXTS.idInvalid);
     assert.strictEqual(calls.modals.length, 0, "no default modal, even for the first profile");
     assert.ok(!("makeDefault" in PROFILE_TEXTS) && !("confirmDefault" in PROFILE_TEXTS));
-    assert.deepStrictEqual(net.seen.find((r) => r.method === "PUT")!.body, { name: "work", model: "m" }, "an empty name shows the id");
+    assert.deepStrictEqual(net.seen.find((r) => r.method === "PUT")!.body, { model: "m" }, "an empty name is left out: the list shows the id");
   });
 
   it("Create past the key's profile cap (429 profile_limit) shows the server's line", async () => {
@@ -772,7 +772,7 @@ describe("review follow-ups", () => {
     assert.strictEqual(net.seen.filter((r) => r.method === "GET").length, 3, "the view's list, then once per Create");
     const puts = net.seen.filter((r) => r.method === "PUT");
     assert.strictEqual(puts.length, 1);
-    assert.deepStrictEqual(puts[0].body, { name: "work", model: "m" }, "only name and model: the server keeps the stored address and the rest");
+    assert.deepStrictEqual(puts[0].body, { model: "m" }, "only the given fields: the server keeps the stored name, address and the rest");
   });
 
   it("Refresh while filtered fetches again and keeps the filter, with new counts", async () => {
@@ -1028,5 +1028,102 @@ describe("read-only fields beyond the address; set-default and delete refusals",
     await calls.commands.get(ext.CMD_EDIT_PROFILE)!(home);
     assert.deepStrictEqual(calls.inputs.slice(1).map((i) => i.prompt), ["That flag needs the CLI.", "Not with a key."]);
     assert.strictEqual(calls.errors.length, 0);
+  });
+});
+
+describe("delta review nits", () => {
+  beforeEach(resetCalls);
+
+  const body = { profiles: { home: { name: "Home", model: "m" }, plain: { name: "Plain", model: "p" } }, default: "home" };
+
+  it("an edit that empties the name sends nothing (the stored name stays); Create with no name sends an empty object", async () => {
+    const { sb, net } = await activateWith({
+      "GET /library/profiles": [{ status: 200, body }],
+      "PUT /library/profiles/fresh": [{ status: 200, body }],
+    }, [...ALL, "profiles:write"]);
+    const plain = ((await sb.profiles.getChildren()) as ProfileItem[]).find((i) => i.id === "plain")!;
+    calls.nextPick = 0;
+    calls.inputQueue.push("", "fresh", "", "");
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(plain);
+    assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 0);
+    await calls.commands.get(ext.CMD_CREATE_PROFILE)!();
+    assert.deepStrictEqual(net.seen.find((r) => r.method === "PUT")!.body, {});
+  });
+
+  it("Change default runs the CLI's `a4sx profile --set-default ID` (id as its own element, no shell), or opens the website", async () => {
+    const t = await ext.runSetDefaultCli("work", () => ({ found: true, path: "/usr/local/bin/a4sx" }));
+    assert.ok(t);
+    assert.deepStrictEqual(calls.terminals[0].options, { name: ext.PROFILE_TERMINAL_NAME, shellPath: "/usr/local/bin/a4sx", shellArgs: ["profile", "--set-default", "work"] });
+    assert.strictEqual(await ext.runSetDefaultCli("--x", () => ({ found: true, path: "/x" })), undefined);
+
+    const { sb } = await activateWith({ "GET /library/profiles": [{ status: 200, body }] }, [...ALL, "profiles:write"]);
+    const plain = ((await sb.profiles.getChildren()) as ProfileItem[]).find((i) => i.id === "plain")!;
+    const fake = require("vscode");
+    const savedInfo = fake.window.showInformationMessage;
+    const answers = [PROFILE_TEXTS.openWebsite];
+    fake.window.showInformationMessage = async () => answers.shift();
+    try {
+      await calls.commands.get(ext.CMD_CHANGE_DEFAULT)!(plain);
+    } finally {
+      fake.window.showInformationMessage = savedInfo;
+    }
+    assert.deepStrictEqual(calls.opened, [`${BASE}/account/workspace#profiles`]);
+  });
+
+  it("the CLI button of Change default calls the set-default runner with the profile id", async () => {
+    const seen: string[] = [];
+    const { changeDefault } = await import("../../profileCommands");
+    const fake = require("vscode");
+    const savedInfo = fake.window.showInformationMessage;
+    fake.window.showInformationMessage = async () => PROFILE_TEXTS.runCli;
+    try {
+      await changeDefault({
+        auth: {} as any, client: () => clientWith(fakeFetch({}).fetch), view: {} as any,
+        elsewhere: { website: async () => undefined, cli: async (id) => { seen.push(`cli:${id}`); }, setDefault: async (id) => { seen.push(`set:${id}`); } },
+      }, new ProfileItem("plain", { name: "Plain" }, false));
+    } finally {
+      fake.window.showInformationMessage = savedInfo;
+    }
+    assert.deepStrictEqual(seen, ["set:plain"]);
+  });
+
+  it("the sign-in item is offered only for the three allowed scopes; another scope is a capped note", async () => {
+    for (const [need, offered] of [["profiles:read", true], ["admin:all", false], ["x".repeat(500), false]] as const) {
+      resetCalls();
+      const { sb } = await activateWith({ "GET /library/profiles": [scopeRefusal(need)] }, ["library:read"]);
+      const [item] = await sb.profiles.getChildren();
+      if (offered) {
+        assert.strictEqual(item.label, ALLOW_SCOPE_ITEM(need));
+        assert.strictEqual(item.command!.command, ext.CMD_ALLOW_SCOPE);
+      } else {
+        assert.strictEqual(item.command, undefined, need.slice(0, 20));
+        assert.strictEqual(item.label, api.MESSAGES.needsScope(need.slice(0, 200)));
+        assert.ok(String(item.label).length <= 200 + api.MESSAGES.needsScope("").length);
+      }
+    }
+  });
+
+  it("a write answered with a bare {ok:true} counts as success and refreshes the list", async () => {
+    const { sb, net } = await activateWith({
+      "GET /library/profiles": [{ status: 200, body }, { status: 200, body: { ...body, profiles: { ...body.profiles, plain: { name: "Plain", model: "p2" } } } }],
+      "PUT /library/profiles/plain": [{ status: 200, body: { ok: true, default: "home" } }],
+      "DELETE /library/profiles/plain": [{ status: 200, body: { ok: true, default: "home" } }],
+    }, [...ALL, "profiles:write"]);
+    let plain = ((await sb.profiles.getChildren()) as ProfileItem[]).find((i) => i.id === "plain")!;
+    calls.nextPick = 1;
+    calls.inputQueue.push("p2");
+    let fired = 0;
+    sb.profiles.onDidChangeTreeData(() => { fired++; });
+    await calls.commands.get(ext.CMD_EDIT_PROFILE)!(plain);
+    assert.strictEqual(calls.errors.length, 0, "not an error");
+    assert.strictEqual(fired, 1, "the view refreshes");
+    plain = ((await sb.profiles.getChildren()) as ProfileItem[]).find((i) => i.id === "plain")!;
+    assert.strictEqual(plain.profile.model, "p2", "the refreshed list is fetched from the server");
+    calls.modalChoices.push(PROFILE_TEXTS.delete);
+    await calls.commands.get(ext.CMD_DELETE_PROFILE)!(plain);
+    assert.strictEqual(calls.errors.length, 0);
+    assert.strictEqual(fired, 2);
+    assert.strictEqual(net.seen.filter((r) => r.method === "GET").length, 2);
+    assert.strictEqual(await api.putProfile(clientWith(fakeFetch({ "PUT /library/profiles/x": [{ status: 200, body: { ok: true } }] }).fetch), TOKEN, "x", {}), undefined);
   });
 });

@@ -288,6 +288,21 @@ export async function runProfileCli(profileId: string, lookup: (configured: stri
   return terminal;
 }
 
+/** Opens a terminal that runs the CLI's own `a4sx profile --set-default ID` directly (no shell). */
+export async function runSetDefaultCli(profileId: string, lookup: (configured: string | undefined) => CliLookup = findCli): Promise<vscode.Terminal | undefined> {
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(profileId) || await stopIfLocalInRemoteWindow()) {
+    return undefined;
+  }
+  const result = lookupCli(lookup);
+  if (!result.found) {
+    await reportMissingCli(result);
+    return undefined;
+  }
+  const terminal = vscode.window.createTerminal({ name: PROFILE_TERMINAL_NAME, shellPath: result.path, shellArgs: ["profile", "--set-default", profileId] });
+  terminal.show();
+  return terminal;
+}
+
 export async function openProfilesOnWeb(): Promise<void> {
   try {
     await vscode.env.openExternal(vscode.Uri.parse(`${client().base}${PROFILES_PAGE}`));
@@ -534,7 +549,11 @@ export function activate(context: vscode.ExtensionContext): void {
   sessions.view = sessionsView;
   chooseResumeProfile = () => pickProfileForResume(auth, client);
   const folderDeps = { auth, client, sessions };
-  const profileDeps = { auth, client, view: profiles, elsewhere: { website: openProfilesOnWeb, cli: (id: string) => runProfileCli(id).then(() => undefined) } };
+  const profileDeps = { auth, client, view: profiles, elsewhere: {
+    website: openProfilesOnWeb,
+    cli: (id: string) => runProfileCli(id).then(() => undefined),
+    setDefault: (id: string) => runSetDefaultCli(id).then(() => undefined),
+  } };
   context.subscriptions.push(
     auth,
     sessions,

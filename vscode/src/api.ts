@@ -330,6 +330,14 @@ export interface ProfilesState {
   default: string | null;
 }
 
+/** A write's reply: the list, or undefined for a bare `{"ok": true, ...}` (a key that may write but not read). */
+function writeReply(status: number, data: any): ProfilesState | undefined {
+  if (data && data.ok === true && !("profiles" in data)) {
+    return undefined;
+  }
+  return profilesState(status, data);
+}
+
 function profilesState(status: number, data: any): ProfilesState {
   if (!data || typeof data.profiles !== "object" || data.profiles === null || Array.isArray(data.profiles)) {
     throw new ApiError("bad-response", MESSAGES.badResponse, status);
@@ -391,7 +399,7 @@ function profilePath(id: string, suffix = ""): string {
   return `/library/profiles/${encodeURIComponent(id)}${suffix}`;
 }
 
-export async function putProfile(c: Client, token: string, id: string, profile: Profile): Promise<ProfilesState> {
+export async function putProfile(c: Client, token: string, id: string, profile: Profile): Promise<ProfilesState | undefined> {
   // `hidden_fields` is the server's count, not a field; the server keeps the hidden entries itself.
   const { hidden_fields: _hidden, ...body } = profile;
   const values = submittedValues(body);
@@ -402,15 +410,15 @@ export async function putProfile(c: Client, token: string, id: string, profile: 
   if (status !== 200) {
     profileWriteFail(status, data, values);
   }
-  return profilesState(status, data);
+  return writeReply(status, data);
 }
 
-export async function deleteProfile(c: Client, token: string, id: string): Promise<ProfilesState> {
+export async function deleteProfile(c: Client, token: string, id: string): Promise<ProfilesState | undefined> {
   const { status, data } = await call(c, profilePath(id), { method: "DELETE", token });
   if (status !== 200) {
     profileWriteFail(status, data);
   }
-  return profilesState(status, data);
+  return writeReply(status, data);
 }
 
 /** Files a saved session in `folder`, or takes it out of its folder (null). */
