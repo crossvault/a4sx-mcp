@@ -13,7 +13,7 @@ import { CLI_NAME, findClaude, findCli, CliLookup } from "./cli";
 import { clearFilter, filterSessions, moveToFolder, removeFromFolder } from "./folderCommands";
 import { CMD_OPEN_LISTING, ListingItem, MarketplaceProvider } from "./marketplaceView";
 import {
-  listMeshes, MESH_ID, MESH_TEXTS, meshesPageUrl, meshInviteUrl, meshLaunchArgs, meshPageUrl, parsePreflight, preflightArgs, reducedWarning,
+  listMeshes, MESH_ID, MESH_TEXTS, meshesPageUrl, meshInviteUrl, meshLaunchArgs, meshPageUrl, parsePreflight, preflightAction, preflightArgs, reducedWarning, refusalDetail,
   startable, suggestCellName, validateCellName, VisibilityPoller,
 } from "./meshApi";
 import {
@@ -610,9 +610,10 @@ export const MESH_SETUP_PATH = "/guide/cli";
 /**
  * Start session in mesh: types `a4sx launch --ipc-proxy --mesh <id> --as <name>` into a new terminal.
  * First the read-only checks: the mesh is an active mesh of mine and still listed, the CLI is there,
- * and the CLI's isolation preflight (`a4sx launch --mesh <id> --preflight --json`, spec §8.8) answers
- * `sandbox` or `uid` (start), `reduced` (a modal; only an explicit click adds --mesh-reduced-isolation
- * to this one start, nothing is remembered) or `none` (refused). The name comes from an input box and
+ * and the CLI's isolation preflight (`a4sx launch --mesh <id> --preflight --json`, spec §8.8) is read:
+ * `ready: false` (any tier) or tier `none` refuses with the CLI's reason and fix lines; `needs_flag`
+ * shows the reduced-isolation warning, and only its button adds --mesh-reduced-isolation to this one
+ * start (nothing is remembered); otherwise the session starts (uid shows its limits as a note). The name comes from an input box and
  * must follow the server's rule; the id must be a mesh id; each is quoted for the shell (or passed as
  * an argv array when the shell is unknown). Neither the terminal nor the preflight gets a key.
  */
@@ -663,21 +664,31 @@ export async function startSessionInMesh(
     await vscode.window.showErrorMessage(MESH_TEXTS.preflightFailed);
     return undefined;
   }
-  if (pf.tier === "none") {
-    if ((await vscode.window.showErrorMessage(MESH_TEXTS.noTier, MESH_TEXTS.setupGuide)) === MESH_TEXTS.setupGuide) {
+  const action = preflightAction(pf);
+  if (action === "refuse") {
+    const detail = refusalDetail(pf);
+    const buttons = pf.tier === "none" ? [MESH_TEXTS.setupGuide] : [];
+    const choice = await vscode.window.showErrorMessage(
+      pf.reason ?? (pf.tier === "none" ? MESH_TEXTS.noTier : MESH_TEXTS.notReady), { modal: true, ...(detail ? { detail } : {}) }, ...buttons,
+    );
+    if (choice === MESH_TEXTS.setupGuide) {
       await openMeshPage((base) => `${base}${MESH_SETUP_PATH}`);
     }
     return undefined;
   }
   let reduced = false;
-  if (pf.tier === "reduced") {
+  if (action === "opt-in") {
     const choice = await vscode.window.showWarningMessage(
-      reducedWarning(mesh.name ?? meshId), { modal: true, ...(pf.reason ? { detail: pf.reason } : {}) }, MESH_TEXTS.reducedStart,
+      pf.reason ?? reducedWarning(mesh.name ?? meshId),
+      { modal: true, ...(pf.limits.length ? { detail: pf.limits.join("\n") } : {}) },
+      MESH_TEXTS.reducedStart,
     );
     if (choice !== MESH_TEXTS.reducedStart) {
       return undefined;
     }
     reduced = true;
+  } else if (pf.tier === "uid" && pf.limits.length) {
+    void vscode.window.showInformationMessage(pf.limits.join(" "));   // not awaited: it never blocks the start
   }
   const raw = await vscode.window.showInputBox({
     title: MESH_TEXTS.nameTitle,

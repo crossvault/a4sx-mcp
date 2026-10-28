@@ -15,7 +15,9 @@ import {
   PROBE_RETRY_MS, retryAfterMs, suggestCellName, Timers, validateCellName, VisibilityPoller,
 } from "../../meshApi";
 import { CellItem, MachineItem, MeshItem, MESHES_AVAILABLE } from "../../meshesView";
-import { parsePreflight, preflightArgs, reducedWarning } from "../../meshApi";
+import {
+  parsePreflight, PREFLIGHT_FIX_LINES, PREFLIGHT_REASON_MAX, preflightAction, preflightArgs, reducedWarning,
+} from "../../meshApi";
 import { commandLine } from "../../terminalCommand";
 import type { CliLookup } from "../../cli";
 
@@ -778,13 +780,44 @@ describe("meshes: console links", () => {
   });
 });
 
+// ---- the real CLI preflight ------------------------------------------------------------------------
+// Recorded on a Linux dev container with a4sx CLI 0.15.1 (no bubblewrap, no proxy user, an account
+// session stored), for a syntactically valid but nonexistent mesh id:
+//   a4sx launch --mesh msh_0123456789abcdef0123456789abcdef --preflight --json   → exit code 0
+// The mesh id is replaced with this file's A; nothing else is changed (it holds no host name or path).
+const KEYRING_LIMIT = "The OS keyring (where the VS Code extension keeps its key) can't be inspected; that key can't start mesh sessions.";
+const REAL_PREFLIGHT_NOT_READY = {
+  tier: "reduced",
+  ready: false,
+  reason: `Reduced isolation needs a key that works only for \u00ab${A}\u00bb, and no other a4sx sign-in saved on this host. Sign out of a4sx here, and create a key for \u00ab${A}\u00bb in your browser.`,
+  limits: KEYRING_LIMIT,
+  fix: ["a4sx logout", "a4sx logout --all", `a4sx mesh pair --pinned ${A}`],
+  lan_peers: null,
+};
+// The same CLI's answer when the pinned key exists and the store is clean (from its source, cmd_launch_mesh_preflight).
+const REAL_PREFLIGHT_NEEDS_FLAG = {
+  tier: "reduced",
+  ready: true,
+  reason: `Reduced isolation for \u00abAlpha team\u00bb: this host can't sandbox your agent or run the proxy as another user. Here, your agent can act as any of your sessions in \u00abAlpha team\u00bb and skip their outgoing checks. It can't act outside \u00abAlpha team\u00bb or use any other a4sx sign-in, and every other session still checks everything it receives. Continue only if you trust the agent on this host.`,
+  needs_flag: true,
+  limits: KEYRING_LIMIT,
+  lan_peers: null,
+};
+
 describe("meshes: start session in mesh", () => {
   beforeEach(resetCalls);
   const CLI = "/opt/a4sx-test/bin/a4sx";
   const pfCalls: { cli: string; args: readonly string[] }[] = [];
-  const pf = (tier: string, reason?: string): ext.PreflightRunner => async (cli, args) => {
+  /** A preflight answer in the real CLI's shape (see REAL_PREFLIGHT_* below), with `over` merged in. */
+  const pf = (tier: string, over: Record<string, unknown> = {}): ext.PreflightRunner => async (cli, args) => {
     pfCalls.push({ cli, args });
-    return JSON.stringify({ tier, ...(reason ? { reason } : {}) });
+    const base: Record<string, unknown> = {
+      sandbox: { tier, ready: true, reason: "the Claude Code sandbox runs here", lan_peers: null },
+      uid: { tier, ready: true, reason: "the proxy runs as a4sx-proxy", limits: KEYRING_LIMIT, lan_peers: null },
+      reduced: { ...REAL_PREFLIGHT_NEEDS_FLAG },
+      none: { tier, ready: false, reason: "mesh sessions run on Linux and Windows only (native, WSL, Remote-SSH or a dev container)", lan_peers: null },
+    }[tier] as Record<string, unknown> ?? { tier, ready: true };
+    return JSON.stringify({ ...base, ...over });
   };
   const raw = (stdout: string): ext.PreflightRunner => async () => stdout;
   beforeEach(() => { pfCalls.length = 0; });
@@ -871,15 +904,16 @@ describe("meshes: start session in mesh", () => {
     }
   });
 
-  it("preflight 'reduced': the spec's warning in a modal; only an explicit click adds --mesh-reduced-isolation, once", async () => {
+  it("needs_flag: the CLI's warning in a modal with the limits; only an explicit click adds --mesh-reduced-isolation, once", async () => {
     const { sb } = await activateWith(ROUTES());
     const alpha = await alphaItem(sb);
     calls.nextInput = "rev";
     calls.modalChoices.push(undefined);
-    assert.strictEqual(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf("reduced", "no bubblewrap in this container")), undefined);
+    assert.strictEqual(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf("reduced")), undefined);
     assert.strictEqual(calls.modals[0].kind, "warning");
-    assert.strictEqual(calls.modals[0].message, reducedWarning("Alpha team"));
-    assert.ok(calls.modals[0].message.startsWith("Reduced isolation for «Alpha team»: this host can't sandbox your agent"));
+    assert.strictEqual(calls.modals[0].message, REAL_PREFLIGHT_NEEDS_FLAG.reason);
+    assert.strictEqual(calls.modals[0].message, reducedWarning("Alpha team"), "the CLI's text is the spec's text");
+    assert.strictEqual(calls.modals[0].detail, KEYRING_LIMIT);
     assert.deepStrictEqual(calls.modals[0].items, [MESH_TEXTS.reducedStart]);
     assert.strictEqual(calls.terminals.length, 0, "Cancel starts nothing");
     calls.modalChoices.push(MESH_TEXTS.reducedStart);
@@ -890,27 +924,107 @@ describe("meshes: start session in mesh", () => {
     assert.strictEqual(calls.modals.length, 3, "nothing is remembered: every start asks again");
   });
 
-  it("preflight 'none': refused, with the setup guide; an unreadable answer (an older CLI) starts nothing", async () => {
+  it("the modal and the flag come only with needs_flag: true", async () => {
     const { sb } = await activateWith(ROUTES());
     const alpha = await alphaItem(sb);
-    calls.nextErrorChoice = MESH_TEXTS.setupGuide;
+    calls.nextInput = "rev";
+    for (const over of [{ needs_flag: false }, { needs_flag: "true" }, { needs_flag: undefined }]) {
+      assert.ok(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf("reduced", over)), JSON.stringify(over));
+    }
+    assert.strictEqual(calls.modals.length, 0);
+    assert.ok(calls.terminals.every((t) => !t.sent[0].includes("--mesh-reduced-isolation")));
+  });
+
+  it("ready: false refuses for every tier: the reason and the fix lines in a modal, nothing starts", async () => {
+    const { sb } = await activateWith(ROUTES());
+    const alpha = await alphaItem(sb);
+    calls.nextInput = "rev";
+    for (const tier of ["sandbox", "uid", "reduced", "none"]) {
+      calls.modals.length = 0;
+      assert.strictEqual(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf(tier, { ready: false, needs_flag: true, fix: ["a4sx logout"] })), undefined, tier);
+      assert.strictEqual(calls.modals.length, 1, tier);
+      assert.strictEqual(calls.modals[0].kind, "error", tier);
+      assert.ok(calls.modals[0].detail!.startsWith(`${MESH_TEXTS.fixIntro}\n  a4sx logout`), tier);
+    }
+    assert.strictEqual(calls.terminals.length, 0);
+    assert.strictEqual(calls.inputs.length, 0);
+  });
+
+  it("the real CLI's not-ready answer: its reason, its fix commands and its limits are shown", async () => {
+    const { sb } = await activateWith(ROUTES());
+    const alpha = await alphaItem(sb);
+    assert.strictEqual(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), raw(JSON.stringify(REAL_PREFLIGHT_NOT_READY))), undefined);
+    assert.strictEqual(calls.modals[0].message, REAL_PREFLIGHT_NOT_READY.reason);
+    assert.strictEqual(calls.modals[0].detail, [
+      MESH_TEXTS.fixIntro, "  a4sx logout", "  a4sx logout --all", `  a4sx mesh pair --pinned ${A}`, "", KEYRING_LIMIT,
+    ].join("\n"));
+    assert.deepStrictEqual(calls.modals[0].items, [], "no start button");
+    assert.strictEqual(calls.terminals.length, 0);
+  });
+
+  it("tier none: refused with the setup guide", async () => {
+    const { sb } = await activateWith(ROUTES());
+    const alpha = await alphaItem(sb);
+    calls.modalChoices.push(MESH_TEXTS.setupGuide);
     assert.strictEqual(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf("none")), undefined);
-    assert.deepStrictEqual(calls.errors[0], { message: MESH_TEXTS.noTier, items: [MESH_TEXTS.setupGuide] });
+    assert.deepStrictEqual(calls.modals[0].items, [MESH_TEXTS.setupGuide]);
     assert.deepStrictEqual(calls.opened, [`${BASE}${ext.MESH_SETUP_PATH}`]);
-    calls.nextErrorChoice = undefined;
-    for (const out of ["", "usage: a4sx launch [-h] ...\nerror: unrecognized arguments: --preflight", "{\"tier\": \"other\"}", "[]", "{\"tier\": 3}"]) {
+    calls.modals.length = 0;
+    assert.strictEqual(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf("none", { ready: true })), undefined, "none never starts");
+    assert.strictEqual(calls.modals[0].kind, "error");
+    assert.strictEqual(calls.terminals.length, 0);
+  });
+
+  it("uid, ready: starts directly, with its limits as a note", async () => {
+    const { sb } = await activateWith(ROUTES());
+    const alpha = await alphaItem(sb);
+    calls.nextInput = "rev";
+    assert.ok(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf("uid")));
+    assert.ok(calls.infos.includes(KEYRING_LIMIT));
+    assert.strictEqual(calls.modals.length, 0);
+    calls.infos.length = 0;
+    assert.ok(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf("sandbox", { limits: KEYRING_LIMIT })));
+    assert.deepStrictEqual(calls.infos, [], "sandbox shows no note");
+  });
+
+  it("malformed or older output: missing or bad tier/ready starts nothing", async () => {
+    const { sb } = await activateWith(ROUTES());
+    const alpha = await alphaItem(sb);
+    const outs = [
+      "", "usage: a4sx launch [-h] ...\nerror: unrecognized arguments: --preflight", "[]", "null", "{",
+      JSON.stringify({ tier: "other", ready: true }), JSON.stringify({ tier: 3, ready: true }), JSON.stringify({ tier: "sandbox" }),
+      JSON.stringify({ tier: "sandbox", ready: "true" }), JSON.stringify({ ready: true }), JSON.stringify({ tier: "sandbox", ready: 1 }),
+    ];
+    for (const out of outs) {
       assert.strictEqual(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), raw(out)), undefined, out);
     }
-    assert.deepStrictEqual(calls.errors.slice(1).map((e) => e.message), Array(5).fill(MESH_TEXTS.preflightFailed));
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), Array(outs.length).fill(MESH_TEXTS.preflightFailed));
     assert.strictEqual(calls.inputs.length, 0);
     assert.strictEqual(calls.terminals.length, 0);
   });
 
-  it("parsePreflight and preflightArgs", () => {
-    assert.deepStrictEqual(parsePreflight(' {"tier":"uid","reason":"proxy user a4sx-proxy\\u202e"}\n'), { tier: "uid", reason: "proxy user a4sx-proxy" });
-    assert.deepStrictEqual(parsePreflight('{"tier":"none"}'), { tier: "none", reason: undefined });
-    assert.strictEqual(parsePreflight("not json"), undefined);
+  it("parsePreflight: the real shape; extra fields ignored; every shown string sanitised and capped", () => {
+    assert.deepStrictEqual(parsePreflight(` ${JSON.stringify(REAL_PREFLIGHT_NOT_READY)}\n`), {
+      tier: "reduced", ready: false, needsFlag: false, reason: REAL_PREFLIGHT_NOT_READY.reason,
+      fix: REAL_PREFLIGHT_NOT_READY.fix, limits: [KEYRING_LIMIT],
+    });
+    const extra = parsePreflight(JSON.stringify({ tier: "sandbox", ready: true, reason: "ok", lan_peers: 3, publish_problems: [{ agent: "x", kind: "refused" }], key: "/root/.config/x", future: { a: 1 } }))!;
+    assert.deepStrictEqual(extra, { tier: "sandbox", ready: true, needsFlag: false, reason: "ok", fix: [], limits: [] });
+    const hostile = parsePreflight(JSON.stringify({
+      tier: "reduced", ready: false, reason: `bad\u202e\u0007 ${"r".repeat(900)}`,
+      fix: [...Array(20).keys()].map((i) => `cmd ${i}\u200b\nnext`).concat([42 as any, "", null as any]),
+      limits: ["l1\u2066", "l2", "l3", "l4", "l5", "l6"],
+    }))!;
+    assert.ok(!/[\u202e\u0007\u200b\n]/.test(hostile.reason!));
+    assert.strictEqual(hostile.reason!.length, PREFLIGHT_REASON_MAX);
+    assert.strictEqual(hostile.fix.length, PREFLIGHT_FIX_LINES);
+    assert.strictEqual(hostile.fix[0], "cmd 0 next");
+    assert.deepStrictEqual(hostile.limits, ["l1", "l2", "l3", "l4"]);
+    assert.ok(parsePreflight(JSON.stringify({ tier: "uid", ready: true, fix: [`${"f".repeat(500)}`] }))!.fix[0].length <= 200);
     assert.strictEqual(preflightArgs("m;id"), undefined);
+    assert.strictEqual(preflightAction(parsePreflight(JSON.stringify(REAL_PREFLIGHT_NEEDS_FLAG))!), "opt-in");
+    assert.strictEqual(preflightAction(parsePreflight(JSON.stringify(REAL_PREFLIGHT_NOT_READY))!), "refuse");
+    assert.strictEqual(preflightAction(parsePreflight(JSON.stringify({ tier: "sandbox", ready: true }))!), "start");
   });
 
   it("runPreflight uses execFile with an argv array: nothing is read by a shell", async function () {

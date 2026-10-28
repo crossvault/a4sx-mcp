@@ -3,7 +3,7 @@
 ## Unreleased
 
 - New view **Meshes**: your a4sx meshes and your cells in each one, with their status, presence, reach and last seen, grouped by machine when they run on more than one. The cells are read when the view is shown or a mesh is expanded, then every 30 seconds while it is visible; a busy server is asked less often. The view appears only when your a4sx server has meshes. If the server doesn't list cells yet, the view shows your meshes alone.
-- **Start session in mesh** runs `a4sx launch --ipc-proxy --mesh <id> --as <name>` in a new terminal, with a name you type, in an active mesh you're a member of. It first runs the CLI's isolation check; reduced isolation needs an explicit click for that start, and a host with no isolation is refused.
+- **Start session in mesh** runs `a4sx launch --ipc-proxy --mesh <id> --as <name>` in a new terminal, with a name you type, in an active mesh you're a member of. It first runs the CLI's isolation check: a host that isn't ready is refused with the CLI's reason and the commands that fix it, and reduced isolation needs an explicit click for that start.
 - Creating a mesh, redeeming an invite and opening a mesh's page open the website.
 - The view needs the new permission `mesh:read`. **Allow mesh read** asks for it with a new browser sign-in. Sign-in itself doesn't ask for it.
 

@@ -44,7 +44,7 @@ export interface Calls {
   /** How many cancellation listeners were disposed. */
   cancelDisposed: number;
   /** Modal information/warning messages (`{ modal: true }`), in order. */
-  modals: { kind: "info" | "warning"; message: string; items: string[] }[];
+  modals: { kind: "info" | "warning" | "error"; message: string; items: string[]; detail?: string }[];
   /** What the next modals resolve to, in order (a button label, or undefined = Cancel). Empty = Cancel. */
   modalChoices: (string | undefined)[];
   /** What the next input boxes resolve to, in order; when empty, `nextInput` answers. */
@@ -271,8 +271,13 @@ const fake = {
       calls.terminals.push(t);
       return t;
     },
-    async showErrorMessage(message: string, ...items: string[]) {
-      calls.errors.push({ message, items });
+    async showErrorMessage(message: string, ...rest: unknown[]) {
+      if (isModal(rest[0])) {
+        const items = rest.slice(1) as string[];
+        calls.modals.push({ kind: "error", message, items, detail: (rest[0] as { detail?: string }).detail });
+        return calls.modalChoices.shift();
+      }
+      calls.errors.push({ message, items: rest as string[] });
       return calls.nextErrorChoice;
     },
     async showInformationMessage(message: string, options?: unknown, ...items: string[]) {
@@ -292,7 +297,7 @@ const fake = {
     },
     async showWarningMessage(message: string, options?: unknown, ...items: string[]) {
       if (isModal(options)) {
-        calls.modals.push({ kind: "warning", message, items });
+        calls.modals.push({ kind: "warning", message, items, detail: (options as { detail?: string }).detail });
         return calls.modalChoices.shift();
       }
       calls.warnings.push(message);
