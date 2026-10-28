@@ -52,15 +52,18 @@ export const CELL_NAME = /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/;
 export const PRESENCE = ["online", "idle", "busy", "away", "offline"] as const;
 export const REACH = ["lan", "public", "via"] as const;
 export const BINDING = ["pairing", "pinned"] as const;
-/**
- * The kinds the contract leaves open. These lists are the values the extension knows; any other
- * value shows as "unknown" rather than as text the server sent.
- */
-export const STATUS = ["running", "starting", "stopping", "stopped", "exited", "error"] as const;
-export const ISOLATION = ["tier-a", "tier-b", "tier-c"] as const;
-export const OS = ["linux", "macos", "darwin", "windows"] as const;
+/** A cell's status. Revoked cells come only under a machine with `revoked: true`. */
+export const STATUS = ["active", "revoked", "pending"] as const;
+/** Self-reported isolation: sandbox = tier a, uid = tier b, reduced = tier c. */
+export const ISOLATION = ["sandbox", "uid", "reduced"] as const;
+/** The cell's OS; absent or null from older CLIs (then nothing is shown). */
+export const OS = ["linux", "wsl", "windows", "macos-reserved"] as const;
+/** The mesh role; absent for non-members. */
 export const ROLE = ["owner", "admin", "member"] as const;
-export const MESH_STATUS = ["active", "archived", "paused"] as const;
+export const MESH_STATUS = ["active", "archived"] as const;
+
+const TIER: Record<(typeof ISOLATION)[number], string> = { sandbox: "a", uid: "b", reduced: "c" };
+const OS_LABEL: Record<(typeof OS)[number], string> = { linux: "linux", wsl: "wsl", windows: "windows", "macos-reserved": "macos" };
 
 export type Unknown = typeof MESH_TEXTS.unknown;
 const UNKNOWN: Unknown = MESH_TEXTS.unknown;
@@ -111,7 +114,8 @@ export interface Cell {
   lastSeen?: string;
   /** The reach kinds; ["unknown"] when the server sent none. An unlisted entry is "unknown". */
   reach: ((typeof REACH)[number] | Unknown)[];
-  os: (typeof OS)[number] | Unknown;
+  /** Undefined when the CLI sent none (older CLIs). */
+  os?: (typeof OS)[number] | Unknown;
   clientVersion?: string;
 }
 
@@ -135,7 +139,7 @@ export function parseMesh(m: any): Mesh | undefined {
     name: oneLine(m.name),
     role: role === UNKNOWN ? undefined : role,
     status: oneOf(MESH_STATUS, m.status),
-    archived: m.archived === true,
+    archived: m.archived === true || m.status === "archived",
     memberCountBucket: typeof m.member_count_bucket === "string" && BUCKET.test(m.member_count_bucket) ? m.member_count_bucket : undefined,
   };
 }
@@ -155,7 +159,8 @@ export function parseCell(c: any): Cell | undefined {
     presence: oneOf(PRESENCE, c.presence),
     lastSeen: isoOrUndefined(c.last_seen),
     reach: reach.length ? reach : [UNKNOWN],
-    os: oneOf(OS, c.os),
+    // revoked_reason is never read: it is not shown anywhere.
+    os: c.os === undefined || c.os === null ? undefined : oneOf(OS, c.os),
     clientVersion: typeof c.client_version === "string" && VERSION.test(c.client_version) ? c.client_version : undefined,
   };
 }
@@ -579,9 +584,27 @@ export function isOnline(c: Cell): boolean {
   return c.presence === "online" || c.presence === "busy";
 }
 
-/** A Windows host on isolation tier c: it registers once per mesh, so it shows as one machine per mesh. */
+/** A Windows host on isolation tier c (reduced): it registers once per mesh, so it shows as one machine per mesh. */
 export function isTierCWindows(c: Cell): boolean {
-  return c.os === "windows" && c.isolation === "tier-c";
+  return c.os === "windows" && c.isolation === "reduced";
+}
+
+/** A cell's status as shown: pending is "Waiting for approval". */
+export function statusText(c: Cell): string {
+  return c.status === "pending" ? "Waiting for approval" : c.status;
+}
+
+/** The isolation as shown: its tier letter, marked self-reported ("tier c (reduced), self-reported"). */
+export function isolationText(c: Cell): string {
+  return c.isolation === UNKNOWN ? UNKNOWN : `tier ${TIER[c.isolation]} (${c.isolation}), self-reported`;
+}
+
+/** The OS as shown, or undefined when the CLI sent none. */
+export function osText(c: Cell): string | undefined {
+  if (c.os === undefined) {
+    return undefined;
+  }
+  return c.os === UNKNOWN ? UNKNOWN : OS_LABEL[c.os];
 }
 
 function cellSortKey(c: Cell): string {
@@ -640,7 +663,7 @@ export function reachText(c: Cell): string {
 
 /** The short line next to a cell: status · presence · reach · last seen. Listed kinds or "unknown" only. */
 export function cellDescription(c: Cell, now: number): string {
-  const parts = [c.status, c.presence, reachText(c), isOnline(c) ? undefined : lastSeenText(c.lastSeen, now)];
+  const parts = [statusText(c), c.presence, reachText(c), isOnline(c) ? undefined : lastSeenText(c.lastSeen, now)];
   return parts.filter(Boolean).join(" · ");
 }
 
@@ -650,12 +673,12 @@ export function cellTooltip(c: Cell, machine: Machine, now: number): string {
   return [
     `Name: ${c.name ?? "not set"}`,
     ...(c.instanceId ? [`Instance: ${c.instanceId}`] : []),
-    `Status: ${c.status}`,
+    `Status: ${statusText(c)}`,
     `Presence: ${c.presence}`,
     ...(seen ? [`Last ${seen}`] : []),
     `Reach: ${reachText(c)}`,
-    `Isolation: ${c.isolation}`,
-    `OS: ${c.os}`,
+    `Isolation: ${isolationText(c)}`,
+    ...(osText(c) ? [`OS: ${osText(c)}`] : []),
     ...(c.clientVersion ? [`Version: ${c.clientVersion}`] : []),
     `Machine: ${machine.label ?? machine.keyId}`,
     ...(isTierCWindows(c) ? [MESH_TEXTS.tierCWindows] : []),

@@ -10,7 +10,7 @@ import * as ext from "../../extension";
 import * as api from "../../api";
 import { LoginRequest, SECRET_KEY } from "../../auth";
 import {
-  BACKOFF_CAP_MS, cellDescription, cellTooltip, detect, isTierCWindows, lastSeenText, listMeshes, listMyCells, Machine, MAX_PAGES, Mesh,
+  BACKOFF_CAP_MS, cellDescription, isolationText, osText, statusText, cellTooltip, detect, isTierCWindows, lastSeenText, listMeshes, listMyCells, Machine, MAX_PAGES, Mesh,
   MESH_TEXTS, MeshLoader, meshesPageUrl, meshInviteUrl, meshLaunchArgs, meshPageUrl, meshTree, parseCell, parseMachine, parseMesh, POLL_MS,
   PROBE_RETRY_MS, retryAfterMs, suggestCellName, Timers, validateCellName, VisibilityPoller,
 } from "../../meshApi";
@@ -35,11 +35,11 @@ const MESHES = { meshes: [
   { mesh_id: A, name: "Alpha team", role: "owner", status: "active", archived: false, member_count_bucket: "2-5" },
   { mesh_id: B, name: "Beta", role: "member", status: "active", archived: false, member_count_bucket: "1" },
   { mesh_id: E, name: "Empty mesh", role: "member", status: "active", archived: false, member_count_bucket: "1" },
-  { mesh_id: OLD, name: "Old project", role: "owner", status: "archived", archived: true, member_count_bucket: "1" },
+  { mesh_id: OLD, name: "Old project", status: "archived", archived: false, member_count_bucket: "1" },
 ], next_cursor: null };
 
 const cell = (over: Record<string, unknown>) => ({
-  mesh_id: A, mesh_name: "Alpha team", instance_id: "i-1", name: "planner", isolation: "tier-a", status: "running", presence: "online",
+  mesh_id: A, mesh_name: "Alpha team", instance_id: "i-1", name: "planner", isolation: "sandbox", status: "active", presence: "online",
   last_seen: "2026-10-28T11:55:00Z", reach: ["lan"], os: "linux", client_version: "0.12.3", ...over,
 });
 
@@ -48,15 +48,15 @@ const CELLS = { machines: [
     key_id: "k_laptop", label: `laptop (${HOSTNAME})`, binding: "pinned", created_at: "2026-10-01T00:00:00Z", expires_at: "2027-01-01T00:00:00Z", revoked: false,
     cells: [
       cell({}),
-      cell({ instance_id: "i-2", name: "builder", status: "stopped", presence: "offline", last_seen: "2026-10-28T11:20:00Z", reach: [] }),
-      cell({ mesh_id: B, mesh_name: "Beta", instance_id: "i-3", name: "solo", isolation: "tier-b", reach: ["public", "via"], os: "macos", last_seen: null }),
+      cell({ instance_id: "i-2", name: "builder", status: "pending", presence: "offline", last_seen: "2026-10-28T11:20:00Z", reach: [] }),
+      cell({ mesh_id: B, mesh_name: "Beta", instance_id: "i-3", name: "solo", isolation: "uid", reach: ["public", "via"], os: null, last_seen: null }),
     ],
   },
   {
     key_id: "k_win", label: "WIN-DESK", binding: "pairing", created_at: "2026-10-02T00:00:00Z", expires_at: "2026-11-02T00:00:00Z", revoked: false,
-    cells: [cell({ instance_id: "i-4", name: "tester", isolation: "tier-c", presence: "idle", last_seen: "2026-10-28T10:00:00Z", reach: ["via"], os: "windows", client_version: "0.12.2" })],
+    cells: [cell({ instance_id: "i-4", name: "tester", isolation: "reduced", presence: "idle", last_seen: "2026-10-28T10:00:00Z", reach: ["via"], os: "windows", client_version: "0.12.2" })],
   },
-  { key_id: "k_old", label: "old-host", binding: "pinned", revoked: true, cells: [cell({ mesh_id: B, instance_id: "i-5", name: "ghost" })] },
+  { key_id: "k_old", label: "old-host", binding: "pinned", revoked: true, cells: [cell({ mesh_id: B, instance_id: "i-5", name: "ghost", status: "revoked", revoked_reason: `stolen laptop at ${HOSTNAME}` })] },
   { key_id: "k_other", label: "elsewhere", binding: "pinned", revoked: false, cells: [cell({ mesh_id: OTHER, instance_id: "i-6", name: "hidden" })] },
 ], next_cursor: null };
 
@@ -208,16 +208,18 @@ describe("meshes: the pinned contract", () => {
     ]);
     assert.strictEqual(machines[0].expiresAt, "2027-01-01T00:00:00Z");
     assert.deepStrictEqual(machines[0].cells[0], {
-      meshId: A, meshName: "Alpha team", instanceId: "i-1", name: "planner", isolation: "tier-a", status: "running", presence: "online",
+      meshId: A, meshName: "Alpha team", instanceId: "i-1", name: "planner", isolation: "sandbox", status: "active", presence: "online",
       lastSeen: "2026-10-28T11:55:00Z", reach: ["lan"], os: "linux", clientVersion: "0.12.3",
     });
     assert.strictEqual(machines[0].cells[2].lastSeen, undefined, "last_seen null");
+    assert.strictEqual(machines[0].cells[2].os, undefined, "os null from an older CLI");
+    assert.ok(!JSON.stringify(machines).includes("stolen"), "revoked_reason is never kept");
     assert.ok(net.seen.every((r) => r.headers.Authorization === `Bearer ${TOKEN}`));
     assert.deepStrictEqual(paths(net.seen), ["/meshes", "/me/mesh/cells"]);
   });
 
   it("an enum value outside the contract shows as 'unknown': free text never shows as a kind", () => {
-    const c = parseCell(cell({ presence: "WIN-DESK", status: HOSTNAME, isolation: "tier/c", os: "10.0.0.7", reach: ["lan", "203.0.113.9:443", "lan"], client_version: "1.0; rm" }))!;
+    const c = parseCell(cell({ presence: "WIN-DESK", status: HOSTNAME, isolation: "tier-c", os: "10.0.0.7", reach: ["lan", "203.0.113.9:443", "lan"], client_version: "1.0; rm" }))!;
     assert.deepStrictEqual([c.presence, c.status, c.isolation, c.os, c.reach, c.clientVersion], ["unknown", "unknown", "unknown", "unknown", ["lan", "unknown"], undefined]);
     assert.deepStrictEqual(parseCell(cell({ reach: "lan" }))!.reach, ["unknown"]);
     assert.deepStrictEqual(parseCell(cell({ presence: "Online" }))!.presence, "unknown", "case matters");
@@ -225,9 +227,62 @@ describe("meshes: the pinned contract", () => {
       assert.strictEqual(parseCell(cell({ presence: p }))!.presence, p);
     }
     assert.strictEqual(parseMachine({ key_id: "k", binding: "wifi" })!.binding, "unknown");
-    const m = parseMesh({ mesh_id: A, role: "root", status: "deleted", member_count_bucket: "lots of people" })!;
+    const m = parseMesh({ mesh_id: A, role: "root", status: "paused", member_count_bucket: "lots of people" })!;
     assert.deepStrictEqual([m.role, m.status, m.memberCountBucket, m.archived], [undefined, "unknown", undefined, false]);
     assert.ok(!cellDescription(parseCell(cell({ presence: HOSTNAME, status: HOSTNAME, reach: [HOSTNAME] }))!, NOW).includes("corp"));
+  });
+
+  it("the pinned value lists: each listed value is kept, anything else is 'unknown'", () => {
+    const keeps = (field: string, values: string[]) => {
+      for (const v of values) {
+        assert.strictEqual((parseCell(cell({ [field]: v })) as any)[field], v, `${field}=${v}`);
+      }
+      assert.strictEqual((parseCell(cell({ [field]: "other" })) as any)[field], "unknown", `${field}=other`);
+    };
+    keeps("status", ["active", "revoked", "pending"]);
+    keeps("isolation", ["sandbox", "uid", "reduced"]);
+    keeps("os", ["linux", "wsl", "windows", "macos-reserved"]);
+    keeps("presence", ["online", "idle", "busy", "away", "offline"]);
+    for (const old of ["running", "stopped", "tier-a", "tier-c", "macos", "darwin"]) {
+      assert.ok(Object.values(parseCell(cell({ status: old, isolation: old, os: old }))!).filter((v) => v === "unknown").length === 3, old);
+    }
+    assert.deepStrictEqual(parseCell(cell({ reach: ["lan", "public", "via", "wan"] }))!.reach, ["lan", "public", "via", "unknown"]);
+    for (const b of ["pairing", "pinned"]) {
+      assert.strictEqual(parseMachine({ key_id: "k", binding: b })!.binding, b);
+    }
+    for (const r of ["owner", "admin", "member"]) {
+      assert.strictEqual(parseMesh({ mesh_id: A, role: r })!.role, r);
+    }
+    assert.strictEqual(parseMesh({ mesh_id: A })!.role, undefined, "no role for non-members");
+    assert.strictEqual(parseMesh({ mesh_id: A, status: "active" })!.status, "active");
+  });
+
+  it("os absent or null shows nothing (not 'unknown'); an unlisted os shows 'unknown'", () => {
+    for (const os of [undefined, null]) {
+      const c = parseCell(cell({ os }))!;
+      assert.strictEqual(osText(c), undefined);
+      assert.ok(!cellTooltip(c, parseMachine({ key_id: "k" })!, NOW).includes("OS:"));
+    }
+    assert.strictEqual(osText(parseCell(cell({ os: "beos" }))!), "unknown");
+    assert.strictEqual(osText(parseCell(cell({ os: "macos-reserved" }))!), "macos");
+    assert.strictEqual(osText(parseCell(cell({ os: "wsl" }))!), "wsl");
+  });
+
+  it("pending shows as 'Waiting for approval'; isolation shows its tier, marked self-reported", () => {
+    const pending = parseCell(cell({ status: "pending", presence: "offline", last_seen: null }))!;
+    assert.strictEqual(statusText(pending), "Waiting for approval");
+    assert.ok(cellDescription(pending, NOW).startsWith("Waiting for approval · "));
+    assert.ok(cellTooltip(pending, parseMachine({ key_id: "k" })!, NOW).includes("Status: Waiting for approval"));
+    assert.strictEqual(isolationText(parseCell(cell({ isolation: "sandbox" }))!), "tier a (sandbox), self-reported");
+    assert.strictEqual(isolationText(parseCell(cell({ isolation: "uid" }))!), "tier b (uid), self-reported");
+    assert.strictEqual(isolationText(parseCell(cell({ isolation: "reduced" }))!), "tier c (reduced), self-reported");
+    assert.strictEqual(isolationText(parseCell(cell({ isolation: "tier-c" }))!), "unknown");
+  });
+
+  it("a mesh is archived by either signal: archived: true or status: archived", () => {
+    assert.strictEqual(parseMesh({ mesh_id: A, archived: true, status: "active" })!.archived, true);
+    assert.strictEqual(parseMesh({ mesh_id: A, archived: false, status: "archived" })!.archived, true);
+    assert.strictEqual(parseMesh({ mesh_id: A, archived: false, status: "active" })!.archived, false);
   });
 
   it("a mesh id that isn't exactly msh_ + 32 hex is dropped (cards and cells); so is a machine without key_id", () => {
@@ -510,14 +565,16 @@ describe("meshes: tree model", () => {
     assert.strictEqual(lastSeenText("2026-10-20T12:00:00Z", NOW), "seen 8 d ago");
     assert.strictEqual(lastSeenText(undefined, NOW), undefined);
     const [laptop] = machines();
-    assert.strictEqual(cellDescription(laptop.cells[0], NOW), "running · online · lan");
-    assert.strictEqual(cellDescription(laptop.cells[1], NOW), "stopped · offline · unknown · seen 40 min ago");
-    assert.strictEqual(cellDescription(laptop.cells[2], NOW), "running · online · public+via");
+    assert.strictEqual(cellDescription(laptop.cells[0], NOW), "active · online · lan");
+    assert.strictEqual(cellDescription(laptop.cells[1], NOW), "Waiting for approval · offline · unknown · seen 40 min ago");
+    assert.strictEqual(cellDescription(laptop.cells[2], NOW), "active · online · public+via");
   });
 
   it("a tier-c Windows host's tooltip says it appears as one machine per mesh", () => {
     const [laptop, win] = machines();
     assert.ok(isTierCWindows(win.cells[0]));
+    assert.ok(!isTierCWindows(parseCell(cell({ os: "linux", isolation: "reduced" }))!), "keys on windows + reduced");
+    assert.ok(cellTooltip(win.cells[0], win, NOW).includes("Isolation: tier c (reduced), self-reported"));
     assert.ok(!isTierCWindows(laptop.cells[0]));
     assert.ok(cellTooltip(win.cells[0], win, NOW).includes(MESH_TEXTS.tierCWindows));
     assert.ok(!cellTooltip(laptop.cells[0], laptop, NOW).includes(MESH_TEXTS.tierCWindows));
