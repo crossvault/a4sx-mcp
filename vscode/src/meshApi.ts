@@ -25,6 +25,8 @@ export const MESH_TEXTS = {
   notActive: "Sessions can only be started in an active mesh.",
   truncated: "The list is longer than the extension reads. Open the website for all of it.",
   preflightFailed: "The a4sx CLI couldn't check this host's isolation for mesh mode. Update the a4sx CLI, then try again.",
+  notReady: "This host can't start a session in this mesh yet.",
+  fixIntro: "To fix it, run these in your own terminal (outside any agent session):",
   reducedStart: "Start with reduced isolation",
   noTier:
     "Mesh mode can't keep your agent away from this session's mesh key on this host. Use a host where the sandbox works, set up a separate proxy user, or start with --mesh-reduced-isolation if you accept the risk.",
@@ -92,8 +94,8 @@ const TEXT_MAX = 80;
 const CONTROLS = /[\x00-\x1f\x7f-\x9f]+/g;
 const INVISIBLE = /[\u202a-\u202e\u2066-\u2069\u200e\u200f\u061c\u200b-\u200d\u2060\ufeff]/g;
 
-/** A free-text field cut to one short, visible line (mesh names, machine labels, cell names). */
-export function oneLine(v: unknown): string | undefined {
+/** A free-text field cut to one short, visible line (mesh names, machine labels, cell names); `max` characters at most. */
+export function oneLine(v: unknown, max: number = TEXT_MAX): string | undefined {
   if (typeof v !== "string") {
     return undefined;
   }
@@ -101,7 +103,7 @@ export function oneLine(v: unknown): string | undefined {
   if (!line) {
     return undefined;
   }
-  return line.length > TEXT_MAX ? `${line.slice(0, TEXT_MAX - 1)}…` : line;
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
 function isoOrUndefined(v: unknown): string | undefined {
@@ -853,10 +855,29 @@ export function meshLaunchArgs(meshId: string, name: string, reducedIsolation = 
 export const PREFLIGHT_TIERS = ["sandbox", "uid", "reduced", "none"] as const;
 export type PreflightTier = (typeof PREFLIGHT_TIERS)[number];
 
+/** Lines and characters of the preflight's text that are shown at most. */
+export const PREFLIGHT_REASON_MAX = 600;
+export const PREFLIGHT_LINE_MAX = 200;
+export const PREFLIGHT_FIX_LINES = 6;
+export const PREFLIGHT_LIMIT_LINES = 4;
+
+/**
+ * The answer of `a4sx launch --mesh <id> --preflight --json` (the CLI's cmd_launch_mesh_preflight):
+ *   {tier, ready, reason, needs_flag?, limits?, fix?, lan_peers, publish_problems?}
+ * `tier` and `ready` are required; `needs_flag` is true only for a reduced tier that is usable with
+ * --mesh-reduced-isolation (then `reason` is the warning); `limits` is one string (uid and reduced);
+ * `fix` is a list of commands to run (when not ready). Other fields are ignored.
+ */
 export interface Preflight {
   tier: PreflightTier;
-  /** The CLI's reason, one short visible line (it is local output, shown only in the modal). */
+  ready: boolean;
+  needsFlag: boolean;
+  /** The CLI's reason (local output), one visible line. */
   reason?: string;
+  /** Commands that fix a refusal, each one visible line, at most PREFLIGHT_FIX_LINES. */
+  fix: string[];
+  /** What the tier can't check, at most PREFLIGHT_LIMIT_LINES lines. */
+  limits: string[];
 }
 
 /** The read-only preflight's argv: `a4sx launch --mesh <id> --preflight --json`; undefined for a bad id. */
@@ -864,7 +885,13 @@ export function preflightArgs(meshId: string): string[] | undefined {
   return MESH_ID.test(meshId) ? ["launch", "--mesh", meshId, "--preflight", "--json"] : undefined;
 }
 
-/** The preflight's `{tier, reason}` from its stdout, or undefined when it isn't that. */
+/** A string or a list of strings as sanitised lines, at most `n`. */
+function lines(v: unknown, n: number): string[] {
+  const raw = typeof v === "string" ? [v] : Array.isArray(v) ? v : [];
+  return raw.map((x) => oneLine(x, PREFLIGHT_LINE_MAX)).filter((x): x is string => !!x).slice(0, n);
+}
+
+/** The preflight's answer from its stdout, or undefined when `tier` or `ready` is missing or not valid. */
 export function parsePreflight(stdout: string): Preflight | undefined {
   let data: any;
   try {
@@ -872,11 +899,43 @@ export function parsePreflight(stdout: string): Preflight | undefined {
   } catch {
     return undefined;
   }
-  const tier = data?.tier;
-  if (typeof tier !== "string" || !(PREFLIGHT_TIERS as readonly string[]).includes(tier)) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
     return undefined;
   }
-  return { tier: tier as PreflightTier, reason: oneLine(data.reason) };
+  const tier = data.tier;
+  if (typeof tier !== "string" || !(PREFLIGHT_TIERS as readonly string[]).includes(tier) || typeof data.ready !== "boolean") {
+    return undefined;
+  }
+  return {
+    tier: tier as PreflightTier,
+    ready: data.ready,
+    needsFlag: data.needs_flag === true,
+    reason: oneLine(data.reason, PREFLIGHT_REASON_MAX),
+    fix: lines(data.fix, PREFLIGHT_FIX_LINES),
+    limits: lines(data.limits, PREFLIGHT_LIMIT_LINES),
+  };
+}
+
+/**
+ * What Start does with a preflight answer:
+ *   refuse — not ready (any tier), or tier none: show the reason and the fix lines, start nothing;
+ *   opt-in — ready with needs_flag: the warning modal; only its button adds --mesh-reduced-isolation;
+ *   start  — ready without needs_flag.
+ */
+export function preflightAction(pf: Preflight): "refuse" | "opt-in" | "start" {
+  if (!pf.ready || pf.tier === "none") {
+    return "refuse";
+  }
+  return pf.needsFlag ? "opt-in" : "start";
+}
+
+/** The refusal modal's detail: the fix commands, then the limits. */
+export function refusalDetail(pf: Preflight): string | undefined {
+  const parts = [
+    ...(pf.fix.length ? [[MESH_TEXTS.fixIntro, ...pf.fix.map((f) => `  ${f}`)].join("\n")] : []),
+    ...(pf.limits.length ? [pf.limits.join("\n")] : []),
+  ];
+  return parts.length ? parts.join("\n\n") : undefined;
 }
 
 /** The spec's warning for a reduced-isolation start, naming the mesh. */
