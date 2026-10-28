@@ -574,9 +574,15 @@ export const openMeshesOnWeb = () => openMeshPage(meshesPageUrl);
 export const redeemMeshInvite = () => openMeshPage(meshInviteUrl);
 
 export async function openMeshOnWeb(item: MeshItem | undefined): Promise<void> {
-  if (item instanceof MeshItem) {
-    await openMeshPage((base) => meshPageUrl(base, item.node.mesh.id));
+  if (!(item instanceof MeshItem)) {
+    return;
   }
+  const id = item.node.mesh.id;
+  if (!MESH_ID.test(id)) {
+    await vscode.window.showErrorMessage(MESH_TEXTS.badMesh);
+    return;
+  }
+  await openMeshPage((base) => meshPageUrl(base, id)!);
 }
 
 /**
@@ -599,6 +605,10 @@ export async function startSessionInMesh(
     await vscode.window.showErrorMessage(MESH_TEXTS.badMesh);
     return undefined;
   }
+  if (item.node.mesh.archived) {
+    await vscode.window.showErrorMessage(MESH_TEXTS.archived);
+    return undefined;
+  }
   if (await stopIfLocalInRemoteWindow()) {
     return undefined;
   }
@@ -613,7 +623,7 @@ export async function startSessionInMesh(
     return undefined;
   }
   try {
-    if (!(await listMeshes(client(), token)).some((m) => m.id === meshId)) {
+    if (!(await listMeshes(client(), token)).some((m) => m.id === meshId && !m.archived)) {
       await vscode.window.showErrorMessage(MESH_TEXTS.meshGone);
       return undefined;
     }
@@ -624,7 +634,7 @@ export async function startSessionInMesh(
   const raw = await vscode.window.showInputBox({
     title: MESH_TEXTS.nameTitle,
     prompt: MESH_TEXTS.namePrompt,
-    value: suggestCellName(item.node.groups.flatMap((g) => g.cells.map((c) => c.name))),
+    value: suggestCellName((item.node.groups ?? []).flatMap((g) => g.cells.map((c) => c.name))),
     validateInput: validateCellName,
   });
   if (raw === undefined) {
@@ -682,7 +692,7 @@ export function activate(context: vscode.ExtensionContext): void {
   setContext(MESHES_AVAILABLE, false);
   const meshes = new MeshesProvider(auth, client, (available) => setContext(MESHES_AVAILABLE, available));
   const meshesView = vscode.window.createTreeView(VIEW_MESHES, { treeDataProvider: meshes });
-  const meshPoller = new VisibilityPoller(() => meshes.reload());
+  const meshPoller = new VisibilityPoller(() => meshes.tick());
   const syncSignedIn = () => void auth.current().then((s) => vscode.commands.executeCommand("setContext", "a4sx.signedIn", !!s));
   syncSignedIn();
   setContext("a4sx.sessionsFiltered", false);
@@ -713,7 +723,7 @@ export function activate(context: vscode.ExtensionContext): void {
       syncSignedIn();
       sessions.refresh();
       profiles.refresh();
-      void meshes.reload();
+      void meshes.probe();
     }),
     context.secrets.onDidChange((e) => {
       if (e.key === SECRET_KEY) {
@@ -726,7 +736,7 @@ export function activate(context: vscode.ExtensionContext): void {
         sessions.refresh();
         profiles.refresh();
         market.search(market.query);
-        void meshes.reload();
+        void meshes.probe();
       }
     }),
     vscode.commands.registerCommand(CMD_SIGN_IN, () => signIn(auth)),
@@ -747,7 +757,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_EDIT_PROFILE, (item?: ProfileItem) => editProfile(profileDeps, item)),
     vscode.commands.registerCommand(CMD_CHANGE_DEFAULT, (item?: ProfileItem) => changeDefault(profileDeps, item)),
     vscode.commands.registerCommand(CMD_DELETE_PROFILE, (item?: ProfileItem) => removeProfile(profileDeps, item)),
-    vscode.commands.registerCommand(CMD_REFRESH_MESHES, () => meshes.reload()),
+    vscode.commands.registerCommand(CMD_REFRESH_MESHES, () => meshes.refresh()),
     vscode.commands.registerCommand(CMD_OPEN_MESHES, () => openMeshesOnWeb()),
     vscode.commands.registerCommand(CMD_CREATE_MESH, () => openMeshesOnWeb()),
     vscode.commands.registerCommand(CMD_REDEEM_INVITE, () => redeemMeshInvite()),
@@ -772,8 +782,9 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   }
   sidebar = { auth, sessions, profiles, market, meshes, meshPoller };
-  // The one probe that decides whether the view shows; then the poll runs while it is visible.
-  void meshes.reload();
+  // The probe (GET /meshes only) decides whether the view shows; the cells are read when it is shown,
+  // then every 30 s while it is visible.
+  void meshes.probe();
   meshPoller.setVisible(meshesView.visible);
   // A resume that reopened this window on its folder finishes now; then, once, the profiles:read offer.
   void completePendingResume(context.globalState);

@@ -414,7 +414,7 @@
         },
         {
           "command": "a4sx.openMeshOnWeb",
-          "when": "view == a4sx.meshes && viewItem == a4sx.mesh",
+          "when": "view == a4sx.meshes && viewItem =~ /^a4sx\\.mesh(\\.archived)?$/",
           "group": "inline@2"
         },
         {
@@ -424,7 +424,7 @@
         },
         {
           "command": "a4sx.openMeshOnWeb",
-          "when": "view == a4sx.meshes && viewItem == a4sx.mesh",
+          "when": "view == a4sx.meshes && viewItem =~ /^a4sx\\.mesh(\\.archived)?$/",
           "group": "1_mesh@2"
         }
       ],

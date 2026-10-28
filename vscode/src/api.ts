@@ -7,7 +7,7 @@ export const DEFAULT_SERVER = "https://session-exchange.com";
 const TIMEOUT_MS = 15_000;
 
 export type FetchLike = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal }) =>
-  Promise<{ status: number; json(): Promise<unknown> }>;
+  Promise<{ status: number; json(): Promise<unknown>; headers?: { get(name: string): string | null } }>;
 
 export type ApiErrorCode =
   | "bad-server-url" | "unreachable" | "unauthorized" | "busy" | "expired" | "too-many-tokens"
@@ -80,7 +80,7 @@ export interface Client {
 /** One JSON call to the a4sx server (exported for meshApi.ts). Never throws a body or a token in its message. */
 export async function call(
   c: Client, path: string, opts: { method?: string; token?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal } = {},
-): Promise<{ status: number; data: any }> {
+): Promise<{ status: number; data: any; retryAfter?: string }> {
   const headers: Record<string, string> = { Accept: "application/json", "User-Agent": c.userAgent };
   if (opts.token) {
     headers.Authorization = `Bearer ${opts.token}`;
@@ -88,7 +88,7 @@ export async function call(
   if (opts.body !== undefined) {
     headers["Content-Type"] = "application/json";
   }
-  let res: { status: number; json(): Promise<unknown> };
+  let res: Awaited<ReturnType<FetchLike>>;
   const timeout = AbortSignal.timeout(opts.timeoutMs ?? TIMEOUT_MS);
   const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
   const lost = () => (opts.signal?.aborted ? new ApiError("cancelled", MESSAGES.unreachable) : new ApiError("unreachable", MESSAGES.unreachable));
@@ -112,7 +112,8 @@ export async function call(
       throw lost();
     }
   }
-  return { status: res.status, data };
+  const retryAfter = typeof res.headers?.get === "function" ? res.headers.get("retry-after") ?? undefined : undefined;
+  return { status: res.status, data, retryAfter };
 }
 
 export function errorCode(data: any): string | undefined {
