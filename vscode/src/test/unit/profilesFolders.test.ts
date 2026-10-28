@@ -735,7 +735,7 @@ describe("review follow-ups", () => {
     assert.strictEqual(net.seen.filter((r) => r.method === "PUT").length, 0);
   });
 
-  it("step-up only ever asks for profiles:read, profiles:write or library:organize", async () => {
+  it("step-up only ever asks for profiles:read, profiles:write, library:organize or mesh:read (never mesh:join or mesh:admin)", async () => {
     const { sb, logins } = await activateWith({
       "GET /library/profiles": [{ status: 200, body: profiles }],
       "PUT /library/profiles/home": [scopeRefusal("admin:all")],
@@ -751,7 +751,12 @@ describe("review follow-ups", () => {
     assert.strictEqual(await offerStepUp(sb.auth, "library:acquire"), undefined);
     await assert.rejects(sb.auth.stepUp("library:publish"), (e: any) => e.code === "bad-scopes");
     assert.strictEqual(logins.length, 0);
-    assert.deepStrictEqual([...STEP_UP_SCOPES].sort(), ["library:organize", "profiles:read", "profiles:write"]);
+    for (const never of ["mesh:join", "mesh:admin"]) {
+      assert.strictEqual(await offerStepUp(sb.auth, never), undefined);
+      await assert.rejects(sb.auth.stepUp(never), (e: any) => e.code === "bad-scopes");
+    }
+    assert.strictEqual(logins.length, 0);
+    assert.deepStrictEqual([...STEP_UP_SCOPES].sort(), ["library:organize", "mesh:read", "profiles:read", "profiles:write"]);
   });
 
   it("Create fetches the list again before writing, and asks before replacing an id that now exists", async () => {

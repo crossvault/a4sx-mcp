@@ -1,7 +1,7 @@
 {
   "name": "a4sx",
   "displayName": "a4sx",
-  "description": "Use a4sx from VS Code: sign in, browse and resume your saved sessions, sort them into folders, manage your launch profiles, search the marketplace, and add the a4sx MCP servers for agent mode.",
+  "description": "Use a4sx from VS Code: sign in, browse and resume your saved sessions, sort them into folders, manage your launch profiles, see your meshes, search the marketplace, and add the a4sx MCP servers for agent mode.",
   "version": "0.3.2",
   "publisher": "crossvaultGmbH",
   "license": "Apache-2.0",
@@ -169,6 +169,42 @@
         "command": "a4sx.allowScope",
         "title": "Allow a permission",
         "category": "a4sx"
+      },
+      {
+        "command": "a4sx.refreshMeshes",
+        "title": "Refresh meshes",
+        "category": "a4sx",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "a4sx.createMesh",
+        "title": "Create a mesh in the browser",
+        "category": "a4sx",
+        "icon": "$(add)"
+      },
+      {
+        "command": "a4sx.redeemMeshInvite",
+        "title": "Redeem a mesh invite in the browser",
+        "category": "a4sx",
+        "icon": "$(mail)"
+      },
+      {
+        "command": "a4sx.openMeshesOnWeb",
+        "title": "Open meshes in the browser",
+        "category": "a4sx",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "a4sx.openMeshOnWeb",
+        "title": "Open in browser",
+        "category": "a4sx",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "a4sx.startSessionInMesh",
+        "title": "Start session in mesh",
+        "category": "a4sx",
+        "icon": "$(terminal)"
       }
     ],
     "viewsContainers": {
@@ -197,6 +233,12 @@
           "id": "a4sx.marketplace",
           "name": "Marketplace",
           "icon": "media/icon.png"
+        },
+        {
+          "id": "a4sx.meshes",
+          "name": "Meshes",
+          "icon": "media/icon.png",
+          "when": "a4sx.signedIn && a4sx.meshesAvailable"
         }
       ]
     },
@@ -267,6 +309,26 @@
           "command": "a4sx.searchMarketplace",
           "when": "view == a4sx.marketplace",
           "group": "navigation@1"
+        },
+        {
+          "command": "a4sx.createMesh",
+          "when": "view == a4sx.meshes",
+          "group": "navigation@1"
+        },
+        {
+          "command": "a4sx.refreshMeshes",
+          "when": "view == a4sx.meshes",
+          "group": "navigation@2"
+        },
+        {
+          "command": "a4sx.redeemMeshInvite",
+          "when": "view == a4sx.meshes",
+          "group": "more@1"
+        },
+        {
+          "command": "a4sx.openMeshesOnWeb",
+          "when": "view == a4sx.meshes",
+          "group": "more@2"
         }
       ],
       "view/item/context": [
@@ -344,6 +406,26 @@
           "command": "a4sx.openListing",
           "when": "view == a4sx.marketplace && viewItem == a4sx.listing",
           "group": "inline@1"
+        },
+        {
+          "command": "a4sx.startSessionInMesh",
+          "when": "view == a4sx.meshes && viewItem == a4sx.mesh",
+          "group": "inline@1"
+        },
+        {
+          "command": "a4sx.openMeshOnWeb",
+          "when": "view == a4sx.meshes && viewItem == a4sx.mesh",
+          "group": "inline@2"
+        },
+        {
+          "command": "a4sx.startSessionInMesh",
+          "when": "view == a4sx.meshes && viewItem == a4sx.mesh",
+          "group": "1_mesh@1"
+        },
+        {
+          "command": "a4sx.openMeshOnWeb",
+          "when": "view == a4sx.meshes && viewItem == a4sx.mesh",
+          "group": "1_mesh@2"
         }
       ],
       "commandPalette": [
@@ -417,6 +499,30 @@
         },
         {
           "command": "a4sx.allowScope",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.refreshMeshes",
+          "when": "a4sx.signedIn && a4sx.meshesAvailable"
+        },
+        {
+          "command": "a4sx.createMesh",
+          "when": "a4sx.signedIn && a4sx.meshesAvailable"
+        },
+        {
+          "command": "a4sx.redeemMeshInvite",
+          "when": "a4sx.signedIn && a4sx.meshesAvailable"
+        },
+        {
+          "command": "a4sx.openMeshesOnWeb",
+          "when": "a4sx.signedIn && a4sx.meshesAvailable"
+        },
+        {
+          "command": "a4sx.openMeshOnWeb",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.startSessionInMesh",
           "when": "false"
         }
       ]

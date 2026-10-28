@@ -13,6 +13,7 @@ This extension connects VS Code to a4sx. It adds:
     - **Copy session id**.
     - **Move to folder…** and **Remove from folder**.
   - **Launch profiles** lists your launch profiles. The default one is marked. You can create, edit and delete profiles.
+  - **Meshes** lists the a4sx meshes you're in and your cells in each one. It appears only when your a4sx server has meshes.
   - **Marketplace** searches the sessions that others publish. A result opens on session-exchange.com. You don't need to sign in to search.
 - **The a4sx MCP servers for agent mode.** The a4sx tools show up in the tools list of agent mode in VS Code chat.
   - **a4sx** works without an account. You can search sessions and read their summaries.
@@ -44,6 +45,17 @@ The first time you change a profile, the extension asks for one more permission 
 
 On an older a4sx server, the view shows "Launch profiles need a newer a4sx server." and the profile actions are hidden.
 
+## Meshes
+
+The **Meshes** view lists your meshes. Under each mesh are your cells in it: their status, presence, reach and when they were last seen (rounded to 5 minutes). If your cells in a mesh run on more than one machine, they are grouped by machine. A Windows host on isolation tier c appears as one machine per mesh; its tooltip says so. The view refreshes every 30 seconds while it is open, and **Refresh meshes** refreshes it right away.
+
+- **Start session in mesh** (on a mesh) asks for a name, then runs `a4sx launch --ipc-proxy --mesh <id> --as <name>` in a new terminal. It needs the a4sx command-line tool, which signs in on its own. The name may use letters, digits, `-` and `_`.
+- **Open in browser** (on a mesh) opens the mesh's page on the website. Creating a mesh, redeeming an invite and every other change happen on the website: **Create a mesh in the browser** and **Redeem a mesh invite in the browser** are in the view's title bar.
+- The view needs the permission `mesh:read`. If your key doesn't have it yet, the view shows **Allow mesh read**, which opens a new browser sign-in that asks for it. The extension never asks for any other mesh permission.
+- If the website must be opened first, the view says so and offers **Open in browser**.
+
+The view is hidden when you're signed out, or when your a4sx server has no meshes.
+
 ## Signing out
 
 To sign out, run **a4sx: Sign out**. The extension asks the a4sx server to revoke the key, then removes the key from VS Code. If the server can't be reached, the key is still removed from VS Code, and it stays valid until it expires or you revoke it on session-exchange.com under Account › Agent keys.
@@ -69,4 +81,4 @@ In a remote window (SSH, WSL, dev containers, Codespaces), the a4sx extension us
 
 ## Network use
 
-The sidebar connects to session-exchange.com (or your `a4sx.serverUrl`) to sign you in, list and file your sessions, manage your launch profiles and search the marketplace. It sends no telemetry. VS Code connects to session-exchange.com when agent mode uses the a4sx MCP servers. **Resume in Claude Code**, and **Resume in terminal** without the a4sx command-line tool, download the session from session-exchange.com with the sidebar's sign-in. **Save this session**, and **Resume in terminal** with the a4sx command-line tool, run that tool, which uses its own sign-in. When a window opens and your sign-in can't read launch profiles yet, the extension asks the server once whether it offers them, to know whether to ask for that permission.
+The sidebar connects to session-exchange.com (or your `a4sx.serverUrl`) to sign you in, list and file your sessions, manage your launch profiles and search the marketplace. When you're signed in, it asks the server once per window, and after each sign-in, whether it has meshes, and it reads your meshes every 30 seconds while the **Meshes** view is open. It sends no telemetry. VS Code connects to session-exchange.com when agent mode uses the a4sx MCP servers. **Resume in Claude Code**, and **Resume in terminal** without the a4sx command-line tool, download the session from session-exchange.com with the sidebar's sign-in. **Save this session**, and **Resume in terminal** with the a4sx command-line tool, run that tool, which uses its own sign-in. When a window opens and your sign-in can't read launch profiles yet, the extension asks the server once whether it offers them, to know whether to ask for that permission.

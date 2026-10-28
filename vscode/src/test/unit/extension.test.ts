@@ -24,7 +24,8 @@ describe("activate: wiring", () => {
       ext.CMD_OPEN_SESSION, ext.CMD_COPY_ID, ext.CMD_SEARCH, ext.CMD_OPEN_LISTING,
       ext.CMD_FILTER, ext.CMD_CLEAR_FILTER, ext.CMD_MOVE_TO_FOLDER, ext.CMD_REMOVE_FROM_FOLDER,
       ext.CMD_REFRESH_PROFILES, ext.CMD_CREATE_PROFILE, ext.CMD_EDIT_PROFILE, ext.CMD_CHANGE_DEFAULT,
-      ext.CMD_DELETE_PROFILE, ext.CMD_ALLOW_SCOPE].sort());
+      ext.CMD_DELETE_PROFILE, ext.CMD_ALLOW_SCOPE,
+      ext.CMD_REFRESH_MESHES, ext.CMD_CREATE_MESH, ext.CMD_REDEEM_INVITE, ext.CMD_OPEN_MESHES, ext.CMD_OPEN_MESH, ext.CMD_START_IN_MESH].sort());
     assert.deepStrictEqual([...calls.commands.keys()].sort(), contributed);
   });
 

@@ -77,7 +77,8 @@ export interface Client {
   userAgent: string;
 }
 
-async function call(
+/** One JSON call to the a4sx server (exported for meshApi.ts). Never throws a body or a token in its message. */
+export async function call(
   c: Client, path: string, opts: { method?: string; token?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<{ status: number; data: any }> {
   const headers: Record<string, string> = { Accept: "application/json", "User-Agent": c.userAgent };
@@ -114,11 +115,11 @@ async function call(
   return { status: res.status, data };
 }
 
-function errorCode(data: any): string | undefined {
+export function errorCode(data: any): string | undefined {
   return typeof data?.error?.code === "string" ? data.error.code : undefined;
 }
 
-function fail(status: number): never {
+export function fail(status: number): never {
   if (status === 401) {
     throw new ApiError("unauthorized", MESSAGES.unauthorized, status);
   }
@@ -188,6 +189,8 @@ export const SCOPE_READ = "library:read";
 export const SCOPE_ORGANIZE = "library:organize";
 export const SCOPE_PROFILES_READ = "profiles:read";
 export const SCOPE_PROFILES_WRITE = "profiles:write";
+/** Read-only view of your meshes and cells. Asked for only with a step-up from the Meshes view, never at sign-in. */
+export const SCOPE_MESH_READ = "mesh:read";
 /** What sign-in asks for. `profiles:write` is asked for separately, the first time a profile is changed. */
 export const LOGIN_SCOPES = [SCOPE_READ, SCOPE_PROFILES_READ, SCOPE_ORGANIZE];
 /** What sign-in falls back to when the server does not offer the newer scopes. */

@@ -9,7 +9,7 @@
 import * as vscode from "vscode";
 import {
   ApiError, Client, LEGACY_LOGIN_SCOPES, LOGIN_SCOPES, MESSAGES, pollLogin, revokeKey, RevokeResult,
-  SCOPE_ORGANIZE, SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, startLogin,
+  SCOPE_MESH_READ, SCOPE_ORGANIZE, SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, startLogin,
 } from "./api";
 
 export const AUTH_ID = "a4sx";
@@ -152,7 +152,8 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
    * The current key stays in use until the new one arrives; then the new one replaces it.
    */
   async stepUp(scope: string): Promise<string> {
-    if (![SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, SCOPE_ORGANIZE].includes(scope)) {
+    // mesh:read only: the extension never asks for mesh:join or mesh:admin.
+    if (![SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, SCOPE_ORGANIZE, SCOPE_MESH_READ].includes(scope)) {
       throw new ApiError("bad-scopes", MESSAGES.needsScope(scope));
     }
     const have = (await this.current())?.scopes ?? LOGIN_SCOPES;
