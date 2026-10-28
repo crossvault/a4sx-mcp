@@ -60,7 +60,9 @@ export interface Calls {
   nextOpenDialog: unknown[] | undefined;
   openDialogs: any[];
   /** Tree views made with createTreeView, by view id. */
-  treeViews: Map<string, { message?: string; description?: string }>;
+  treeViews: Map<string, { message?: string; description?: string; visible: boolean; setVisible(v: boolean): void }>;
+  /** Whether views made with createTreeView start out visible. */
+  viewsVisible: boolean;
 }
 
 export const calls: Calls = {
@@ -101,6 +103,7 @@ export const calls: Calls = {
   infoPrompts: [],
   nextInfoChoice: undefined,
   shell: "/bin/bash",
+  viewsVisible: false,
 };
 
 export function resetCalls(): void {
@@ -141,6 +144,7 @@ export function resetCalls(): void {
   calls.infoPrompts.length = 0;
   calls.nextInfoChoice = undefined;
   calls.shell = "/bin/bash";
+  calls.viewsVisible = false;
 }
 
 function isModal(options: unknown): boolean {
@@ -214,8 +218,12 @@ class TreeItem {
   constructor(public label: string, public collapsibleState: TreeItemCollapsibleState = TreeItemCollapsibleState.None) {}
 }
 
-class ThemeIcon {
+class ThemeColor {
   constructor(public id: string) {}
+}
+
+class ThemeIcon {
+  constructor(public id: string, public color?: ThemeColor) {}
 }
 
 class McpHttpServerDefinition {
@@ -229,6 +237,7 @@ const fake = {
   TreeItem,
   TreeItemCollapsibleState,
   ThemeIcon,
+  ThemeColor,
   ProgressLocation: { Notification: 15, Window: 10 },
   ExtensionKind: { UI: 1, Workspace: 2 },
   commands: {
@@ -299,7 +308,16 @@ const fake = {
     },
     createTreeView(id: string, options: { treeDataProvider: unknown }) {
       calls.treeProviders.set(id, options.treeDataProvider);
-      const view = { message: undefined as string | undefined, description: undefined as string | undefined, dispose: () => { calls.treeProviders.delete(id); calls.treeViews.delete(id); } };
+      const visibility = new EventEmitter<{ visible: boolean }>();
+      const view = {
+        message: undefined as string | undefined,
+        description: undefined as string | undefined,
+        visible: calls.viewsVisible,
+        onDidChangeVisibility: visibility.event,
+        /** Test helper: what VS Code does when the view is shown or hidden. */
+        setVisible(v: boolean) { view.visible = v; visibility.fire({ visible: v }); },
+        dispose: () => { calls.treeProviders.delete(id); calls.treeViews.delete(id); },
+      };
       calls.treeViews.set(id, view);
       return view;
     },

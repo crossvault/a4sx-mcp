@@ -45,6 +45,9 @@ function fakeFetch(routes: Record<string, Answer[]>) {
   const seen: Req[] = [];
   const fetch: api.FetchLike = async (url, init) => {
     const u = new URL(url);
+    if (u.pathname === "/meshes" && !routes["GET /meshes"]) {
+      return { status: 404, json: async () => ({}) };   // the Meshes view's probe: a server without meshes
+    }
     seen.push({ url, method: init?.method ?? "GET", headers: init?.headers ?? {} });
     const queue = routes[`${init?.method ?? "GET"} ${u.pathname}`];
     if (!queue || queue.length === 0) {

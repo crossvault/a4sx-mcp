@@ -5,12 +5,20 @@
 // is the only part that calls the a4sx server itself; its scoped token lives only in VS Code's secret storage.
 // VS Code connects to the MCP servers when chat uses them, and runs their sign-in itself.
 import * as vscode from "vscode";
+import { execFile } from "child_process";
 import { Client, FetchLike, listingWebUrl, MESSAGES, normalizeServerUrl, PROFILE_ID, sessionWebUrl } from "./api";
 import { A4sxAuthProvider, AUTH_ID, AUTH_LABEL, LoginCancelled, LoginRequest, SECRET_KEY, vscodeLogin } from "./auth";
 import { CLAUDE_EXTENSION_ID, claudeResumeUri } from "./claudeResume";
 import { CLI_NAME, findClaude, findCli, CliLookup } from "./cli";
 import { clearFilter, filterSessions, moveToFolder, removeFromFolder } from "./folderCommands";
 import { CMD_OPEN_LISTING, ListingItem, MarketplaceProvider } from "./marketplaceView";
+import {
+  listMeshes, MESH_ID, MESH_TEXTS, meshesPageUrl, meshInviteUrl, meshLaunchArgs, meshPageUrl, parsePreflight, preflightArgs, reducedWarning,
+  startable, suggestCellName, validateCellName, VisibilityPoller,
+} from "./meshApi";
+import {
+  CMD_CREATE_MESH, CMD_OPEN_MESH, CMD_OPEN_MESHES, CMD_REDEEM_INVITE, CMD_REFRESH_MESHES, CMD_START_IN_MESH, MeshesProvider, MeshItem, MESHES_AVAILABLE,
+} from "./meshesView";
 import { changeDefault, createProfile, editProfile, pickProfileForResume, removeProfile } from "./profileCommands";
 import { ProfileItem, ProfilesProvider, ProfilesViewState } from "./profilesView";
 import { SessionItem, SessionsProvider, ViewState } from "./sessionsView";
@@ -49,10 +57,12 @@ export const CMD_EDIT_PROFILE = "a4sx.editProfile";
 export const CMD_CHANGE_DEFAULT = "a4sx.changeDefaultElsewhere";
 export const CMD_DELETE_PROFILE = "a4sx.deleteProfile";
 export const CMD_ALLOW_SCOPE = "a4sx.allowScope";
-export { CMD_OPEN_LISTING };
+export { CMD_OPEN_LISTING, CMD_CREATE_MESH, CMD_OPEN_MESH, CMD_OPEN_MESHES, CMD_REDEEM_INVITE, CMD_REFRESH_MESHES, CMD_START_IN_MESH };
 export const VIEW_SESSIONS = "a4sx.sessions";
 export const VIEW_PROFILES = "a4sx.profiles";
 export const VIEW_MARKETPLACE = "a4sx.marketplace";
+export const VIEW_MESHES = "a4sx.meshes";
+export const MESH_TERMINAL_NAME = "a4sx: mesh session";
 export const TERMINAL_NAME = "a4sx: save session";
 export const RESUME_TERMINAL_NAME = "a4sx: resume session";
 /** `a4sx push --latest`: saves the most recently modified local Claude Code session. */
@@ -553,6 +563,139 @@ export async function searchMarketplace(market: MarketplaceProvider): Promise<vo
   market.search(q);
 }
 
+/** Opens one of the website's mesh pages: every change to a mesh happens there. */
+async function openMeshPage(url: (base: string) => string): Promise<void> {
+  try {
+    await vscode.env.openExternal(vscode.Uri.parse(url(client().base)));
+  } catch (e) {
+    await vscode.window.showErrorMessage(errorText(e));
+  }
+}
+
+export const openMeshesOnWeb = () => openMeshPage(meshesPageUrl);
+export const redeemMeshInvite = () => openMeshPage(meshInviteUrl);
+
+export async function openMeshOnWeb(item: MeshItem | undefined): Promise<void> {
+  if (!(item instanceof MeshItem)) {
+    return;
+  }
+  const id = item.node.mesh.id;
+  if (!MESH_ID.test(id)) {
+    await vscode.window.showErrorMessage(MESH_TEXTS.badMesh);
+    return;
+  }
+  await openMeshPage((base) => meshPageUrl(base, id)!);
+}
+
+/** Runs the CLI's read-only preflight: an argv array, no shell, a short timeout; resolves its stdout. */
+export type PreflightRunner = (cliPath: string, args: readonly string[]) => Promise<string>;
+
+export const PREFLIGHT_TIMEOUT_MS = 30_000;
+
+/**
+ * The real runner: execFile (never a shell string). The CLI gets the user's environment, which holds
+ * no a4sx key of the extension's (that key lives only in SecretStorage). A non-zero exit still hands
+ * over stdout, so a `{tier: "none"}` answer with exit code 1 is read too.
+ */
+export const runPreflight: PreflightRunner = (cliPath, args) =>
+  new Promise((resolve) => {
+    execFile(cliPath, [...args], { timeout: PREFLIGHT_TIMEOUT_MS, maxBuffer: 64 * 1024, windowsHide: true, shell: false }, (_err, stdout) => {
+      resolve(typeof stdout === "string" ? stdout : "");
+    });
+  });
+
+/** The website's setup guide, shown with the "no isolation tier" refusal. */
+export const MESH_SETUP_PATH = "/guide/cli";
+
+/**
+ * Start session in mesh: types `a4sx launch --ipc-proxy --mesh <id> --as <name>` into a new terminal.
+ * First the read-only checks: the mesh is an active mesh of mine and still listed, the CLI is there,
+ * and the CLI's isolation preflight (`a4sx launch --mesh <id> --preflight --json`, spec §8.8) answers
+ * `sandbox` or `uid` (start), `reduced` (a modal; only an explicit click adds --mesh-reduced-isolation
+ * to this one start, nothing is remembered) or `none` (refused). The name comes from an input box and
+ * must follow the server's rule; the id must be a mesh id; each is quoted for the shell (or passed as
+ * an argv array when the shell is unknown). Neither the terminal nor the preflight gets a key.
+ */
+export async function startSessionInMesh(
+  auth: { token(): Promise<string | undefined> },
+  item: MeshItem | undefined,
+  lookup: (configured: string | undefined) => CliLookup = findCli,
+  preflight: PreflightRunner = runPreflight,
+): Promise<vscode.Terminal | undefined> {
+  if (!(item instanceof MeshItem)) {
+    return undefined;
+  }
+  const mesh = item.node.mesh;
+  const meshId = mesh.id;
+  const pfArgs = preflightArgs(meshId);
+  if (!MESH_ID.test(meshId) || !pfArgs) {
+    await vscode.window.showErrorMessage(MESH_TEXTS.badMesh);
+    return undefined;
+  }
+  if (!startable(mesh)) {
+    await vscode.window.showErrorMessage(MESH_TEXTS.notActive);
+    return undefined;
+  }
+  if (await stopIfLocalInRemoteWindow()) {
+    return undefined;
+  }
+  const cli = lookupCli(lookup);
+  if (!cli.found) {
+    await reportMissingCli(cli);
+    return undefined;
+  }
+  const token = await auth.token();
+  if (!token) {
+    await vscode.window.showErrorMessage(STEP_UP.signInFirst);
+    return undefined;
+  }
+  try {
+    if (!(await listMeshes(client(), token)).items.some((m) => m.id === meshId && startable(m))) {
+      await vscode.window.showErrorMessage(MESH_TEXTS.meshGone);
+      return undefined;
+    }
+  } catch (e) {
+    await vscode.window.showErrorMessage(errorText(e));
+    return undefined;
+  }
+  const pf = parsePreflight(await preflight(cli.path, pfArgs));
+  if (!pf) {
+    await vscode.window.showErrorMessage(MESH_TEXTS.preflightFailed);
+    return undefined;
+  }
+  if (pf.tier === "none") {
+    if ((await vscode.window.showErrorMessage(MESH_TEXTS.noTier, MESH_TEXTS.setupGuide)) === MESH_TEXTS.setupGuide) {
+      await openMeshPage((base) => `${base}${MESH_SETUP_PATH}`);
+    }
+    return undefined;
+  }
+  let reduced = false;
+  if (pf.tier === "reduced") {
+    const choice = await vscode.window.showWarningMessage(
+      reducedWarning(mesh.name ?? meshId), { modal: true, ...(pf.reason ? { detail: pf.reason } : {}) }, MESH_TEXTS.reducedStart,
+    );
+    if (choice !== MESH_TEXTS.reducedStart) {
+      return undefined;
+    }
+    reduced = true;
+  }
+  const raw = await vscode.window.showInputBox({
+    title: MESH_TEXTS.nameTitle,
+    prompt: MESH_TEXTS.namePrompt,
+    value: suggestCellName((item.node.groups ?? []).flatMap((g) => g.cells.map((c) => c.name))),
+    validateInput: validateCellName,
+  });
+  if (raw === undefined) {
+    return undefined;
+  }
+  const args = meshLaunchArgs(meshId, raw, reduced);
+  if (!args) {
+    await vscode.window.showErrorMessage(MESH_TEXTS.nameRule);
+    return undefined;
+  }
+  return openCommandTerminal(MESH_TERMINAL_NAME, cli.path, CLI_NAME, args);
+}
+
 function setContext(key: string, value: unknown): void {
   void vscode.commands.executeCommand("setContext", key, value);
 }
@@ -572,6 +715,8 @@ export interface Sidebar {
   sessions: SessionsProvider;
   profiles: ProfilesProvider;
   market: MarketplaceProvider;
+  meshes: MeshesProvider;
+  meshPoller: VisibilityPoller;
 }
 
 /** For tests only. Never returned from activate(): that value is readable by every other extension. */
@@ -591,6 +736,11 @@ export function activate(context: vscode.ExtensionContext): void {
   }, (filter) => setContext("a4sx.sessionsFiltered", !!filter));
   const profiles = new ProfilesProvider(auth, client, setProfilesContext);
   const market = new MarketplaceProvider(client);
+  // Hidden until GET /meshes answers: a server without meshes (404) never shows the view.
+  setContext(MESHES_AVAILABLE, false);
+  const meshes = new MeshesProvider(auth, client, (available) => setContext(MESHES_AVAILABLE, available));
+  const meshesView = vscode.window.createTreeView(VIEW_MESHES, { treeDataProvider: meshes });
+  const meshPoller = new VisibilityPoller(() => meshes.tick());
   const syncSignedIn = () => void auth.current().then((s) => vscode.commands.executeCommand("setContext", "a4sx.signedIn", !!s));
   syncSignedIn();
   setContext("a4sx.sessionsFiltered", false);
@@ -613,10 +763,15 @@ export function activate(context: vscode.ExtensionContext): void {
     sessionsView,
     vscode.window.registerTreeDataProvider(VIEW_PROFILES, profiles),
     vscode.window.registerTreeDataProvider(VIEW_MARKETPLACE, market),
+    meshes,
+    meshesView,
+    meshPoller,
+    meshesView.onDidChangeVisibility((e) => meshPoller.setVisible(e.visible)),
     auth.onDidChangeSessions(() => {
       syncSignedIn();
       sessions.refresh();
       profiles.refresh();
+      void meshes.probe();
     }),
     context.secrets.onDidChange((e) => {
       if (e.key === SECRET_KEY) {
@@ -629,6 +784,7 @@ export function activate(context: vscode.ExtensionContext): void {
         sessions.refresh();
         profiles.refresh();
         market.search(market.query);
+        void meshes.probe();
       }
     }),
     vscode.commands.registerCommand(CMD_SIGN_IN, () => signIn(auth)),
@@ -649,6 +805,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_EDIT_PROFILE, (item?: ProfileItem) => editProfile(profileDeps, item)),
     vscode.commands.registerCommand(CMD_CHANGE_DEFAULT, (item?: ProfileItem) => changeDefault(profileDeps, item)),
     vscode.commands.registerCommand(CMD_DELETE_PROFILE, (item?: ProfileItem) => removeProfile(profileDeps, item)),
+    vscode.commands.registerCommand(CMD_REFRESH_MESHES, () => meshes.refresh()),
+    vscode.commands.registerCommand(CMD_OPEN_MESHES, () => openMeshesOnWeb()),
+    vscode.commands.registerCommand(CMD_CREATE_MESH, () => openMeshesOnWeb()),
+    vscode.commands.registerCommand(CMD_REDEEM_INVITE, () => redeemMeshInvite()),
+    vscode.commands.registerCommand(CMD_OPEN_MESH, (item?: MeshItem) => openMeshOnWeb(item)),
+    vscode.commands.registerCommand(CMD_START_IN_MESH, (item?: MeshItem) => startSessionInMesh(auth, item)),
     // From the "Sign in again to allow …" item: the item names the permission, so no extra modal.
     vscode.commands.registerCommand(CMD_ALLOW_SCOPE, async (scope?: unknown) => {
       if (typeof scope === "string" && stepUpAllowed(scope)) {
@@ -667,7 +829,11 @@ export function activate(context: vscode.ExtensionContext): void {
       }),
     );
   }
-  sidebar = { auth, sessions, profiles, market };
+  sidebar = { auth, sessions, profiles, market, meshes, meshPoller };
+  // The probe (GET /meshes only) decides whether the view shows; the cells are read when it is shown,
+  // then every 30 s while it is visible.
+  void meshes.probe();
+  meshPoller.setVisible(meshesView.visible);
   // A resume that reopened this window on its folder finishes now; then, once, the profiles:read offer.
   void completePendingResume(context.globalState);
   void offerProfilesStepUp(auth, client, context.globalState, Date.now());

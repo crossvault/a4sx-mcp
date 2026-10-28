@@ -5,7 +5,8 @@
 // until the new one arrives. A server that doesn't offer the scope gets a short "needs a newer
 // server" message instead.
 import * as vscode from "vscode";
-import { ApiError, MESSAGES, SCOPE_ORGANIZE, SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE } from "./api";
+import { ApiError, MESSAGES, SCOPE_MESH_READ, SCOPE_ORGANIZE, SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE } from "./api";
+import { MESH_TEXTS } from "./meshApi";
 import { LoginCancelled, Stored } from "./auth";
 
 export interface ScopedAuth {
@@ -17,10 +18,14 @@ const PURPOSE: Record<string, string> = {
   [SCOPE_PROFILES_READ]: "Showing your launch profiles",
   [SCOPE_PROFILES_WRITE]: "Changing launch profiles",
   [SCOPE_ORGANIZE]: "Moving sessions between folders",
+  [SCOPE_MESH_READ]: "Showing your meshes",
 };
 
-/** The only permissions the extension ever asks for with a new sign-in, whatever a server names. */
-export const STEP_UP_SCOPES: readonly string[] = [SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, SCOPE_ORGANIZE];
+/**
+ * The only permissions the extension ever asks for with a new sign-in, whatever a server names.
+ * For meshes that is mesh:read alone: never mesh:join or mesh:admin.
+ */
+export const STEP_UP_SCOPES: readonly string[] = [SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, SCOPE_ORGANIZE, SCOPE_MESH_READ];
 
 export function stepUpAllowed(scope: string): boolean {
   return STEP_UP_SCOPES.includes(scope);
@@ -37,6 +42,9 @@ export function errorText(e: unknown): string {
 }
 
 export function notSupportedFor(scope: string): string {
+  if (scope.startsWith("mesh:")) {
+    return MESH_TEXTS.notSupported;
+  }
   return scope.startsWith("profiles:") ? MESSAGES.profilesNotSupported : MESSAGES.foldersNotSupported;
 }
 
