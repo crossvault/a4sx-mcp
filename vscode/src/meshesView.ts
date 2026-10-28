@@ -9,13 +9,14 @@
 import * as vscode from "vscode";
 import { Client, MESSAGES } from "./api";
 import {
-  Cell, cellDescription, cellTooltip, isOnline, Machine, machineTooltip, MESH_TEXTS, MeshLoad, MeshLoader, MeshNode, meshTree, Timers,
+  Cell, cellDescription, cellTooltip, isOnline, Machine, machineTooltip, MESH_TEXTS, MeshLoad, MeshLoader, MeshNode, meshTree, startable, Timers,
 } from "./meshApi";
 import { stepUpAllowed } from "./stepUp";
 import { MessageItem } from "./sessionsView";
 
 export const MESH_CONTEXT = "a4sx.mesh";
-export const ARCHIVED_MESH_CONTEXT = "a4sx.mesh.archived";
+/** A mesh that isn't active (archived, merged, deleted or unknown): no Start. */
+export const INACTIVE_MESH_CONTEXT = "a4sx.mesh.inactive";
 export const MESH_MACHINE_CONTEXT = "a4sx.meshMachine";
 export const MESH_CELL_CONTEXT = "a4sx.meshCell";
 export const CMD_REFRESH_MESHES = "a4sx.refreshMeshes";
@@ -38,8 +39,9 @@ export class MeshItem extends vscode.TreeItem {
   constructor(public readonly node: MeshNode, cellsKnown: boolean) {
     super(node.mesh.name ?? node.mesh.id, cellsKnown ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
     this.id = `mesh:${node.mesh.id}`;
+    const active = startable(node.mesh);
     const parts = [
-      node.mesh.archived ? "archived" : undefined,
+      node.mesh.status === "active" ? undefined : node.mesh.status,
       node.groups === undefined ? undefined : node.cellCount ? `${cellCount(node.cellCount)} · ${node.onlineCount} online` : "no cells",
     ];
     this.description = parts.filter(Boolean).join(" · ");
@@ -49,10 +51,11 @@ export class MeshItem extends vscode.TreeItem {
       ...(node.mesh.role ? [`Role: ${node.mesh.role}`] : []),
       `Status: ${node.mesh.status}`,
       ...(node.mesh.memberCountBucket ? [`Members: ${node.mesh.memberCountBucket}`] : []),
-      ...(node.mesh.archived ? [MESH_TEXTS.archived] : []),
+      ...(node.mesh.archivedAt ? [`Archived: ${node.mesh.archivedAt.slice(0, 10)}`] : []),
+      ...(active ? [] : [MESH_TEXTS.notActive]),
     ].join("\n");
-    this.contextValue = node.mesh.archived ? ARCHIVED_MESH_CONTEXT : MESH_CONTEXT;
-    this.iconPath = new vscode.ThemeIcon(node.mesh.archived ? "archive" : "type-hierarchy");
+    this.contextValue = active ? MESH_CONTEXT : INACTIVE_MESH_CONTEXT;
+    this.iconPath = new vscode.ThemeIcon(node.mesh.status === "archived" ? "archive" : active ? "type-hierarchy" : "circle-slash");
   }
 }
 
@@ -109,7 +112,7 @@ export class MeshesProvider implements vscode.TreeDataProvider<vscode.TreeItem>,
     this.loader = new MeshLoader({
       client,
       token: () => auth.token(),
-      unauthorized: () => this.signedOut(),
+      unauthorized: (token) => this.signedOut(token),
       available: onAvailable,
       changed: () => this.changed.fire(),
       now: opts.now,
@@ -117,10 +120,14 @@ export class MeshesProvider implements vscode.TreeDataProvider<vscode.TreeItem>,
     });
   }
 
-  /** A 401, handled as the Sessions view does: the key is forgotten here, with one warning. */
-  private async signedOut(): Promise<void> {
-    if (!(await this.auth.token())) {
-      return;   // already gone (another view saw the 401 first)
+  /**
+   * A 401, handled as the Sessions view does: the key is forgotten here, with one warning. Only when
+   * the key that got the 401 is still the stored one: a fresh step-up key is never wiped by a late
+   * answer to the old key (and nothing happens when another view already cleared it).
+   */
+  private async signedOut(token: string): Promise<void> {
+    if ((await this.auth.token()) !== token) {
+      return;
     }
     await this.auth.clear();
     void vscode.window.showWarningMessage(MESH_TEXTS.signedOut);
@@ -169,7 +176,7 @@ export class MeshesProvider implements vscode.TreeDataProvider<vscode.TreeItem>,
         return [];
       }
       if (node.groups.length === 0) {
-        return node.mesh.archived ? [] : [new MessageItem(MESH_TEXTS.noCells, "terminal", { command: CMD_START_IN_MESH, title: "Start", arguments: [new MeshItem(node, true)] })];
+        return !startable(node.mesh) ? [] : [new MessageItem(MESH_TEXTS.noCells, "terminal", { command: CMD_START_IN_MESH, title: "Start", arguments: [new MeshItem(node, true)] })];
       }
       const now = this.now();
       if (node.byMachine) {
@@ -207,10 +214,13 @@ export class MeshesProvider implements vscode.TreeDataProvider<vscode.TreeItem>,
         return [new MessageItem(load.message, "error", { command: CMD_REFRESH_MESHES, title: "Refresh" })];
       case "ok": {
         const known = load.cells !== "unsupported";
-        const items: vscode.TreeItem[] = load.cells === "unsupported" ? [new MessageItem(MESH_TEXTS.cellsNotYet, "info")] : [];
+        const items: vscode.TreeItem[] = [
+          ...(load.cells === "unsupported" ? [new MessageItem(MESH_TEXTS.cellsNotYet, "info")] : []),
+          ...(load.truncated ? [new MessageItem(MESH_TEXTS.truncated, "warning", { command: CMD_OPEN_MESHES, title: MESH_TEXTS.openInBrowser })] : []),
+        ];
         const nodes = this.nodes();
         if (nodes.length === 0) {
-          return [new MessageItem(MESH_TEXTS.noMeshes, "add", { command: CMD_CREATE_MESH, title: "Create" })];
+          return [...items, new MessageItem(MESH_TEXTS.noMeshes, "add", { command: CMD_CREATE_MESH, title: "Create" })];
         }
         return [...items, ...nodes.map((n) => new MeshItem(n, known))];
       }

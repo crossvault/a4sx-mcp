@@ -5,6 +5,7 @@
 // is the only part that calls the a4sx server itself; its scoped token lives only in VS Code's secret storage.
 // VS Code connects to the MCP servers when chat uses them, and runs their sign-in itself.
 import * as vscode from "vscode";
+import { execFile } from "child_process";
 import { Client, FetchLike, listingWebUrl, MESSAGES, normalizeServerUrl, PROFILE_ID, sessionWebUrl } from "./api";
 import { A4sxAuthProvider, AUTH_ID, AUTH_LABEL, LoginCancelled, LoginRequest, SECRET_KEY, vscodeLogin } from "./auth";
 import { CLAUDE_EXTENSION_ID, claudeResumeUri } from "./claudeResume";
@@ -12,7 +13,8 @@ import { CLI_NAME, findClaude, findCli, CliLookup } from "./cli";
 import { clearFilter, filterSessions, moveToFolder, removeFromFolder } from "./folderCommands";
 import { CMD_OPEN_LISTING, ListingItem, MarketplaceProvider } from "./marketplaceView";
 import {
-  listMeshes, MESH_ID, MESH_TEXTS, meshesPageUrl, meshInviteUrl, meshLaunchArgs, meshPageUrl, suggestCellName, validateCellName, VisibilityPoller,
+  listMeshes, MESH_ID, MESH_TEXTS, meshesPageUrl, meshInviteUrl, meshLaunchArgs, meshPageUrl, parsePreflight, preflightArgs, reducedWarning,
+  startable, suggestCellName, validateCellName, VisibilityPoller,
 } from "./meshApi";
 import {
   CMD_CREATE_MESH, CMD_OPEN_MESH, CMD_OPEN_MESHES, CMD_REDEEM_INVITE, CMD_REFRESH_MESHES, CMD_START_IN_MESH, MeshesProvider, MeshItem, MESHES_AVAILABLE,
@@ -585,28 +587,53 @@ export async function openMeshOnWeb(item: MeshItem | undefined): Promise<void> {
   await openMeshPage((base) => meshPageUrl(base, id)!);
 }
 
+/** Runs the CLI's read-only preflight: an argv array, no shell, a short timeout; resolves its stdout. */
+export type PreflightRunner = (cliPath: string, args: readonly string[]) => Promise<string>;
+
+export const PREFLIGHT_TIMEOUT_MS = 30_000;
+
+/**
+ * The real runner: execFile (never a shell string). The CLI gets the user's environment, which holds
+ * no a4sx key of the extension's (that key lives only in SecretStorage). A non-zero exit still hands
+ * over stdout, so a `{tier: "none"}` answer with exit code 1 is read too.
+ */
+export const runPreflight: PreflightRunner = (cliPath, args) =>
+  new Promise((resolve) => {
+    execFile(cliPath, [...args], { timeout: PREFLIGHT_TIMEOUT_MS, maxBuffer: 64 * 1024, windowsHide: true, shell: false }, (_err, stdout) => {
+      resolve(typeof stdout === "string" ? stdout : "");
+    });
+  });
+
+/** The website's setup guide, shown with the "no isolation tier" refusal. */
+export const MESH_SETUP_PATH = "/guide/cli";
+
 /**
  * Start session in mesh: types `a4sx launch --ipc-proxy --mesh <id> --as <name>` into a new terminal.
- * First a read-only preflight: the CLI is there, and the mesh is still in GET /meshes. The name comes
- * from an input box and must be a plain word; the id must be a plain id; each is quoted for the shell
- * (or passed as an argv array when the shell is unknown). The terminal gets no key: the CLI and its
- * proxy sign in on their own.
+ * First the read-only checks: the mesh is an active mesh of mine and still listed, the CLI is there,
+ * and the CLI's isolation preflight (`a4sx launch --mesh <id> --preflight --json`, spec §8.8) answers
+ * `sandbox` or `uid` (start), `reduced` (a modal; only an explicit click adds --mesh-reduced-isolation
+ * to this one start, nothing is remembered) or `none` (refused). The name comes from an input box and
+ * must follow the server's rule; the id must be a mesh id; each is quoted for the shell (or passed as
+ * an argv array when the shell is unknown). Neither the terminal nor the preflight gets a key.
  */
 export async function startSessionInMesh(
   auth: { token(): Promise<string | undefined> },
   item: MeshItem | undefined,
   lookup: (configured: string | undefined) => CliLookup = findCli,
+  preflight: PreflightRunner = runPreflight,
 ): Promise<vscode.Terminal | undefined> {
   if (!(item instanceof MeshItem)) {
     return undefined;
   }
-  const meshId = item.node.mesh.id;
-  if (!MESH_ID.test(meshId)) {
+  const mesh = item.node.mesh;
+  const meshId = mesh.id;
+  const pfArgs = preflightArgs(meshId);
+  if (!MESH_ID.test(meshId) || !pfArgs) {
     await vscode.window.showErrorMessage(MESH_TEXTS.badMesh);
     return undefined;
   }
-  if (item.node.mesh.archived) {
-    await vscode.window.showErrorMessage(MESH_TEXTS.archived);
+  if (!startable(mesh)) {
+    await vscode.window.showErrorMessage(MESH_TEXTS.notActive);
     return undefined;
   }
   if (await stopIfLocalInRemoteWindow()) {
@@ -623,13 +650,34 @@ export async function startSessionInMesh(
     return undefined;
   }
   try {
-    if (!(await listMeshes(client(), token)).some((m) => m.id === meshId && !m.archived)) {
+    if (!(await listMeshes(client(), token)).items.some((m) => m.id === meshId && startable(m))) {
       await vscode.window.showErrorMessage(MESH_TEXTS.meshGone);
       return undefined;
     }
   } catch (e) {
     await vscode.window.showErrorMessage(errorText(e));
     return undefined;
+  }
+  const pf = parsePreflight(await preflight(cli.path, pfArgs));
+  if (!pf) {
+    await vscode.window.showErrorMessage(MESH_TEXTS.preflightFailed);
+    return undefined;
+  }
+  if (pf.tier === "none") {
+    if ((await vscode.window.showErrorMessage(MESH_TEXTS.noTier, MESH_TEXTS.setupGuide)) === MESH_TEXTS.setupGuide) {
+      await openMeshPage((base) => `${base}${MESH_SETUP_PATH}`);
+    }
+    return undefined;
+  }
+  let reduced = false;
+  if (pf.tier === "reduced") {
+    const choice = await vscode.window.showWarningMessage(
+      reducedWarning(mesh.name ?? meshId), { modal: true, ...(pf.reason ? { detail: pf.reason } : {}) }, MESH_TEXTS.reducedStart,
+    );
+    if (choice !== MESH_TEXTS.reducedStart) {
+      return undefined;
+    }
+    reduced = true;
   }
   const raw = await vscode.window.showInputBox({
     title: MESH_TEXTS.nameTitle,
@@ -640,7 +688,7 @@ export async function startSessionInMesh(
   if (raw === undefined) {
     return undefined;
   }
-  const args = meshLaunchArgs(meshId, raw);
+  const args = meshLaunchArgs(meshId, raw, reduced);
   if (!args) {
     await vscode.window.showErrorMessage(MESH_TEXTS.nameRule);
     return undefined;

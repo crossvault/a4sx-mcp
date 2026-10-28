@@ -22,7 +22,13 @@ export const MESH_TEXTS = {
   cellsNotYet: "Cells appear here once your server supports it.",
   meshGone: "This mesh is no longer in your list. Refresh the view.",
   badMesh: "This mesh id can't be passed to the a4sx CLI.",
-  archived: "This mesh is archived.",
+  notActive: "Sessions can only be started in an active mesh.",
+  truncated: "The list is longer than the extension reads. Open the website for all of it.",
+  preflightFailed: "The a4sx CLI couldn't check this host's isolation for mesh mode. Update the a4sx CLI, then try again.",
+  reducedStart: "Start with reduced isolation",
+  noTier:
+    "Mesh mode can't keep your agent away from this session's mesh key on this host. Use a host where the sandbox works, set up a separate proxy user, or start with --mesh-reduced-isolation if you accept the risk.",
+  setupGuide: "Open the setup guide",
   namePrompt: "A name for this session in the mesh (lowercase letters, digits and -).",
   nameTitle: "Start a session in the mesh",
   nameRule: "Use 1-48 lowercase letters, digits and -, starting and ending with a letter or digit.",
@@ -56,14 +62,14 @@ export const BINDING = ["pairing", "pinned"] as const;
 export const STATUS = ["active", "revoked", "pending"] as const;
 /** Self-reported isolation: sandbox = tier a, uid = tier b, reduced = tier c. */
 export const ISOLATION = ["sandbox", "uid", "reduced"] as const;
-/** The cell's OS; absent or null from older CLIs (then nothing is shown). */
-export const OS = ["linux", "wsl", "windows", "macos-reserved"] as const;
-/** The mesh role; absent for non-members. */
+/** The cell's OS; null (or absent) from older CLIs, and then nothing is shown. */
+export const OS = ["linux", "wsl", "windows"] as const;
+/** The mesh role on a member card; non-member cards carry none and are not "my meshes". */
 export const ROLE = ["owner", "admin", "member"] as const;
-export const MESH_STATUS = ["active", "archived"] as const;
+/** A mesh's status; archived means status "archived" (cards carry no archived flag). */
+export const MESH_STATUS = ["active", "archived", "merged", "deleted"] as const;
 
 const TIER: Record<(typeof ISOLATION)[number], string> = { sandbox: "a", uid: "b", reduced: "c" };
-const OS_LABEL: Record<(typeof OS)[number], string> = { linux: "linux", wsl: "wsl", windows: "windows", "macos-reserved": "macos" };
 
 export type Unknown = typeof MESH_TEXTS.unknown;
 const UNKNOWN: Unknown = MESH_TEXTS.unknown;
@@ -77,13 +83,21 @@ const VERSION = /^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}(?:[-+][0-9A-Za-z.-]{1,24})?
 const BUCKET = /^[0-9]{1,6}(?:-[0-9]{1,6}|\+)?$/;
 const TEXT_MAX = 80;
 
-/** A free-text field cut to one short line (mesh names, machine labels, cell names). */
+/**
+ * C0 and C1 controls (to a space), and the invisible characters that could disguise a name: bidi
+ * embeddings, overrides and isolates (U+202A-202E, U+2066-2069), the marks U+200E/U+200F/U+061C, and
+ * the zero-width characters U+200B-200D, U+2060 and U+FEFF (removed).
+ */
+// eslint-disable-next-line no-control-regex
+const CONTROLS = /[\x00-\x1f\x7f-\x9f]+/g;
+const INVISIBLE = /[\u202a-\u202e\u2066-\u2069\u200e\u200f\u061c\u200b-\u200d\u2060\ufeff]/g;
+
+/** A free-text field cut to one short, visible line (mesh names, machine labels, cell names). */
 export function oneLine(v: unknown): string | undefined {
   if (typeof v !== "string") {
     return undefined;
   }
-  // eslint-disable-next-line no-control-regex
-  const line = v.replace(/[\x00-\x1f\x7f]+/g, " ").replace(/\s+/g, " ").trim();
+  const line = v.replace(INVISIBLE, "").replace(CONTROLS, " ").replace(/\s+/g, " ").trim();
   if (!line) {
     return undefined;
   }
@@ -97,9 +111,10 @@ function isoOrUndefined(v: unknown): string | undefined {
 export interface Mesh {
   id: string;
   name?: string;
+  /** Set only on member cards: "my meshes" are the cards with a role. */
   role?: (typeof ROLE)[number];
   status: (typeof MESH_STATUS)[number] | Unknown;
-  archived: boolean;
+  archivedAt?: string;
   memberCountBucket?: string;
 }
 
@@ -114,7 +129,7 @@ export interface Cell {
   lastSeen?: string;
   /** The reach kinds; ["unknown"] when the server sent none. An unlisted entry is "unknown". */
   reach: ((typeof REACH)[number] | Unknown)[];
-  /** Undefined when the CLI sent none (older CLIs). */
+  /** Undefined when the CLI sent null or nothing (older CLIs). */
   os?: (typeof OS)[number] | Unknown;
   clientVersion?: string;
 }
@@ -139,7 +154,7 @@ export function parseMesh(m: any): Mesh | undefined {
     name: oneLine(m.name),
     role: role === UNKNOWN ? undefined : role,
     status: oneOf(MESH_STATUS, m.status),
-    archived: m.archived === true || m.status === "archived",
+    archivedAt: isoOrUndefined(m.archived_at),
     memberCountBucket: typeof m.member_count_bucket === "string" && BUCKET.test(m.member_count_bucket) ? m.member_count_bucket : undefined,
   };
 }
@@ -192,8 +207,25 @@ export class BusyError extends ApiError {
 /** A 403 naming a scope other than mesh:read: shown as an error, never offered as a sign-in. */
 export class DeniedError extends ApiError {
   constructor(status: number, scope: string) {
-    super("rejected", MESSAGES.needsScope(scope), status);
+    super("rejected", MESSAGES.needsScope(safeScope(scope)), status);
   }
+}
+
+const SCOPE_WORD = /^[a-z][a-z0-9_-]{0,31}(?::[a-z][a-z0-9_-]{0,31}){0,2}$/;
+
+/** A scope name a server sent, as it may be shown: a plain `word:word`, else "unknown". */
+export function safeScope(v: unknown): string {
+  return typeof v === "string" && SCOPE_WORD.test(v) ? v : UNKNOWN;
+}
+
+/** A mesh I'm a member of (the card has a role). */
+export function isMine(m: Mesh): boolean {
+  return m.role !== undefined;
+}
+
+/** Start is offered only in an active mesh I'm a member of. */
+export function startable(m: Mesh): boolean {
+  return isMine(m) && m.status === "active";
 }
 
 /** Retry-After as milliseconds (seconds or an HTTP date), capped; undefined when absent or unreadable. */
@@ -235,7 +267,7 @@ export function meshFail(status: number, data: any, retryAfter: string | undefin
     if (named === undefined || named === null || named === "" || named === SCOPE_MESH_READ) {
       throw new ApiError("insufficient-scope", MESSAGES.needsScope(SCOPE_MESH_READ), status, SCOPE_MESH_READ);
     }
-    throw new DeniedError(status, typeof named === "string" ? named.slice(0, 64) : "unknown");
+    throw new DeniedError(status, typeof named === "string" ? named : UNKNOWN);
   }
   if (status === 409 && code === "needs_signin") {
     throw new ApiError("needs-signin", MESH_TEXTS.needsSignin, status);
@@ -246,12 +278,21 @@ export function meshFail(status: number, data: any, retryAfter: string | undefin
   fail(status);
 }
 
+export interface Paged<T> {
+  items: T[];
+  /** True when MAX_PAGES pages were read and the server still had more. */
+  truncated: boolean;
+}
+
 /** Every page of a cursor-paged list: follows `next_cursor` up to MAX_PAGES (a repeated cursor stops it). */
-async function pages<T>(c: Client, token: string, path: string, key: string, parse: (row: any) => T | undefined, now: () => number): Promise<T[]> {
+async function pages<T>(c: Client, token: string, path: string, key: string, parse: (row: any) => T | undefined, now: () => number): Promise<Paged<T>> {
   const out: T[] = [];
   const seen = new Set<string>();
   let cursor: string | undefined;
-  for (let page = 0; page < MAX_PAGES; page++) {
+  for (let page = 0; ; page++) {
+    if (page === MAX_PAGES) {
+      return { items: out, truncated: true };
+    }
     const { status, data, retryAfter } = await call(c, cursor === undefined ? path : `${path}?cursor=${encodeURIComponent(cursor)}`, { token });
     if (status !== 200) {
       meshFail(status, data, retryAfter, now());
@@ -273,14 +314,15 @@ async function pages<T>(c: Client, token: string, path: string, key: string, par
     seen.add(next);
     cursor = next;
   }
-  return out;
+  return { items: out, truncated: false };
 }
 
-export function listMeshes(c: Client, token: string, now: () => number = Date.now): Promise<Mesh[]> {
+/** GET /meshes: every card, member or not (the view keeps the member cards, see isMine). */
+export function listMeshes(c: Client, token: string, now: () => number = Date.now): Promise<Paged<Mesh>> {
   return pages(c, token, "/meshes", "meshes", parseMesh, now);
 }
 
-export function listMyCells(c: Client, token: string, now: () => number = Date.now): Promise<Machine[]> {
+export function listMyCells(c: Client, token: string, now: () => number = Date.now): Promise<Paged<Machine>> {
   return pages(c, token, "/me/mesh/cells", "machines", parseMachine, now);
 }
 
@@ -290,7 +332,7 @@ export type CellsState = Machine[] | "pending" | "unsupported";
 
 export type MeshLoad =
   | { kind: "signed-out" }
-  | { kind: "ok"; meshes: Mesh[]; cells: CellsState }
+  | { kind: "ok"; meshes: Mesh[]; cells: CellsState; truncated: boolean }
   | { kind: "off" }
   | { kind: "needs-scope"; scope: string }
   | { kind: "needs-signin" }
@@ -350,8 +392,11 @@ export const realTimers: Timers = {
 export interface LoaderDeps {
   client(): Client;
   token(): Promise<string | undefined>;
-  /** A 401: the caller forgets the key (as the Sessions view does). */
-  unauthorized(): Promise<void>;
+  /**
+   * A 401 for `token`: the caller forgets the key (as the Sessions view does), but only if `token` is
+   * still the stored one. The loader drops a 401 for a key that was replaced meanwhile.
+   */
+  unauthorized(token: string): Promise<void>;
   /** The view's availability, after every load. */
   available(value: boolean): void;
   changed(): void;
@@ -368,19 +413,24 @@ export interface LoaderDeps {
  *    A 404 on the cells alone shows the meshes with one line instead of hiding the view.
  *  - tick(): the visibility/poll tick. Skipped while backing off after a 429/503 (doubling from 30 s,
  *    at least Retry-After, at most 5 min) and when the last full load is under MIN_RELOAD_MS old.
- * Each load remembers the server it asked; an answer that arrives after a4sx.serverUrl changed is dropped.
+ * Generations: when a4sx.serverUrl changes, the loader starts a new generation. Everything of the old
+ * one is dropped (state, backoff, retries, requests in flight), the next probe or load asks the new
+ * server, and an answer from the old generation is never shown.
  */
 export class MeshLoader {
   load: MeshLoad | undefined;
   /** undefined while undecided. */
   availability: boolean | undefined;
+  /** Bumped whenever the server changes; every request remembers the generation it started in. */
+  generation = 0;
+  private genBase: string | undefined;
   private lastFull = 0;
   private notBefore = 0;
   private busyCount = 0;
   private probeTries = 0;
   private retry: unknown;
-  private inflightProbe: Promise<void> | undefined;
-  private inflightFull: Promise<void> | undefined;
+  private inflightProbe: { gen: number; p: Promise<void> } | undefined;
+  private inflightFull: { gen: number; p: Promise<void> } | undefined;
   private disposed = false;
   private readonly now: () => number;
   private readonly timers: Timers;
@@ -388,6 +438,7 @@ export class MeshLoader {
   constructor(private readonly deps: LoaderDeps) {
     this.now = deps.now ?? Date.now;
     this.timers = deps.timers ?? realTimers;
+    this.genBase = this.base();
   }
 
   /** True while a probe retry is scheduled. */
@@ -403,6 +454,25 @@ export class MeshLoader {
     }
   }
 
+  /** Starts a new generation when the server changed since the last call. */
+  private sync(): void {
+    const base = this.base();
+    if (base === this.genBase) {
+      return;
+    }
+    this.genBase = base;
+    this.generation++;
+    this.cancelRetry();
+    this.inflightProbe = undefined;
+    this.inflightFull = undefined;
+    this.load = undefined;
+    this.availability = undefined;
+    this.lastFull = 0;
+    this.notBefore = 0;
+    this.busyCount = 0;
+    this.probeTries = 0;
+  }
+
   private cancelRetry(): void {
     if (this.retry !== undefined) {
       this.timers.clearTimeout(this.retry);
@@ -412,36 +482,41 @@ export class MeshLoader {
 
   /** The startup probe (and after each sign-in or server change): resets the retry budget. */
   probe(): Promise<void> {
+    this.sync();
     this.probeTries = 0;
     this.cancelRetry();
     return this.runProbe();
   }
 
   private runProbe(): Promise<void> {
-    if (!this.inflightProbe) {
-      this.inflightProbe = this.doProbe().finally(() => {
-        this.inflightProbe = undefined;
+    this.sync();
+    const gen = this.generation;
+    if (this.inflightProbe?.gen !== gen) {
+      const p = this.doProbe(gen).finally(() => {
+        if (this.inflightProbe?.p === p) {
+          this.inflightProbe = undefined;
+        }
       });
+      this.inflightProbe = { gen, p };
     }
-    return this.inflightProbe;
+    return this.inflightProbe!.p;
   }
 
-  private async doProbe(): Promise<void> {
-    const base = this.base();
+  private async doProbe(gen: number): Promise<void> {
     const token = await this.deps.token();
-    if (!token || base === undefined) {
-      this.apply({ kind: "signed-out" }, base);
+    if (!token) {
+      this.apply({ kind: "signed-out" }, gen);
       return;
     }
     let load: MeshLoad;
     try {
       const meshes = await listMeshes(this.deps.client(), token, this.now);
       // The cells are read again the next time they are shown.
-      load = { kind: "ok", meshes, cells: "pending" };
+      load = { kind: "ok", meshes: meshes.items, cells: "pending", truncated: meshes.truncated };
     } catch (e) {
       load = detect(e);
     }
-    if (!this.apply(load, base)) {
+    if (!(await this.applyFor(load, gen, token))) {
       return;
     }
     if (load.kind === "ok") {
@@ -458,27 +533,36 @@ export class MeshLoader {
     }
     const delay = Math.min(BACKOFF_CAP_MS, Math.max(PROBE_RETRY_MS[this.probeTries], retryAfter ?? 0));
     this.probeTries++;
+    const gen = this.generation;
     this.retry = this.timers.setTimeout(() => {
       this.retry = undefined;
-      void this.runProbe();
+      if (gen === this.generation) {
+        void this.runProbe();
+      }
     }, delay);
   }
 
   /** Both routes. `force` (Refresh) ignores the backoff. */
   full(force = false): Promise<void> {
+    this.sync();
     if (!force && this.now() < this.notBefore) {
       return Promise.resolve();
     }
-    if (!this.inflightFull) {
-      this.inflightFull = this.doFull().finally(() => {
-        this.inflightFull = undefined;
+    const gen = this.generation;
+    if (this.inflightFull?.gen !== gen) {
+      const p = this.doFull(gen).finally(() => {
+        if (this.inflightFull?.p === p) {
+          this.inflightFull = undefined;
+        }
       });
+      this.inflightFull = { gen, p };
     }
-    return this.inflightFull;
+    return this.inflightFull!.p;
   }
 
   /** The visibility/poll tick. */
   tick(): Promise<void> {
+    this.sync();
     if (this.now() < this.notBefore || (this.lastFull && this.now() - this.lastFull < MIN_RELOAD_MS)) {
       return Promise.resolve();
     }
@@ -487,16 +571,16 @@ export class MeshLoader {
 
   /** The cells, read on the first show or expand. */
   async ensureCells(): Promise<void> {
+    this.sync();
     if (this.load?.kind === "ok" && this.load.cells === "pending") {
       await this.full();
     }
   }
 
-  private async doFull(): Promise<void> {
-    const base = this.base();
+  private async doFull(gen: number): Promise<void> {
     const token = await this.deps.token();
-    if (!token || base === undefined) {
-      this.apply({ kind: "signed-out" }, base);
+    if (!token) {
+      this.apply({ kind: "signed-out" }, gen);
       return;
     }
     let load: MeshLoad;
@@ -504,19 +588,22 @@ export class MeshLoader {
       const client = this.deps.client();
       const meshes = await listMeshes(client, token, this.now);
       let cells: CellsState;
+      let truncated = meshes.truncated;
       try {
-        cells = await listMyCells(client, token, this.now);
+        const machines = await listMyCells(client, token, this.now);
+        cells = machines.items;
+        truncated = truncated || machines.truncated;
       } catch (e) {
         if (!(e instanceof ApiError && e.code === "not-supported")) {
           throw e;
         }
         cells = "unsupported";   // the rollout: meshes first, cells once the server has the route
       }
-      load = { kind: "ok", meshes, cells };
+      load = { kind: "ok", meshes: meshes.items, cells, truncated };
     } catch (e) {
       load = detect(e);
     }
-    if (!this.apply(load, base)) {
+    if (!(await this.applyFor(load, gen, token))) {
       return;
     }
     if (load.kind === "error" && load.busy) {
@@ -532,9 +619,27 @@ export class MeshLoader {
     }
   }
 
-  /** Stores a load if the server is still the one asked; returns false when it was dropped. */
-  private apply(load: MeshLoad, base: string | undefined): boolean {
-    if (this.disposed || this.base() !== base) {
+  /**
+   * apply() for an answer to a request made with `token`. A 401 counts only while `token` is still
+   * the stored key: a 401 for a key that a step-up replaced meanwhile is dropped (the new key's own
+   * load follows), so it can never wipe the new key.
+   */
+  private async applyFor(load: MeshLoad, gen: number, token: string): Promise<boolean> {
+    if (load.kind === "error" && load.unauthorized && (await this.deps.token()) !== token) {
+      return false;
+    }
+    if (!this.apply(load, gen)) {
+      return false;
+    }
+    if (load.kind === "error" && load.unauthorized) {
+      void this.deps.unauthorized(token);
+    }
+    return true;
+  }
+
+  /** Stores a load of generation `gen`; returns false when it was dropped (disposed, or the server changed). */
+  private apply(load: MeshLoad, gen: number): boolean {
+    if (this.disposed || gen !== this.generation || this.base() !== this.genBase) {
       return false;
     }
     if (load.kind === "error" && load.unauthorized) {
@@ -543,7 +648,6 @@ export class MeshLoader {
       this.cancelRetry();
       this.deps.available(false);
       this.deps.changed();
-      void this.deps.unauthorized();
       return true;
     }
     this.load = load;
@@ -604,7 +708,7 @@ export function osText(c: Cell): string | undefined {
   if (c.os === undefined) {
     return undefined;
   }
-  return c.os === UNKNOWN ? UNKNOWN : OS_LABEL[c.os];
+  return c.os;
 }
 
 function cellSortKey(c: Cell): string {
@@ -612,14 +716,14 @@ function cellSortKey(c: Cell): string {
 }
 
 /**
- * My meshes (from GET /meshes, sorted by name), each with my cells in it (from GET /me/mesh/cells),
+ * My meshes (the member cards of GET /meshes, sorted by name), each with my cells in it (from GET /me/mesh/cells),
  * grouped by machine; `machines` undefined means the cells aren't known (yet). Revoked machines are
  * left out. A cell naming a mesh that isn't in the list is not shown: the list of meshes is the
  * authority on what I may see.
  */
 export function meshTree(meshes: readonly Mesh[], machines: readonly Machine[] | undefined): MeshNode[] {
   const live = machines?.filter((m) => !m.revoked);
-  return [...meshes]
+  return meshes.filter(isMine)
     .sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id))
     .map((mesh) => {
       if (!live) {
@@ -731,16 +835,57 @@ export function suggestCellName(taken: readonly (string | undefined)[]): string 
 }
 
 /**
- * The arguments of `a4sx launch --ipc-proxy --mesh <id> --as <name>`, or undefined when the id isn't
- * a mesh id or the name breaks the rule. The caller quotes each one for the shell (terminalCommand.ts).
- * Nothing secret goes in: the CLI and its proxy sign in on their own.
+ * The arguments of `a4sx launch --ipc-proxy --mesh <id> --as <name>` (plus `--mesh-reduced-isolation`
+ * when the user opted in for this one start), or undefined when the id isn't a mesh id or the name
+ * breaks the rule. The caller quotes each one for the shell (terminalCommand.ts). Nothing secret goes
+ * in: the CLI and its proxy sign in on their own.
  */
-export function meshLaunchArgs(meshId: string, name: string): string[] | undefined {
+export function meshLaunchArgs(meshId: string, name: string, reducedIsolation = false): string[] | undefined {
   const n = name.trim();
   if (!MESH_ID.test(meshId) || !CELL_NAME.test(n)) {
     return undefined;
   }
-  return ["launch", "--ipc-proxy", "--mesh", meshId, "--as", n];
+  return ["launch", "--ipc-proxy", "--mesh", meshId, "--as", n, ...(reducedIsolation ? ["--mesh-reduced-isolation"] : [])];
+}
+
+// ---- the CLI's isolation preflight (spec §8.8) ----------------------------------------------------
+
+export const PREFLIGHT_TIERS = ["sandbox", "uid", "reduced", "none"] as const;
+export type PreflightTier = (typeof PREFLIGHT_TIERS)[number];
+
+export interface Preflight {
+  tier: PreflightTier;
+  /** The CLI's reason, one short visible line (it is local output, shown only in the modal). */
+  reason?: string;
+}
+
+/** The read-only preflight's argv: `a4sx launch --mesh <id> --preflight --json`; undefined for a bad id. */
+export function preflightArgs(meshId: string): string[] | undefined {
+  return MESH_ID.test(meshId) ? ["launch", "--mesh", meshId, "--preflight", "--json"] : undefined;
+}
+
+/** The preflight's `{tier, reason}` from its stdout, or undefined when it isn't that. */
+export function parsePreflight(stdout: string): Preflight | undefined {
+  let data: any;
+  try {
+    data = JSON.parse(stdout.trim());
+  } catch {
+    return undefined;
+  }
+  const tier = data?.tier;
+  if (typeof tier !== "string" || !(PREFLIGHT_TIERS as readonly string[]).includes(tier)) {
+    return undefined;
+  }
+  return { tier: tier as PreflightTier, reason: oneLine(data.reason) };
+}
+
+/** The spec's warning for a reduced-isolation start, naming the mesh. */
+export function reducedWarning(meshName: string): string {
+  const a = `«${meshName}»`;
+  return `Reduced isolation for ${a}: this host can't sandbox your agent or run the proxy as another user. `
+    + `Here, your agent can act as any of your sessions in ${a} and skip their outgoing checks. `
+    + `It can't act outside ${a} or use any other a4sx sign-in, and every other session still checks everything it receives. `
+    + "Continue only if you trust the agent on this host.";
 }
 
 // ---- polling --------------------------------------------------------------------------------------
