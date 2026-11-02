@@ -283,10 +283,10 @@ export function updateArgs(base: string, defaultBase: string): string[] {
  * there. Passed to the CLI as A4SX_CLAUDE, so a cell starts the same Claude Code the panel uses.
  */
 export function bundledClaude(extensionPath: string | undefined, platform: NodeJS.Platform = process.platform, isFile: (p: string) => boolean = fileExists): string | undefined {
-  if (!extensionPath) {
+  const p = platform === "win32" ? path.win32 : path.posix;
+  if (!extensionPath || !p.isAbsolute(extensionPath)) {
     return undefined;
   }
-  const p = platform === "win32" ? path.win32 : path.posix;
   const dir = p.join(extensionPath, "resources", "native-binary");
   const names = platform === "win32" ? ["claude.exe", "claude"] : ["claude"];
   for (const n of names) {

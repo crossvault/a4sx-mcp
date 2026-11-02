@@ -310,6 +310,8 @@ describe("provisioning: Python, updates, the bundled claude", () => {
     assert.strictEqual(bundledClaude("C:\\ext\\cc", "win32", (p) => have.has(p)), "C:\\ext\\cc\\resources\\native-binary\\claude.exe");
     assert.strictEqual(bundledClaude("/ext/other", "linux", (p) => have.has(p)), undefined);
     assert.strictEqual(bundledClaude(undefined, "linux"), undefined);
+    assert.strictEqual(bundledClaude("ext/cc", "linux", () => true), undefined);          // a relative extension path is never used
+    assert.strictEqual(bundledClaude("ext\\cc", "win32", () => true), undefined);
   });
 });
 

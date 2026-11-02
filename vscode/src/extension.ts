@@ -244,7 +244,8 @@ export async function openLibrary(): Promise<void> {
 export const runtime: { fetch: FetchLike; download: Fetch; login: (client: Client, req: LoginRequest) => ReturnType<typeof vscodeLogin> } = {
   fetch: (url, init) => fetch(url, init),
   /** Install a4sx CLI's downloads (public files, no key). */
-  download: (url, init) => fetch(url, init),
+  // no redirects: the sha256 header must come from the configured server itself
+  download: (url, init) => fetch(url, { ...init, redirect: "error" }),
   login: vscodeLogin,
 };
 
