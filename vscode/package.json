@@ -1,8 +1,8 @@
 {
   "name": "a4sx",
   "displayName": "a4sx",
-  "description": "Use a4sx from VS Code: sign in, browse and resume your saved sessions, sort them into folders, manage your launch profiles, see your meshes, search the marketplace, and add the a4sx MCP servers for agent mode.",
-  "version": "0.3.2",
+  "description": "Use a4sx from VS Code: sign in, browse and resume your saved sessions, sort them into folders, manage your launch profiles, start and manage the mesh cells on this computer, see your meshes, search the marketplace, and add the a4sx MCP servers for agent mode.",
+  "version": "0.4.0",
   "publisher": "crossvaultGmbH",
   "license": "Apache-2.0",
   "homepage": "https://session-exchange.com",
@@ -205,6 +205,54 @@
         "title": "Start session in mesh",
         "category": "a4sx",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "a4sx.refreshCells",
+        "title": "Refresh cells",
+        "category": "a4sx",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "a4sx.newCell",
+        "title": "New cell",
+        "category": "a4sx",
+        "icon": "$(add)"
+      },
+      {
+        "command": "a4sx.startCell",
+        "title": "Start in terminal",
+        "category": "a4sx",
+        "icon": "$(play)"
+      },
+      {
+        "command": "a4sx.setDefaultCell",
+        "title": "Set as default",
+        "category": "a4sx",
+        "icon": "$(star-empty)"
+      },
+      {
+        "command": "a4sx.forgetCell",
+        "title": "Forget on this computer",
+        "category": "a4sx",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "a4sx.openCellOnWeb",
+        "title": "Open in browser",
+        "category": "a4sx",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "a4sx.installCli",
+        "title": "Install a4sx CLI",
+        "category": "a4sx",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "a4sx.updateCli",
+        "title": "Update a4sx CLI",
+        "category": "a4sx",
+        "icon": "$(sync)"
       }
     ],
     "viewsContainers": {
@@ -235,6 +283,12 @@
           "icon": "media/icon.png"
         },
         {
+          "id": "a4sx.cells",
+          "name": "Cells",
+          "icon": "media/icon.png",
+          "visibility": "visible"
+        },
+        {
           "id": "a4sx.meshes",
           "name": "Meshes",
           "icon": "media/icon.png",
@@ -261,6 +315,16 @@
       {
         "view": "a4sx.marketplace",
         "contents": "Find sessions that others publish on the a4sx marketplace.\n[Search the marketplace](command:a4sx.searchMarketplace)"
+      },
+      {
+        "view": "a4sx.cells",
+        "contents": "Cells are agent sessions that join a mesh from this computer. Starting one needs the a4sx command-line tool. The extension installs it into its own storage: no admin rights, no PATH change.\n[Install a4sx CLI](command:a4sx.installCli)",
+        "when": "a4sx.cellsNoCli"
+      },
+      {
+        "view": "a4sx.cells",
+        "contents": "No cells are stored on this computer yet. A new cell opens a terminal, you approve it in your browser, and it starts there.\n[New cell](command:a4sx.newCell)",
+        "when": "a4sx.cellsEmpty && !a4sx.cellsNoCli"
       }
     ],
     "menus": {
@@ -328,6 +392,26 @@
         {
           "command": "a4sx.openMeshesOnWeb",
           "when": "view == a4sx.meshes",
+          "group": "more@2"
+        },
+        {
+          "command": "a4sx.newCell",
+          "when": "view == a4sx.cells",
+          "group": "navigation@1"
+        },
+        {
+          "command": "a4sx.refreshCells",
+          "when": "view == a4sx.cells",
+          "group": "navigation@2"
+        },
+        {
+          "command": "a4sx.installCli",
+          "when": "view == a4sx.cells",
+          "group": "more@1"
+        },
+        {
+          "command": "a4sx.updateCli",
+          "when": "view == a4sx.cells && !a4sx.cellsNoCli",
           "group": "more@2"
         }
       ],
@@ -426,6 +510,36 @@
           "command": "a4sx.openMeshOnWeb",
           "when": "view == a4sx.meshes && viewItem =~ /^a4sx\\.mesh(\\.inactive)?$/",
           "group": "1_mesh@2"
+        },
+        {
+          "command": "a4sx.startCell",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "a4sx.openCellOnWeb",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell/",
+          "group": "inline@2"
+        },
+        {
+          "command": "a4sx.startCell",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?$/",
+          "group": "1_cell@1"
+        },
+        {
+          "command": "a4sx.setDefaultCell",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.standalone)?$/",
+          "group": "1_cell@2"
+        },
+        {
+          "command": "a4sx.openCellOnWeb",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell/",
+          "group": "1_cell@3"
+        },
+        {
+          "command": "a4sx.forgetCell",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell/",
+          "group": "2_danger@1"
         }
       ],
       "commandPalette": [
@@ -523,6 +637,22 @@
         },
         {
           "command": "a4sx.startSessionInMesh",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.startCell",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.setDefaultCell",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.forgetCell",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.openCellOnWeb",
           "when": "false"
         }
       ]

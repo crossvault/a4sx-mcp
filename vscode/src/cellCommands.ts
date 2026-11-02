@@ -1,0 +1,350 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 crossVault GmbH
+// The Cells view's actions: start a stored cell or a new one in a terminal, make one the default, forget
+// one, open its page; and installing / updating the a4sx CLI in the extension's storage. Every CLI call is
+// an argv array (a terminal types it quoted for the user's shell; the rest run with execFile, no shell).
+// The extension never reads the CLI's key files and puts no key into a terminal, a setting or a file.
+import * as vscode from "vscode";
+import { createHash } from "crypto";
+import * as os from "os";
+import { CLI_NAME } from "./cli";
+import { cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, NEW_CELL_ARGS, showText } from "./cells";
+import { CellsProvider, CliResolution, CliRunner, LocalCellItem } from "./cellsView";
+import {
+  bundledClaude, downloadCli, Fetch, findPython, installedLauncher, ProvisionError, Runner, updateArgs, updateDue, WINGET_PYTHON_ARGS, writeLauncher,
+} from "./provision";
+import { openCommandTerminal, State } from "./resume";
+
+export const CONSENT_KEY = "a4sx.cellReducedIsolationConsent";
+export const LAST_UPDATE_KEY = "a4sx.cliLastUpdate";
+export const CLAUDE_CODE_ID = "anthropic.claude-code";
+export const CLAUDE_ENV = "A4SX_CLAUDE";
+export const PYTHON_DOWNLOAD_URL = "https://www.python.org/downloads/";
+
+export const CELL_CMD_TEXTS = {
+  newCellTerminal: "a4sx: new cell",
+  cellTerminal: (name: string) => `a4sx: cell ${name}`,
+  updateTerminal: "a4sx: update",
+  pythonTerminal: "a4sx: install Python",
+  consentTitle: "Start cells with reduced isolation on this computer?",
+  consentDetail:
+    "Where this computer can't sandbox your agent, a cell runs as your own user (\"reduced isolation\"). Then your agent " +
+    "could act as this cell in its mesh and skip the cell's outgoing checks, and it can read and use the a4sx sign-ins " +
+    "and keys saved on this computer. Every other session still checks everything it receives. Continue only if you " +
+    "trust the agent on this computer.\n\nWhere the sandbox works, the cell runs in it and none of this applies. " +
+    "You're asked once on this computer.",
+  consentAccept: "Accept and start",
+  standalone: (name: string) => `The cell «${name}» isn't in a mesh yet. Add it to a mesh in the browser, then start it.`,
+  openInBrowser: "Open in browser",
+  badCell: "This cell can't be started from here: its name or mesh isn't one the a4sx CLI accepts.",
+  forgetTitle: (name: string) => `Forget the cell «${name}» on this computer?`,
+  forgetDetail: "This removes its key from this computer. The cell stays in your account until you remove it on the website.",
+  forget: "Forget",
+  forgotten: (name: string) => `Forgot the cell «${name}» on this computer.`,
+  nowDefault: (name: string) => `«${name}» is now the default cell.`,
+  cliFailed: (what: string, detail: string | undefined) => `Could not ${what}${detail ? `: ${detail}` : "."}`,
+  noCli: "The Cells view needs the a4sx CLI. Install it now? It goes into this extension's own storage; no admin rights or PATH changes needed.",
+  installCli: "Install a4sx CLI",
+  badConfig: "The a4sx.cliPath setting doesn't point to a program. Fix it or clear it, then try again.",
+  openSettings: "Open settings",
+  remoteLocal: "This window is remote, but the a4sx extension runs on this computer. Install a4sx in the remote window first.",
+  installing: "Installing the a4sx CLI…",
+  findingPython: "Looking for Python…",
+  downloading: "Downloading…",
+  installed: (v: string) => `Installed the a4sx CLI ${v}. Sign-ins and cells are set up in a terminal the first time you start a cell.`,
+  noPythonWin: "The a4sx CLI needs Python 3.10 or newer. Install it with winget?",
+  installPython: "Install Python",
+  pythonNext: "When Python is installed, run Install a4sx CLI again.",
+  noPython: "The a4sx CLI needs Python 3.10 or newer. Install it, then try again.",
+  howToInstall: "How to install",
+  noStorage: "VS Code didn't give this extension a storage folder, so the a4sx CLI can't be installed here.",
+  badServer: "The a4sx.serverUrl setting isn't a valid https address.",
+};
+
+export interface CellCommandDeps {
+  state: State;
+  /** <globalStorage>/cli: where the extension's copy of the CLI lives; undefined when VS Code gave none. */
+  cliDir: string | undefined;
+  provider: CellsProvider;
+  resolve(): CliResolution;
+  run: CliRunner;
+  /** The configured server's origin; throws for a bad a4sx.serverUrl. */
+  server(): string;
+  defaultServer: string;
+  /** The folder a terminal starts in (undefined: the default), or null when the user cancelled. */
+  folder(): Promise<string | vscode.Uri | undefined | null>;
+  fetch: Fetch;
+  python: Runner;
+  platform?: NodeJS.Platform;
+  /** Terminals this view started: a refresh follows when one closes. */
+  terminals: Set<vscode.Terminal>;
+}
+
+/** This machine, as the consent remembers it: a hash, so no host name is stored. */
+export function machineKey(): string {
+  return createHash("sha256").update([os.hostname(), process.platform, os.homedir()].join("\0")).digest("hex").slice(0, 32);
+}
+
+/** Asks once per machine before the first start with --mesh-reduced-isolation; true when accepted. */
+export async function consentReducedIsolation(state: State, key: string = machineKey()): Promise<boolean> {
+  const seen = state.get<unknown>(CONSENT_KEY);
+  const list = Array.isArray(seen) ? seen.filter((x): x is string => typeof x === "string") : [];
+  if (list.includes(key)) {
+    return true;
+  }
+  const choice = await vscode.window.showWarningMessage(CELL_CMD_TEXTS.consentTitle, { modal: true, detail: CELL_CMD_TEXTS.consentDetail }, CELL_CMD_TEXTS.consentAccept);
+  if (choice !== CELL_CMD_TEXTS.consentAccept) {
+    return false;
+  }
+  await state.update(CONSENT_KEY, [...list, key].slice(-20));
+  return true;
+}
+
+/**
+ * The env for a cell's terminal: A4SX_CLAUDE = the Claude Code extension's bundled claude, when that
+ * extension is installed and the user hasn't set A4SX_CLAUDE themselves. No key, nothing secret.
+ */
+export function cellTerminalEnv(platform: NodeJS.Platform = process.platform): Record<string, string> | undefined {
+  if (process.env[CLAUDE_ENV]) {
+    return undefined;
+  }
+  const claude = bundledClaude(vscode.extensions.getExtension(CLAUDE_CODE_ID)?.extensionPath, platform);
+  return claude ? { [CLAUDE_ENV]: claude } : undefined;
+}
+
+/** The CLI to run: found, or after offering the install. undefined when there is none (the user was told). */
+export async function ensureCli(deps: CellCommandDeps): Promise<string | undefined> {
+  const r = deps.resolve();
+  switch (r.kind) {
+    case "found":
+      return r.path;
+    case "bad-config":
+      if ((await vscode.window.showErrorMessage(CELL_CMD_TEXTS.badConfig, CELL_CMD_TEXTS.openSettings)) === CELL_CMD_TEXTS.openSettings) {
+        await vscode.commands.executeCommand("workbench.action.openSettings", "a4sx.cliPath");
+      }
+      return undefined;
+    case "remote-local":
+      await vscode.window.showErrorMessage(CELL_CMD_TEXTS.remoteLocal);
+      return undefined;
+    case "no-cli": {
+      const choice = await vscode.window.showInformationMessage(CELL_CMD_TEXTS.noCli, { modal: true }, CELL_CMD_TEXTS.installCli);
+      if (choice !== CELL_CMD_TEXTS.installCli || !(await installCli(deps))) {
+        return undefined;
+      }
+      const again = deps.resolve();
+      return again.kind === "found" ? again.path : undefined;
+    }
+  }
+}
+
+function track(deps: CellCommandDeps, t: vscode.Terminal): vscode.Terminal {
+  deps.terminals.add(t);
+  return t;
+}
+
+/** Start in terminal: `a4sx launch --cell NAME [--mesh ID] --mesh-reduced-isolation` in the workspace folder. */
+export async function startCell(deps: CellCommandDeps, item: LocalCellItem | undefined): Promise<vscode.Terminal | undefined> {
+  if (!(item instanceof LocalCellItem)) {
+    return undefined;
+  }
+  if (item.cell.meshId === undefined) {
+    const choice = await vscode.window.showInformationMessage(CELL_CMD_TEXTS.standalone(item.cell.name), CELL_CMD_TEXTS.openInBrowser);
+    if (choice === CELL_CMD_TEXTS.openInBrowser) {
+      await openCellOnWeb(deps, item);
+    }
+    return undefined;
+  }
+  const args = cellLaunchArgs(item.cell, item.all);
+  if (!args) {
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.badCell);
+    return undefined;
+  }
+  const cli = await ensureCli(deps);
+  if (!cli || !(await consentReducedIsolation(deps.state))) {
+    return undefined;
+  }
+  const cwd = await deps.folder();
+  if (cwd === null) {
+    return undefined;
+  }
+  return track(deps, openCommandTerminal(CELL_CMD_TEXTS.cellTerminal(item.cell.name), cli, CLI_NAME, args, cwd, cellTerminalEnv(deps.platform)));
+}
+
+/** New cell: `a4sx launch --new-cell --mesh-reduced-isolation`; the claim happens in the browser from there. */
+export async function newCell(deps: CellCommandDeps): Promise<vscode.Terminal | undefined> {
+  const cli = await ensureCli(deps);
+  if (!cli || !(await consentReducedIsolation(deps.state))) {
+    return undefined;
+  }
+  const cwd = await deps.folder();
+  if (cwd === null) {
+    return undefined;
+  }
+  return track(deps, openCommandTerminal(CELL_CMD_TEXTS.newCellTerminal, cli, CLI_NAME, NEW_CELL_ARGS, cwd, cellTerminalEnv(deps.platform)));
+}
+
+/** The last line the CLI wrote to stderr, made safe to show (its own message, e.g. "no cell named …"). */
+export function cliDetail(stderr: string): string | undefined {
+  const line = stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).pop();
+  return showText(line?.replace(/^a4sx:\s*/, ""), 300);
+}
+
+export async function setDefaultCell(deps: CellCommandDeps, item: LocalCellItem | undefined): Promise<boolean> {
+  if (!(item instanceof LocalCellItem)) {
+    return false;
+  }
+  const args = cellDefaultArgs(item.cell, item.all);
+  const cli = args && (await ensureCli(deps));
+  if (!args || !cli) {
+    return false;
+  }
+  const out = await deps.run(cli, args, 30_000);
+  await deps.provider.refresh();
+  if (out.code !== 0) {
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.cliFailed("make it the default", cliDetail(out.stderr)));
+    return false;
+  }
+  void vscode.window.showInformationMessage(CELL_CMD_TEXTS.nowDefault(item.cell.name));
+  return true;
+}
+
+export async function forgetCell(deps: CellCommandDeps, item: LocalCellItem | undefined): Promise<boolean> {
+  if (!(item instanceof LocalCellItem)) {
+    return false;
+  }
+  const args = cellForgetArgs(item.cell, item.all);
+  if (!args) {
+    return false;
+  }
+  const choice = await vscode.window.showWarningMessage(CELL_CMD_TEXTS.forgetTitle(item.cell.name), { modal: true, detail: CELL_CMD_TEXTS.forgetDetail }, CELL_CMD_TEXTS.forget);
+  if (choice !== CELL_CMD_TEXTS.forget) {
+    return false;
+  }
+  const cli = await ensureCli(deps);
+  if (!cli) {
+    return false;
+  }
+  const out = await deps.run(cli, args, 30_000);
+  await deps.provider.refresh();
+  if (out.code !== 0) {
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.cliFailed("forget the cell", cliDetail(out.stderr)));
+    return false;
+  }
+  void vscode.window.showInformationMessage(CELL_CMD_TEXTS.forgotten(item.cell.name));
+  return true;
+}
+
+export async function openCellOnWeb(deps: CellCommandDeps, item: LocalCellItem | undefined): Promise<void> {
+  if (!(item instanceof LocalCellItem)) {
+    return;
+  }
+  let base: string;
+  try {
+    base = deps.server();
+  } catch {
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.badServer);
+    return;
+  }
+  await vscode.env.openExternal(vscode.Uri.parse(cellPageUrl(base, item.cell)));
+}
+
+/**
+ * Install a4sx CLI: find Python 3.10+ (on Windows, offer winget when there is none), download the CLI's
+ * files from the configured server into the extension's storage with their sha256 checked, write the
+ * launcher, and refresh the view. True when the CLI is installed.
+ */
+export async function installCli(deps: CellCommandDeps): Promise<boolean> {
+  const platform = deps.platform ?? process.platform;
+  if (!deps.cliDir) {
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.noStorage);
+    return false;
+  }
+  let base: string;
+  try {
+    base = deps.server();
+  } catch {
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.badServer);
+    return false;
+  }
+  const dir = deps.cliDir;
+  const result = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: CELL_CMD_TEXTS.installing, cancellable: false },
+    async (progress): Promise<{ ok: true; version: string } | { ok: false; error?: string; python?: true }> => {
+      progress.report({ message: CELL_CMD_TEXTS.findingPython });
+      const python = await findPython(deps.python, platform);
+      if (!python) {
+        return { ok: false, python: true };
+      }
+      progress.report({ message: CELL_CMD_TEXTS.downloading });
+      try {
+        const version = await downloadCli(base, dir, deps.fetch);
+        writeLauncher(python, dir, platform);
+        return { ok: true, version };
+      } catch (e) {
+        return { ok: false, error: e instanceof ProvisionError ? e.message : String(e) };
+      }
+    },
+  );
+  if (!result.ok) {
+    if (result.python) {
+      await offerPython(platform);
+    } else {
+      await vscode.window.showErrorMessage(result.error ?? CELL_CMD_TEXTS.cliFailed("install the a4sx CLI", undefined));
+    }
+    return false;
+  }
+  await deps.state.update(LAST_UPDATE_KEY, Date.now());
+  void vscode.window.showInformationMessage(CELL_CMD_TEXTS.installed(result.version));
+  await deps.provider.refresh();
+  return true;
+}
+
+async function offerPython(platform: NodeJS.Platform): Promise<void> {
+  if (platform === "win32") {
+    const choice = await vscode.window.showErrorMessage(CELL_CMD_TEXTS.noPythonWin, { modal: true, detail: `winget ${WINGET_PYTHON_ARGS.join(" ")}` }, CELL_CMD_TEXTS.installPython);
+    if (choice === CELL_CMD_TEXTS.installPython) {
+      openCommandTerminal(CELL_CMD_TEXTS.pythonTerminal, "winget", "winget", WINGET_PYTHON_ARGS);
+      void vscode.window.showInformationMessage(CELL_CMD_TEXTS.pythonNext);
+    }
+    return;
+  }
+  if ((await vscode.window.showErrorMessage(CELL_CMD_TEXTS.noPython, CELL_CMD_TEXTS.howToInstall)) === CELL_CMD_TEXTS.howToInstall) {
+    await vscode.env.openExternal(vscode.Uri.parse(PYTHON_DOWNLOAD_URL));
+  }
+}
+
+/** Update the a4sx CLI: `a4sx update` in a terminal, so its output shows. */
+export async function updateCliInTerminal(deps: CellCommandDeps): Promise<vscode.Terminal | undefined> {
+  const cli = await ensureCli(deps);
+  if (!cli) {
+    return undefined;
+  }
+  let base: string;
+  try {
+    base = deps.server();
+  } catch {
+    base = deps.defaultServer;
+  }
+  return track(deps, openCommandTerminal(CELL_CMD_TEXTS.updateTerminal, cli, CLI_NAME, updateArgs(base, deps.defaultServer)));
+}
+
+/**
+ * Once a day, silently: `a4sx update` for the extension's own copy of the CLI (a CLI the user installed
+ * elsewhere is theirs to update). The day counts from the attempt, so an offline start doesn't retry
+ * on every window. Resolves true when an update ran and succeeded.
+ */
+export async function dailyUpdate(deps: CellCommandDeps, now: number = Date.now()): Promise<boolean> {
+  const launcher = installedLauncher(deps.cliDir, deps.platform ?? process.platform);
+  if (!launcher || !updateDue(deps.state.get<unknown>(LAST_UPDATE_KEY), now)) {
+    return false;
+  }
+  await deps.state.update(LAST_UPDATE_KEY, now);
+  let base: string;
+  try {
+    base = deps.server();
+  } catch {
+    return false;
+  }
+  const out = await deps.run(launcher, updateArgs(base, deps.defaultServer), 120_000);
+  return out.code === 0;
+}

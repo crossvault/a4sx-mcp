@@ -25,7 +25,9 @@ describe("activate: wiring", () => {
       ext.CMD_FILTER, ext.CMD_CLEAR_FILTER, ext.CMD_MOVE_TO_FOLDER, ext.CMD_REMOVE_FROM_FOLDER,
       ext.CMD_REFRESH_PROFILES, ext.CMD_CREATE_PROFILE, ext.CMD_EDIT_PROFILE, ext.CMD_CHANGE_DEFAULT,
       ext.CMD_DELETE_PROFILE, ext.CMD_ALLOW_SCOPE,
-      ext.CMD_REFRESH_MESHES, ext.CMD_CREATE_MESH, ext.CMD_REDEEM_INVITE, ext.CMD_OPEN_MESHES, ext.CMD_OPEN_MESH, ext.CMD_START_IN_MESH].sort());
+      ext.CMD_REFRESH_MESHES, ext.CMD_CREATE_MESH, ext.CMD_REDEEM_INVITE, ext.CMD_OPEN_MESHES, ext.CMD_OPEN_MESH, ext.CMD_START_IN_MESH,
+      ext.CMD_REFRESH_CELLS, ext.CMD_NEW_CELL, ext.CMD_START_CELL, ext.CMD_DEFAULT_CELL, ext.CMD_FORGET_CELL, ext.CMD_OPEN_CELL,
+      ext.CMD_INSTALL_CLI, ext.CMD_UPDATE_CLI].sort());
     assert.deepStrictEqual([...calls.commands.keys()].sort(), contributed);
   });
 
@@ -130,8 +132,9 @@ describe("a4sx.saveSession", () => {
     assert.strictEqual(calls.terminals.length, 0, "nothing is run or installed");
     assert.strictEqual(calls.errors.length, 1);
     assert.match(calls.errors[0].message, /a4sx command was not found\. Install the a4sx CLI to save and resume sessions from VS Code, or set a4sx\.cliPath to its full path\./);
-    assert.deepStrictEqual(calls.errors[0].items, ["How to install"]);
+    assert.deepStrictEqual(calls.errors[0].items, ["Install a4sx CLI", "How to install"]);
     assert.deepStrictEqual(calls.opened, []);
+    assert.deepStrictEqual(calls.executed, [], "the install runs only when clicked");
   });
 
   it("CLI missing + 'How to install' clicked: opens the install guide on session-exchange.com", async () => {

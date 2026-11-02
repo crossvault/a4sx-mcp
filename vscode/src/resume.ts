@@ -23,7 +23,6 @@ export const RESUME_TEXTS = {
   cliForProfiles: "Launch profiles need the a4sx CLI.",
   installA4sx: "Install a4sx",
   notNow: "Not now",
-  installTerminal: "a4sx: install",
   profilesStepUp: "Launch profiles need one more a4sx permission.",
   allow: "Allow",
 };
@@ -129,19 +128,19 @@ export async function seedWithProgress(client: Client, token: string, row: Sessi
  * runs directly without a shell as before. Nothing secret is in the command or the environment.
  */
 export function openCommandTerminal(
-  name: string, found: string, programBase: string, args: readonly string[], cwd?: string | vscode.Uri,
+  name: string, found: string, programBase: string, args: readonly string[], cwd?: string | vscode.Uri, env?: Record<string, string>,
 ): vscode.Terminal {
   const kind = shellKind(vscode.env.shell);
   const line = kind && commandLine(programName(found, programBase), args, kind);
+  // `env` holds nothing secret (the Cells view passes only A4SX_CLAUDE, a path).
+  const extra = { ...(cwd === undefined ? {} : { cwd }), ...(env ? { env } : {}) };
   if (line) {
-    const terminal = vscode.window.createTerminal(cwd === undefined ? { name } : { name, cwd });
+    const terminal = vscode.window.createTerminal({ name, ...extra });
     terminal.sendText(line, true);
     terminal.show();
     return terminal;
   }
-  const terminal = vscode.window.createTerminal(cwd === undefined
-    ? { name, shellPath: found, shellArgs: [...args] }
-    : { name, shellPath: found, shellArgs: [...args], cwd });
+  const terminal = vscode.window.createTerminal({ name, shellPath: found, shellArgs: [...args], ...extra });
   terminal.show();
   return terminal;
 }
@@ -156,11 +155,8 @@ export function openClaudeTerminal(claudePath: string, sessionId: string, cwd: s
 
 export const CLI_HINT_KEY = "a4sx.cliHintShown";
 
-/**
- * Once ever: launch profiles need the a4sx CLI. "Install a4sx" runs the installer one-liner (built only
- * from a safe origin) in a terminal; on Windows, where it doesn't apply, it opens the install guide.
- */
-export async function offerCliInstallOnce(state: State, installCommand: () => string, installUrl: string): Promise<void> {
+/** Once ever: launch profiles need the a4sx CLI. "Install a4sx" installs it (Install a4sx CLI). */
+export async function offerCliInstallOnce(state: State, install: () => PromiseLike<unknown>): Promise<void> {
   if (state.get<boolean>(CLI_HINT_KEY)) {
     return;
   }
@@ -170,12 +166,8 @@ export async function offerCliInstallOnce(state: State, installCommand: () => st
   if (choice !== t.installA4sx) {
     return;
   }
-  if (process.platform === "win32") {
-    await vscode.env.openExternal(vscode.Uri.parse(installUrl));
-    return;
-  }
-  const terminal = vscode.window.createTerminal({ name: t.installTerminal, shellPath: "/bin/sh", shellArgs: ["-c", installCommand()] });
-  terminal.show();
+  // 0.4.0: the extension installs the CLI itself (a checked download into its storage, no shell).
+  await install();
 }
 
 // --- finishing after the window reopens -----------------------------------------------------------

@@ -6,10 +6,20 @@
 // VS Code connects to the MCP servers when chat uses them, and runs their sign-in itself.
 import * as vscode from "vscode";
 import { execFile } from "child_process";
-import { Client, FetchLike, listingWebUrl, MESSAGES, normalizeServerUrl, PROFILE_ID, sessionWebUrl } from "./api";
+import * as path from "path";
+import { Client, DEFAULT_SERVER, FetchLike, listingWebUrl, MESSAGES, normalizeServerUrl, PROFILE_ID, sessionWebUrl } from "./api";
 import { A4sxAuthProvider, AUTH_ID, AUTH_LABEL, LoginCancelled, LoginRequest, SECRET_KEY, vscodeLogin } from "./auth";
 import { CLAUDE_EXTENSION_ID, claudeResumeUri } from "./claudeResume";
 import { CLI_NAME, findClaude, findCli, CliLookup } from "./cli";
+import { cellsListDir } from "./cells";
+import {
+  CellCommandDeps, dailyUpdate, forgetCell, installCli, newCell, openCellOnWeb, setDefaultCell, startCell, updateCliInTerminal,
+} from "./cellCommands";
+import {
+  CellsLoad, CellsProvider, CELLS_EMPTY, CELLS_NO_CLI, CliOutput, CliResolution, CliRunner, CMD_DEFAULT_CELL, CMD_FORGET_CELL, CMD_INSTALL_CLI, CMD_NEW_CELL,
+  CMD_OPEN_CELL, CMD_REFRESH_CELLS, CMD_START_CELL, CMD_UPDATE_CLI, LocalCellItem, VIEW_CELLS,
+} from "./cellsView";
+import { execSpec, Fetch, installedLauncher, Runner } from "./provision";
 import { clearFilter, filterSessions, moveToFolder, removeFromFolder } from "./folderCommands";
 import { CMD_OPEN_LISTING, ListingItem, MarketplaceProvider } from "./marketplaceView";
 import {
@@ -58,6 +68,7 @@ export const CMD_CHANGE_DEFAULT = "a4sx.changeDefaultElsewhere";
 export const CMD_DELETE_PROFILE = "a4sx.deleteProfile";
 export const CMD_ALLOW_SCOPE = "a4sx.allowScope";
 export { CMD_OPEN_LISTING, CMD_CREATE_MESH, CMD_OPEN_MESH, CMD_OPEN_MESHES, CMD_REDEEM_INVITE, CMD_REFRESH_MESHES, CMD_START_IN_MESH };
+export { CMD_REFRESH_CELLS, CMD_NEW_CELL, CMD_START_CELL, CMD_DEFAULT_CELL, CMD_FORGET_CELL, CMD_OPEN_CELL, CMD_INSTALL_CLI, CMD_UPDATE_CLI, VIEW_CELLS };
 export const VIEW_SESSIONS = "a4sx.sessions";
 export const VIEW_PROFILES = "a4sx.profiles";
 export const VIEW_MARKETPLACE = "a4sx.marketplace";
@@ -75,6 +86,22 @@ export function mcpServerDefinitions(): vscode.McpServerDefinition[] {
     // Your library: answers 401 until you sign in; VS Code then runs the OAuth sign-in itself.
     new vscode.McpHttpServerDefinition("a4sx library", vscode.Uri.parse(MCP_LIBRARY_URL)),
   ];
+}
+
+/** <globalStorage>/cli: the extension's own copy of the a4sx CLI (Install a4sx CLI). Set by activate(). */
+let ownCliDir: string | undefined;
+
+/**
+ * findCli, then the extension's own copy: a4sx.cliPath when set (and nothing else), else `a4sx` on PATH
+ * and in the installer's folders, else the copy Install a4sx CLI put into the extension's storage.
+ */
+export function findCliOrOwn(configured: string | undefined): CliLookup {
+  const r = findCli(configured);
+  if (r.found || r.reason !== "not-on-path") {
+    return r;
+  }
+  const own = installedLauncher(ownCliDir);
+  return own ? { found: true, path: own } : r;
 }
 
 function lookupCli(lookup: (configured: string | undefined) => CliLookup): CliLookup {
@@ -155,6 +182,7 @@ export function installCommand(): string {
 }
 
 export const MISSING_CLI = {
+  installNative: "Install a4sx CLI",
   install: "How to install",
   copyInstall: "Copy install command",
   openSettings: "Open settings",
@@ -165,8 +193,10 @@ export const MISSING_CLI = {
 export async function reportMissingCli(result: Exclude<CliLookup, { found: true }>): Promise<void> {
   const remote = remoteHostName();
   if (remote && result.reason === "not-on-path") {
-    const choice = await vscode.window.showErrorMessage(MISSING_CLI.remoteNotFound(remoteLabel(remote)), MISSING_CLI.copyInstall, MISSING_CLI.openSettings);
-    if (choice === MISSING_CLI.copyInstall) {
+    const choice = await vscode.window.showErrorMessage(MISSING_CLI.remoteNotFound(remoteLabel(remote)), MISSING_CLI.installNative, MISSING_CLI.copyInstall, MISSING_CLI.openSettings);
+    if (choice === MISSING_CLI.installNative) {
+      await vscode.commands.executeCommand(CMD_INSTALL_CLI);
+    } else if (choice === MISSING_CLI.copyInstall) {
       await vscode.env.clipboard.writeText(installCommand());
       await vscode.window.showInformationMessage(MISSING_CLI.copied);
     } else if (choice === MISSING_CLI.openSettings) {
@@ -178,13 +208,16 @@ export async function reportMissingCli(result: Exclude<CliLookup, { found: true 
     result.reason === "configured-path-invalid"
       ? `The a4sx.cliPath setting points to "${result.configured}", which is not an executable file. Fix the setting, or clear it to use ${CLI_NAME} from your PATH.`
       : `The ${CLI_NAME} command was not found. Install the ${CLI_NAME} CLI to save and resume sessions from VS Code, or set a4sx.cliPath to its full path.`;
-  const choice = await vscode.window.showErrorMessage(message, MISSING_CLI.install);
-  if (choice === MISSING_CLI.install) {
+  const buttons = result.reason === "not-on-path" ? [MISSING_CLI.installNative, MISSING_CLI.install] : [MISSING_CLI.install];
+  const choice = await vscode.window.showErrorMessage(message, ...buttons);
+  if (choice === MISSING_CLI.installNative) {
+    await vscode.commands.executeCommand(CMD_INSTALL_CLI);
+  } else if (choice === MISSING_CLI.install) {
     await vscode.env.openExternal(vscode.Uri.parse(INSTALL_URL));
   }
 }
 
-export async function saveSession(lookup: (configured: string | undefined) => CliLookup = findCli): Promise<vscode.Terminal | undefined> {
+export async function saveSession(lookup: (configured: string | undefined) => CliLookup = findCliOrOwn): Promise<vscode.Terminal | undefined> {
   if (await stopIfLocalInRemoteWindow()) {
     return undefined;
   }
@@ -208,8 +241,10 @@ export async function openLibrary(): Promise<void> {
 }
 
 /** Swappable in unit tests: the network and the interactive login. */
-export const runtime: { fetch: FetchLike; login: (client: Client, req: LoginRequest) => ReturnType<typeof vscodeLogin> } = {
+export const runtime: { fetch: FetchLike; download: Fetch; login: (client: Client, req: LoginRequest) => ReturnType<typeof vscodeLogin> } = {
   fetch: (url, init) => fetch(url, init),
+  /** Install a4sx CLI's downloads (public files, no key). */
+  download: (url, init) => fetch(url, init),
   login: vscodeLogin,
 };
 
@@ -262,7 +297,7 @@ let native: { auth: A4sxAuthProvider; state: State } | undefined;
  */
 export async function resumeSession(
   item: SessionItem | undefined,
-  lookup: (configured: string | undefined) => CliLookup = findCli,
+  lookup: (configured: string | undefined) => CliLookup = findCliOrOwn,
   choose: ChooseProfile = () => chooseResumeProfile(),
   claudeLookup: () => string | undefined = () => findClaude(),
 ): Promise<vscode.Terminal | undefined> {
@@ -311,7 +346,7 @@ async function resumeWithClaude(item: SessionItem, claudeLookup: () => string | 
   }
   const terminal = openClaudeTerminal(claude, seeded.sessionId, seeded.folder.uri, RESUME_TERMINAL_NAME);
   if (native) {
-    void offerCliInstallOnce(native.state, installCommand, INSTALL_URL);
+    void offerCliInstallOnce(native.state, () => vscode.commands.executeCommand(CMD_INSTALL_CLI));
   }
   return terminal;
 }
@@ -327,7 +362,7 @@ export const PROFILE_TERMINAL_NAME = "a4sx: profile";
 export const PROFILES_PAGE = "/account/workspace#profiles";
 
 /** Opens a terminal that runs `a4sx profile --name ID` directly (no shell): shows the profile and how to change it. */
-export async function runProfileCli(profileId: string, lookup: (configured: string | undefined) => CliLookup = findCli): Promise<vscode.Terminal | undefined> {
+export async function runProfileCli(profileId: string, lookup: (configured: string | undefined) => CliLookup = findCliOrOwn): Promise<vscode.Terminal | undefined> {
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(profileId) || await stopIfLocalInRemoteWindow()) {
     return undefined;
   }
@@ -342,7 +377,7 @@ export async function runProfileCli(profileId: string, lookup: (configured: stri
 }
 
 /** Opens a terminal that runs the CLI's own `a4sx profile --set-default ID` directly (no shell). */
-export async function runSetDefaultCli(profileId: string, lookup: (configured: string | undefined) => CliLookup = findCli): Promise<vscode.Terminal | undefined> {
+export async function runSetDefaultCli(profileId: string, lookup: (configured: string | undefined) => CliLookup = findCliOrOwn): Promise<vscode.Terminal | undefined> {
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(profileId) || await stopIfLocalInRemoteWindow()) {
     return undefined;
   }
@@ -393,13 +428,13 @@ export function folderTargets(folders: readonly vscode.WorkspaceFolder[], remote
     .map((folder) => ({ folder, cwd: folder.uri.fsPath }));
 }
 
-async function pickFolder(targets: readonly FolderTarget[]): Promise<FolderTarget | undefined> {
+async function pickFolder(targets: readonly FolderTarget[], placeHolder: string = CLAUDE_MESSAGES.pickFolder): Promise<FolderTarget | undefined> {
   if (targets.length === 1) {
     return targets[0];
   }
   const picked = await vscode.window.showQuickPick(
     targets.map((target) => ({ label: target.folder.name, description: target.cwd, target })),
-    { placeHolder: CLAUDE_MESSAGES.pickFolder },
+    { placeHolder },
   );
   return picked?.target;
 }
@@ -514,7 +549,7 @@ export async function completePendingResume(state: State, claudeLookup: () => st
   const folder = folders.find((f) => sameFolder(f.uri, p.folderUri));
   if (folder) {
     openClaudeTerminal(claude, p.sessionId, folder.uri, RESUME_TERMINAL_NAME);
-    void offerCliInstallOnce(state, installCommand, INSTALL_URL);
+    void offerCliInstallOnce(state, () => vscode.commands.executeCommand(CMD_INSTALL_CLI));
   }
 }
 
@@ -597,12 +632,33 @@ export const PREFLIGHT_TIMEOUT_MS = 30_000;
  * no a4sx key of the extension's (that key lives only in SecretStorage). A non-zero exit still hands
  * over stdout, so a `{tier: "none"}` answer with exit code 1 is read too.
  */
-export const runPreflight: PreflightRunner = (cliPath, args) =>
-  new Promise((resolve) => {
-    execFile(cliPath, [...args], { timeout: PREFLIGHT_TIMEOUT_MS, maxBuffer: 64 * 1024, windowsHide: true, shell: false }, (_err, stdout) => {
-      resolve(typeof stdout === "string" ? stdout : "");
+export const runPreflight: PreflightRunner = async (cliPath, args) => (await runCli(cliPath, args, PREFLIGHT_TIMEOUT_MS)).stdout;
+
+/**
+ * Runs the CLI with execFile and an argv array, never a shell string (a Windows .cmd goes through cmd.exe
+ * with every piece quoted, see execSpec). The CLI gets the user's environment, which holds no a4sx key of
+ * the extension's. Never rejects: a failure is a non-zero code, with whatever the CLI wrote.
+ */
+export const runCli: CliRunner = (cli, args, timeoutMs = 30_000) =>
+  new Promise<CliOutput>((resolve) => {
+    const spec = execSpec(cli, args);
+    if (!spec) {
+      resolve({ code: null, stdout: "", stderr: "" });
+      return;
+    }
+    execFile(spec.file, spec.args, {
+      timeout: timeoutMs, maxBuffer: 1024 * 1024, windowsHide: true, shell: false, windowsVerbatimArguments: spec.verbatim,
+    }, (err, stdout, stderr) => {
+      const code = err ? (typeof (err as { code?: unknown }).code === "number" ? (err as { code: number }).code : null) : 0;
+      resolve({ code, stdout: typeof stdout === "string" ? stdout : "", stderr: typeof stderr === "string" ? stderr : "" });
     });
   });
+
+/** The Python probe's runner: an argv array, no shell. */
+export const runPython: Runner = async (file, args, timeoutMs) => {
+  const out = await runCli(file, args, timeoutMs);
+  return { code: out.code, stdout: out.stdout };
+};
 
 /** The website's setup guide, shown with the "no isolation tier" refusal. */
 export const MESH_SETUP_PATH = "/guide/cli";
@@ -620,7 +676,7 @@ export const MESH_SETUP_PATH = "/guide/cli";
 export async function startSessionInMesh(
   auth: { token(): Promise<string | undefined> },
   item: MeshItem | undefined,
-  lookup: (configured: string | undefined) => CliLookup = findCli,
+  lookup: (configured: string | undefined) => CliLookup = findCliOrOwn,
   preflight: PreflightRunner = runPreflight,
 ): Promise<vscode.Terminal | undefined> {
   if (!(item instanceof MeshItem)) {
@@ -707,6 +763,30 @@ export async function startSessionInMesh(
   return openCommandTerminal(MESH_TERMINAL_NAME, cli.path, CLI_NAME, args);
 }
 
+export const CELL_FOLDER_PICK = "Choose the folder to start the cell in";
+
+/** Where a cell's terminal starts: the workspace folder (a pick when several), the default without one; null = cancelled. */
+async function cellFolder(): Promise<string | vscode.Uri | undefined | null> {
+  const targets = folderTargets(vscode.workspace.workspaceFolders ?? [], remoteHostName());
+  if (targets.length === 0) {
+    return undefined;
+  }
+  const target = await pickFolder(targets, CELL_FOLDER_PICK);
+  return target ? target.folder.uri : null;
+}
+
+/** Which CLI the Cells view runs (see findCliOrOwn), or why there is none. */
+export function resolveCellsCli(lookup: (configured: string | undefined) => CliLookup = findCliOrOwn): CliResolution {
+  if (remoteWindowButLocalExtension()) {
+    return { kind: "remote-local" };
+  }
+  const r = lookupCli(lookup);
+  if (r.found) {
+    return { kind: "found", path: r.path };
+  }
+  return r.reason === "configured-path-invalid" ? { kind: "bad-config" } : { kind: "no-cli" };
+}
+
 function setContext(key: string, value: unknown): void {
   void vscode.commands.executeCommand("setContext", key, value);
 }
@@ -728,6 +808,8 @@ export interface Sidebar {
   market: MarketplaceProvider;
   meshes: MeshesProvider;
   meshPoller: VisibilityPoller;
+  cells: CellsProvider;
+  cellDeps: CellCommandDeps;
 }
 
 /** For tests only. Never returned from activate(): that value is readable by every other extension. */
@@ -752,6 +834,49 @@ export function activate(context: vscode.ExtensionContext): void {
   const meshes = new MeshesProvider(auth, client, (available) => setContext(MESHES_AVAILABLE, available));
   const meshesView = vscode.window.createTreeView(VIEW_MESHES, { treeDataProvider: meshes });
   const meshPoller = new VisibilityPoller(() => meshes.tick());
+  // Cells: the cells the a4sx CLI stored on this machine, and the extension's own copy of the CLI.
+  ownCliDir = context.globalStorageUri ? path.join(context.globalStorageUri.fsPath, "cli") : undefined;
+  setContext(CELLS_NO_CLI, false);
+  setContext(CELLS_EMPTY, false);
+  const cells = new CellsProvider({
+    resolve: () => resolveCellsCli(),
+    run: (cli, args, timeoutMs) => runCli(cli, args, timeoutMs),
+    server: () => { try { return client().base; } catch { return DEFAULT_SERVER; } },
+    onState: (load: CellsLoad) => {
+      setContext(CELLS_NO_CLI, load.kind === "no-cli");
+      setContext(CELLS_EMPTY, load.kind === "ok" && load.cells.length === 0);
+    },
+  });
+  const cellTerminals = new Set<vscode.Terminal>();
+  const cellDeps: CellCommandDeps = {
+    state: context.globalState,
+    cliDir: ownCliDir,
+    provider: cells,
+    resolve: () => resolveCellsCli(),
+    run: (cli, args, timeoutMs) => runCli(cli, args, timeoutMs),
+    server: () => client().base,
+    defaultServer: DEFAULT_SERVER,
+    folder: cellFolder,
+    fetch: (url, init) => runtime.download(url, init),
+    python: runPython,
+    terminals: cellTerminals,
+  };
+  const cellsView = vscode.window.createTreeView(VIEW_CELLS, { treeDataProvider: cells });
+  const refreshCells = () => void cells.refresh();
+  // A terminal the view started closed (a new cell may be stored, or the CLI was updated): read again.
+  if (typeof vscode.window.onDidCloseTerminal === "function") {
+    context.subscriptions.push(vscode.window.onDidCloseTerminal((t) => {
+      if (cellTerminals.delete(t)) {
+        refreshCells();
+      }
+    }));
+  }
+  // The CLI's cell list changed (a claim finished in a terminal, or `a4sx mesh cell …` ran elsewhere).
+  const listDir = cellsListDir();
+  if (listDir && typeof vscode.workspace.createFileSystemWatcher === "function" && typeof vscode.RelativePattern === "function") {
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(listDir), "cells.json"));
+    context.subscriptions.push(watcher, watcher.onDidChange(refreshCells), watcher.onDidCreate(refreshCells), watcher.onDidDelete(refreshCells));
+  }
   const syncSignedIn = () => void auth.current().then((s) => vscode.commands.executeCommand("setContext", "a4sx.signedIn", !!s));
   syncSignedIn();
   setContext("a4sx.sessionsFiltered", false);
@@ -790,6 +915,9 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("a4sx.cliPath") || e.affectsConfiguration("a4sx.serverUrl")) {
+        refreshCells();
+      }
       if (e.affectsConfiguration("a4sx.serverUrl")) {
         syncSignedIn();
         sessions.refresh();
@@ -822,6 +950,16 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_REDEEM_INVITE, () => redeemMeshInvite()),
     vscode.commands.registerCommand(CMD_OPEN_MESH, (item?: MeshItem) => openMeshOnWeb(item)),
     vscode.commands.registerCommand(CMD_START_IN_MESH, (item?: MeshItem) => startSessionInMesh(auth, item)),
+    cells,
+    cellsView,
+    vscode.commands.registerCommand(CMD_REFRESH_CELLS, () => cells.refresh()),
+    vscode.commands.registerCommand(CMD_NEW_CELL, () => newCell(cellDeps)),
+    vscode.commands.registerCommand(CMD_START_CELL, (item?: LocalCellItem) => startCell(cellDeps, item)),
+    vscode.commands.registerCommand(CMD_DEFAULT_CELL, (item?: LocalCellItem) => setDefaultCell(cellDeps, item)),
+    vscode.commands.registerCommand(CMD_FORGET_CELL, (item?: LocalCellItem) => forgetCell(cellDeps, item)),
+    vscode.commands.registerCommand(CMD_OPEN_CELL, (item?: LocalCellItem) => openCellOnWeb(cellDeps, item)),
+    vscode.commands.registerCommand(CMD_INSTALL_CLI, () => installCli(cellDeps)),
+    vscode.commands.registerCommand(CMD_UPDATE_CLI, () => updateCliInTerminal(cellDeps)),
     // From the "Sign in again to allow …" item: the item names the permission, so no extra modal.
     vscode.commands.registerCommand(CMD_ALLOW_SCOPE, async (scope?: unknown) => {
       if (typeof scope === "string" && stepUpAllowed(scope)) {
@@ -840,7 +978,9 @@ export function activate(context: vscode.ExtensionContext): void {
       }),
     );
   }
-  sidebar = { auth, sessions, profiles, market, meshes, meshPoller };
+  sidebar = { auth, sessions, profiles, market, meshes, meshPoller, cells, cellDeps };
+  // Once a day, silently: `a4sx update` for the extension's own copy of the CLI.
+  void dailyUpdate(cellDeps).then((ran) => { if (ran) { refreshCells(); } });
   // The probe (GET /meshes only) decides whether the view shows; the cells are read when it is shown,
   // then every 30 s while it is visible.
   void meshes.probe();

@@ -28,6 +28,8 @@ export interface Calls {
   executed: { id: string; args: unknown[] }[];
   /** Extension ids getExtension finds. */
   extensions: Set<string>;
+  /** extensionPath of the extensions getExtension finds, by id (optional). */
+  extensionPaths: Map<string, string>;
   workspaceFolders: { name: string; uri: { scheme: string; fsPath: string } }[] | undefined;
   /** What the next showQuickPick resolves to: an index into its items (undefined = Esc). */
   nextPick: number | undefined;
@@ -84,6 +86,7 @@ export const calls: Calls = {
   progress: [],
   executed: [],
   extensions: new Set(),
+  extensionPaths: new Map(),
   workspaceFolders: undefined,
   nextPick: undefined,
   quickPicks: [],
@@ -125,6 +128,7 @@ export function resetCalls(): void {
   calls.progress.length = 0;
   calls.executed.length = 0;
   calls.extensions.clear();
+  calls.extensionPaths.clear();
   calls.workspaceFolders = undefined;
   calls.nextPick = undefined;
   calls.quickPicks.length = 0;
@@ -375,7 +379,7 @@ const fake = {
       if (id.toLowerCase() === "crossvaultgmbh.a4sx") {
         return { id, extensionKind: calls.extensionKind };
       }
-      return calls.extensions.has(id) ? { id } : undefined;
+      return calls.extensions.has(id) ? { id, extensionPath: calls.extensionPaths.get(id) } : undefined;
     },
   },
   workspace: {

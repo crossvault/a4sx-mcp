@@ -13,6 +13,7 @@ This extension connects VS Code to a4sx. It adds:
     - **Copy session id**.
     - **Move to folder…** and **Remove from folder**.
   - **Launch profiles** lists your launch profiles. The default one is marked. You can create, edit and delete profiles.
+  - **Cells** lists the mesh cells stored on this computer by the a4sx command-line tool. You can start one in a terminal, start a new one, make one the default, or forget one. If the tool isn't installed, the view installs it for you.
   - **Meshes** lists the a4sx meshes you're in and your cells in each one. It appears only when your a4sx server has meshes.
   - **Marketplace** searches the sessions that others publish. A result opens on session-exchange.com. You don't need to sign in to search.
 - **The a4sx MCP servers for agent mode.** The a4sx tools show up in the tools list of agent mode in VS Code chat.
@@ -45,6 +46,32 @@ The first time you change a profile, the extension asks for one more permission 
 
 On an older a4sx server, the view shows "Launch profiles need a newer a4sx server." and the profile actions are hidden.
 
+## Cells
+
+A cell is an agent session that joins one of your meshes from this computer. The **Cells** view lists the cells the a4sx command-line tool has stored here (`a4sx mesh cells --json`). For each cell it shows its mesh (or "standalone"), and marks the default cell with a star. A cell that waits for a mesh admin says so. The extension reads only that list: it never reads the cells' keys.
+
+- **Start in terminal** opens a new terminal in your workspace folder and runs `a4sx launch --cell <name> --mesh-reduced-isolation` there. If two stored cells share a name, `--mesh <mesh id>` picks the right one. Signing in, and anything else the CLI asks, happens in that terminal. If more than one folder is open, VS Code asks which one.
+- **New cell** (in the view's title bar) runs `a4sx launch --new-cell --mesh-reduced-isolation` in a new terminal. The CLI opens your browser, where you approve the new cell, and then starts it in the terminal. The list updates when the cell is stored.
+- **Set as default** runs `a4sx mesh cell default <name>`. A bare `a4sx launch --cell` starts the default cell.
+- **Forget on this computer** runs `a4sx mesh cell forget <name>`, after you confirm. It removes the cell's key from this computer. The cell stays in your account until you remove it on the website.
+- **Open in browser** opens the cell's mesh on the website. A standalone cell isn't in a mesh yet, so it can't be started; add it to a mesh on the website first.
+
+**Reduced isolation.** Where this computer can't sandbox your agent, a cell runs as your own user. Your agent could then act as that cell in its mesh, skip the cell's outgoing checks, and read and use the a4sx sign-ins and keys saved on this computer. The first time you start a cell on a computer, a dialog explains this, and the cell starts only if you accept. The answer is remembered for that computer. Where the sandbox works, the cell runs in it and this doesn't apply.
+
+**Claude Code.** If the Claude Code extension is installed, the terminals the view starts tell the a4sx CLI to use the `claude` that comes with that extension (through the `A4SX_CLAUDE` environment variable), unless you set `A4SX_CLAUDE` yourself.
+
+The list is read when the view is first shown, on **Refresh cells**, after each action in the view, when a terminal the view started closes, and when the CLI's cell list changes.
+
+### Installing the a4sx CLI
+
+If the a4sx command-line tool isn't found, the **Cells** view offers **Install a4sx CLI**. The same button appears wherever the extension needs the CLI. The extension then:
+
+1. Looks for Python 3.10 or newer (on Windows: `py -3`, `python`, `python3`, then the per-user Python folders). On Windows, if there is none, it offers to run `winget install Python.Python.3.12` in a terminal. Run **Install a4sx CLI** again when that's done.
+2. Downloads the CLI's files (`a4sx.py`, and `ipc_proxy.py` when the server has it) from session-exchange.com, or your `a4sx.serverUrl`. Each file must match the SHA-256 checksum the server sends with it. Otherwise nothing is installed.
+3. Saves them in the extension's own storage folder, with a small launcher that runs them with that Python. It doesn't need admin rights, and it doesn't change your `PATH` or your shell profile. Nothing downloaded is run through a shell.
+
+An `a4sx` on your `PATH`, or in `a4sx.cliPath`, is used first. The extension's own copy is used only when there is none. The extension updates its own copy once a day in the background (`a4sx update`). **Update a4sx CLI** runs the update in a terminal at any time. An `a4sx` you installed yourself is not updated automatically.
+
 ## Meshes
 
 The **Meshes** view lists your meshes. Under each mesh are your cells in it: their status, presence, reach and when they were last seen (rounded to 5 minutes). If your cells in a mesh run on more than one machine, they are grouped by machine. A cell's tooltip shows its isolation tier (a, b or c), as the cell reports it itself. A Windows host on tier c appears as one machine per mesh; its tooltip says so. A cell waiting for approval shows "Waiting for approval". The cells are read when the view is shown or a mesh is expanded, then every 30 seconds while the view is visible. **Refresh meshes** refreshes it right away. The view lists only the meshes you're a member of. A mesh that isn't active (archived, merged or deleted) shows its status and offers only **Open in browser**. If your meshes don't fit in 20 pages, the view says so; the website shows all of them. If your a4sx server doesn't list cells yet, the view shows your meshes and the line "Cells appear here once your server supports it."
@@ -56,6 +83,10 @@ The **Meshes** view lists your meshes. Under each mesh are your cells in it: the
 
 The view is hidden when you're signed out, or when your a4sx server has no meshes. If your sign-in is no longer valid, the extension signs you out, as **My sessions** does.
 
+## Roadmap
+
+- TODO (phase 2): start a cell inside the Claude Code panel, not only in a terminal. The plan is to use the Claude Code extension's `claudeCode.claudeProcessWrapper` setting (machine scope), so that the a4sx CLI starts the panel's `claude` as a cell. That needs new CLI support and your consent before the setting is changed.
+
 ## Signing out
 
 To sign out, run **a4sx: Sign out**. The extension asks the a4sx server to revoke the key, then removes the key from VS Code. If the server can't be reached, the key is still removed from VS Code, and it stays valid until it expires or you revoke it on session-exchange.com under Account › Agent keys.
@@ -63,7 +94,8 @@ To sign out, run **a4sx: Sign out**. The extension asks the a4sx server to revok
 ## Requirements
 
 - VS Code 1.101 or later. The MCP servers are used by agent mode in VS Code chat.
-- For **Save this session** and for launch profiles in **Resume in terminal**: the a4sx command-line tool, installed and signed in with `a4sx login`. See the [install guide](https://session-exchange.com/guide/cli). The extension looks for `a4sx` on your `PATH`, then in `~/.local/bin`, `/usr/local/bin` and `/opt/homebrew/bin`. The first time you resume in a terminal without it, the extension offers to install it.
+- For **Save this session**, for launch profiles in **Resume in terminal**, and for the **Cells** view: the a4sx command-line tool, signed in with `a4sx login`. The extension looks for `a4sx` on your `PATH`, then in `~/.local/bin`, `/usr/local/bin` and `/opt/homebrew/bin`, then in its own storage. **Install a4sx CLI** installs it there (see [Installing the a4sx CLI](#installing-the-a4sx-cli)); it needs Python 3.10 or newer. You can also use the [install guide](https://session-exchange.com/guide/cli).
+- For starting cells: Linux or Windows (native, WSL, Remote-SSH or a dev container), as the a4sx CLI requires.
 - For **Resume in terminal** without the a4sx command-line tool: Claude Code's `claude` command. The extension looks for it on your `PATH`, then in the same folders and in `~/.claude/local`.
 - For **Resume in Claude Code**: the Claude Code extension. The resumed session runs on the Claude Code extension's own sign-in, not on your a4sx launch profile or router.
 - For resuming without the a4sx command-line tool: sign in to a4sx in the sidebar. The extension copies the session with that sign-in.
@@ -81,4 +113,4 @@ In a remote window (SSH, WSL, dev containers, Codespaces), the a4sx extension us
 
 ## Network use
 
-The sidebar connects to session-exchange.com (or your `a4sx.serverUrl`) to sign you in, list and file your sessions, manage your launch profiles and search the marketplace. When you're signed in, it asks the server whether it has meshes: one request (`GET /meshes`) when a window opens, after each sign-in and when `a4sx.serverUrl` changes, retried at most 5 times over about 13 minutes if the server can't be reached. Your cells are read only when the **Meshes** view is shown or a mesh is expanded, then every 30 seconds while the view is visible; when the server is busy, the extension waits longer, as long as the server asks, up to 5 minutes. It sends no telemetry. VS Code connects to session-exchange.com when agent mode uses the a4sx MCP servers. **Resume in Claude Code**, and **Resume in terminal** without the a4sx command-line tool, download the session from session-exchange.com with the sidebar's sign-in. **Save this session**, and **Resume in terminal** with the a4sx command-line tool, run that tool, which uses its own sign-in. When a window opens and your sign-in can't read launch profiles yet, the extension asks the server once whether it offers them, to know whether to ask for that permission.
+The sidebar connects to session-exchange.com (or your `a4sx.serverUrl`) to sign you in, list and file your sessions, manage your launch profiles and search the marketplace. When you're signed in, it asks the server whether it has meshes: one request (`GET /meshes`) when a window opens, after each sign-in and when `a4sx.serverUrl` changes, retried at most 5 times over about 13 minutes if the server can't be reached. Your cells are read only when the **Meshes** view is shown or a mesh is expanded, then every 30 seconds while the view is visible; when the server is busy, the extension waits longer, as long as the server asks, up to 5 minutes. **Install a4sx CLI** downloads the CLI's files from session-exchange.com (or your `a4sx.serverUrl`), and the daily update of the extension's own copy downloads them again. These downloads send no key. It sends no telemetry. VS Code connects to session-exchange.com when agent mode uses the a4sx MCP servers. **Resume in Claude Code**, and **Resume in terminal** without the a4sx command-line tool, download the session from session-exchange.com with the sidebar's sign-in. **Save this session**, and **Resume in terminal** with the a4sx command-line tool, run that tool, which uses its own sign-in. When a window opens and your sign-in can't read launch profiles yet, the extension asks the server once whether it offers them, to know whether to ask for that permission.

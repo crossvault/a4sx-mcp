@@ -366,7 +366,7 @@ describe("Resume in terminal without the a4sx CLI", () => {
     }
   });
 
-  it("once: launch profiles need the a4sx CLI; 'Install a4sx' runs the safe-origin installer line", async () => {
+  it("once: launch profiles need the a4sx CLI; 'Install a4sx' runs the extension's own install (no shell pipe)", async () => {
     calls.workspaceFolders = [folder("proj", "/w/proj")];
     const { state } = await activateWith({ "GET /library/fetch": [fetchBody()] });
     calls.nextInfoChoice = RESUME_TEXTS.installA4sx;
@@ -374,11 +374,8 @@ describe("Resume in terminal without the a4sx CLI", () => {
     await tick();
     assert.deepStrictEqual(calls.infoPrompts, [{ message: RESUME_TEXTS.cliForProfiles, items: [RESUME_TEXTS.installA4sx, RESUME_TEXTS.notNow] }]);
     assert.strictEqual(state.data_.get(CLI_HINT_KEY), true);
-    if (process.platform !== "win32") {
-      assert.deepStrictEqual(calls.terminals[1].options, {
-        name: RESUME_TEXTS.installTerminal, shellPath: "/bin/sh", shellArgs: ["-c", "curl -fsSL https://session-exchange.com/install.sh | sh"],
-      });
-    }
+    assert.deepStrictEqual(calls.executed.filter((e) => e.id === "a4sx.installCli").length, 1);
+    assert.strictEqual(calls.terminals.length, 1, "no installer terminal: only the resume");
     await ext.resumeSession(item, missing, undefined, () => CLAUDE);
     await tick();
     assert.strictEqual(calls.infoPrompts.length, 1, "only once");
@@ -513,7 +510,7 @@ describe("manifest", () => {
   it("activates at startup (to finish a pending resume) and shows Launch profiles expanded", () => {
     assert.deepStrictEqual(pkg.activationEvents, ["onStartupFinished"]);
     assert.strictEqual(pkg.contributes.views.a4sx.find((v: any) => v.id === "a4sx.profiles").visibility, "visible");
-    assert.strictEqual(pkg.version, "0.3.2");
+    assert.strictEqual(pkg.version, "0.4.0");
   });
 
   it("the registered command, without an item (palette), does nothing", async () => {
