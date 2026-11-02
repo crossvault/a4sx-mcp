@@ -117,11 +117,11 @@ describe("remote window, but the extension runs on this computer", () => {
 describe("remote windows: a4sx not found", () => {
   beforeEach(() => remoteWindow());
 
-  it("names the remote, says to install the CLI there, and offers the two buttons", async () => {
+  it("names the remote, says to install the CLI there, and offers the three buttons", async () => {
     await ext.saveSession(missing);
     assert.deepStrictEqual(calls.errors, [{
       message: "a4sx isn't installed on SSH. Install it there, then try again.",
-      items: ["Copy install command", "Open settings"],
+      items: ["Install a4sx CLI", "Copy install command", "Open settings"],
     }]);
     assert.strictEqual(calls.terminals.length, 0);
     assert.strictEqual(calls.clipboard, undefined, "nothing copied until clicked");
@@ -205,7 +205,7 @@ describe("remote windows: a4sx not found", () => {
       await ext.saveSession(missing);
       assert.deepStrictEqual(calls.errors, [{
         message: "The a4sx command was not found. Install the a4sx CLI to save and resume sessions from VS Code, or set a4sx.cliPath to its full path.",
-        items: ["How to install"],
+        items: ["Install a4sx CLI", "How to install"],
       }]);
     }
   });

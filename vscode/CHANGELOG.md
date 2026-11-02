@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
+
+- New view **Cells**: the mesh cells the a4sx CLI has stored on this computer, with their mesh, the default cell, and whether a mesh admin still has to approve them. The list comes from `a4sx mesh cells --json`. The extension never reads the cells' keys.
+- **Start in terminal** on a cell runs `a4sx launch --cell <name> --mesh-reduced-isolation` in a new terminal in your workspace folder. **New cell** runs `a4sx launch --new-cell --mesh-reduced-isolation`, which has you approve the cell in your browser. The first start on a computer explains reduced isolation in a dialog, and starts only if you accept. The answer is remembered for that computer.
+- **Set as default**, **Forget on this computer** (after you confirm) and **Open in browser** on each cell.
+- If the Claude Code extension is installed, cells use the `claude` that comes with it (passed to the CLI as `A4SX_CLAUDE`).
+- **Install a4sx CLI**: when the a4sx CLI isn't found, the extension installs it itself. It finds Python 3.10 or newer (on Windows, it offers `winget install Python.Python.3.12` if there is none), downloads the CLI from the a4sx server, checks each file's SHA-256 checksum, and saves it in its own storage with a small launcher. It needs no admin rights and no `PATH` change. It updates that copy once a day in the background. **Update a4sx CLI** updates it in a terminal.
+- **Install a4sx** (offered once when you resume without the CLI) and the "a4sx command was not found" message now use this install instead of an installer command.
 
 - New view **Meshes**: your a4sx meshes and your cells in each one, with their status, presence, reach and last seen, grouped by machine when they run on more than one. The cells are read when the view is shown or a mesh is expanded, then every 30 seconds while it is visible; a busy server is asked less often. The view appears only when your a4sx server has meshes. If the server doesn't list cells yet, the view shows your meshes alone.
 - **Start session in mesh** runs `a4sx launch --ipc-proxy --mesh <id> --as <name>` in a new terminal, with a name you type, in an active mesh you're a member of. It first runs the CLI's isolation check: a host that isn't ready is refused with the CLI's reason and the commands that fix it, and reduced isolation needs an explicit click for that start.
