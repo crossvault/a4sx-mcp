@@ -55,6 +55,8 @@ afterEach(() => Object.assign(ext.runtime, savedRuntime));
 async function activateWith(routes: Record<string, Answer[]>, scopes: string[] | null = ALL) {
   const net = fakeFetch(routes);
   ext.runtime.fetch = net.fetch;
+  // The server's list (as before 0.5.0): no a4sx CLI answers for the Launch profiles view here.
+  ext.runtime.cliProfiles = async () => ({ kind: "unavailable" });
   const logins: LoginRequest[] = [];
   ext.runtime.login = async (_c, req) => {
     logins.push(req);
@@ -476,7 +478,9 @@ describe("Launch profile actions", () => {
     assert.strictEqual(net.seen.filter((r) => r.method !== "GET").length, 0);
     assert.strictEqual(calls.modals.length, 0);
     const pkg = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "..", "..", "..", "package.json"), "utf8"));
-    assert.ok(!pkg.contributes.commands.some((c: any) => c.command === "a4sx.setDefaultProfile"), "no Set as default");
+    // 0.5.0: "Set as default" exists only on the a4sx CLI's profiles (it runs `a4sx profile --set-default ID`), never on the server's.
+    const setDef = pkg.contributes.menus["view/item/context"].filter((m: any) => m.command === "a4sx.setDefaultProfile").map((m: any) => m.when);
+    assert.ok(setDef.length > 0 && setDef.every((w: string) => w === "view == a4sx.profiles && viewItem == a4sx.cliProfile"), "no Set as default on the server's profiles");
     assert.strictEqual(pkg.contributes.commands.find((c: any) => c.command === ext.CMD_CHANGE_DEFAULT).title, "Change default with the a4sx CLI or on the website");
   });
 
@@ -524,7 +528,10 @@ describe("Launch profile actions", () => {
     assert.deepStrictEqual(net.seen.filter((r) => r.method === "DELETE").map((r) => new URL(r.url).pathname), ["/library/profiles/plain"]);
     const pkg = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "..", "..", "..", "package.json"), "utf8"));
     const del = pkg.contributes.menus["view/item/context"].filter((m: any) => m.command === ext.CMD_DELETE_PROFILE);
-    assert.deepStrictEqual(del.map((m: any) => m.when), ["view == a4sx.profiles && viewItem == a4sx.profile"], "the menu hides Delete for the default and locked profiles");
+    // 0.5.0: also on a profile the a4sx CLI lists (a4sx.cliProfile; never its default), where the CLI deletes it.
+    const re = new RegExp(del[0].when.match(/viewItem =~ \/(.*)\/$/)[1]);
+    assert.deepStrictEqual(["a4sx.profile", "a4sx.profile.default", "a4sx.profile.locked", "a4sx.cliProfile", "a4sx.cliProfile.default"].map((c) => re.test(c)),
+      [true, false, false, true, false], "the menu hides Delete for the default and locked profiles");
   });
   it("Create asks for id, name and model only, with no default modal (there is no set-default for keys)", async () => {
     const { sb, net } = await activateWith({

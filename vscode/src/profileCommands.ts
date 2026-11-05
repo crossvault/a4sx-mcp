@@ -17,6 +17,9 @@ import {
   ProfilesProvider, shownFlags, sortedProfiles,
 } from "./profilesView";
 import { callWithScope, ensureScope, errorText, ScopedAuth } from "./stepUp";
+import { CellCommandDeps, cliErrorText, ensureCli } from "./cellCommands";
+import { OPERATOR, OPERATOR_HEADER, profileCopyArgs, profileDeleteArgs, profileSetDefaultArgs } from "./cliJson";
+import { CliProfileItem } from "./profilesView";
 
 export const PROFILE_TEXTS = {
   createTitle: "Create launch profile",
@@ -357,4 +360,133 @@ export async function pickProfileForResume(auth: ScopedAuth, client: () => Clien
     { placeHolder: PROFILE_TEXTS.pickForResume },
   );
   return picked ? { id: picked.id } : undefined;
+}
+
+// --- 0.5.0: the actions on the a4sx CLI's profiles (Duplicate, Set default, Delete run the CLI) ---------
+
+export const CLI_PROFILE_CMD_TEXTS = {
+  duplicateTitle: (id: string) => `Duplicate launch profile "${id}"`,
+  duplicateIdPrompt: "Id of the copy: lowercase letters, digits, - and _",
+  operatorPrompt: (current: string | undefined) =>
+    current
+      ? `Router operator (${OPERATOR_HEADER}) for the copy. Leave empty to keep "${current}".`
+      : `Router operator (${OPERATOR_HEADER}) for the copy. Leave empty for none.`,
+  operatorInvalid: "Use up to 128 letters, digits and . _ ~ + -, starting with a letter or digit.",
+  confirmReplace: (dst: string, src: string) => `A launch profile "${dst}" already exists. Replace it with a copy of "${src}"?`,
+  replace: "Replace",
+  duplicated: (dst: string, src: string) => `Created the launch profile "${dst}" as a copy of "${src}".`,
+  nowDefault: (id: string) => `"${id}" is now your default launch profile.`,
+  confirmDelete: (id: string) => `Delete the launch profile "${id}"?`,
+  deleteUsed: (n: number) => (n === 1 ? "1 cell on this computer uses it." : `${n} cells on this computer use it.`),
+  deleted: (id: string) => `Deleted the launch profile "${id}".`,
+  failed: (what: string, detail: string | undefined) => `Could not ${what}${detail ? `: ${detail}` : "."}`,
+  notOnServer: (id: string) => `The launch profile "${id}" isn't in your a4sx account. Refresh the list.`,
+};
+
+export function validateOperator(raw: string): string | undefined {
+  const v = raw.trim();
+  return !v || OPERATOR.test(v) ? undefined : CLI_PROFILE_CMD_TEXTS.operatorInvalid;
+}
+
+/** What the CLI profile actions need: the Cells view's CLI deps, and the Profiles view to refresh. */
+export interface CliProfileDeps {
+  cells: CellCommandDeps;
+  view: ProfilesProvider;
+}
+
+async function runProfileCli(deps: CliProfileDeps, args: string[], what: string): Promise<boolean> {
+  const cli = await ensureCli(deps.cells);
+  if (!cli) {
+    return false;
+  }
+  const out = await deps.cells.run(cli, args, 60_000);
+  deps.view.refresh();
+  if (out.code !== 0) {
+    await vscode.window.showErrorMessage(CLI_PROFILE_CMD_TEXTS.failed(what, cliErrorText(out)));
+    return false;
+  }
+  return true;
+}
+
+/** Duplicate: the copy's id, an optional new router operator, then `a4sx profile --copy SRC --name DST [--header …] [--force]`. */
+export async function duplicateProfile(deps: CliProfileDeps, item: CliProfileItem | undefined): Promise<boolean> {
+  if (!(item instanceof CliProfileItem)) {
+    return false;
+  }
+  const t = CLI_PROFILE_CMD_TEXTS;
+  const src = item.profile.id;
+  const title = t.duplicateTitle(src);
+  const id = await input(title, t.duplicateIdPrompt, `${src}-copy`.slice(0, 64), (v) => validateProfileId(v));
+  if (id === undefined) {
+    return false;
+  }
+  const dst = id.trim();
+  const op = await input(title, t.operatorPrompt(item.profile.operator), "", validateOperator, item.profile.operator);
+  if (op === undefined) {
+    return false;
+  }
+  const taken = deps.view.cliData?.profiles.some((p) => p.id === dst) ?? false;
+  if (taken && !(await confirm(t.confirmReplace(dst, src), t.replace))) {
+    return false;
+  }
+  const args = profileCopyArgs(src, dst, op.trim() || undefined, taken);
+  if (!args || !(await runProfileCli(deps, args, "duplicate the launch profile"))) {
+    return false;
+  }
+  void vscode.window.showInformationMessage(t.duplicated(dst, src));
+  return true;
+}
+
+/** Set default: `a4sx profile --set-default ID`. */
+export async function setDefaultProfile(deps: CliProfileDeps, item: CliProfileItem | undefined): Promise<boolean> {
+  const args = item instanceof CliProfileItem ? profileSetDefaultArgs(item.profile.id) : undefined;
+  if (!args || !(await runProfileCli(deps, args, "make it the default"))) {
+    return false;
+  }
+  void vscode.window.showInformationMessage(CLI_PROFILE_CMD_TEXTS.nowDefault(item!.profile.id));
+  return true;
+}
+
+/** Delete: asks first (saying how many cells use it), then `a4sx profile --delete ID`. */
+export async function deleteCliProfile(deps: CliProfileDeps, item: CliProfileItem | undefined): Promise<boolean> {
+  const args = item instanceof CliProfileItem ? profileDeleteArgs(item.profile.id) : undefined;
+  if (!args) {
+    return false;
+  }
+  const t = CLI_PROFILE_CMD_TEXTS;
+  const n = item!.profile.usedByCells;
+  const choice = await vscode.window.showWarningMessage(t.confirmDelete(item!.profile.id), { modal: true, ...(n ? { detail: t.deleteUsed(n) } : {}) }, PROFILE_TEXTS.delete);
+  if (choice !== PROFILE_TEXTS.delete || !(await runProfileCli(deps, args, "delete the launch profile"))) {
+    return false;
+  }
+  void vscode.window.showInformationMessage(t.deleted(item!.profile.id));
+  return true;
+}
+
+/**
+ * Edit on a profile the CLI listed: the existing flow (name and model with the sidebar's key, the rest
+ * through the CLI or the website), on the server's copy of that profile.
+ */
+export async function editCliProfile(deps: ProfileDeps, item: CliProfileItem | undefined): Promise<void> {
+  if (!(item instanceof CliProfileItem)) {
+    return;
+  }
+  const token = await ensureScope(deps.auth, SCOPE_PROFILES_WRITE);
+  if (!token) {
+    return;
+  }
+  let state: ProfilesState;
+  try {
+    state = await listProfiles(deps.client(), token);
+  } catch (e) {
+    await vscode.window.showErrorMessage(errorText(e));
+    return;
+  }
+  const found = state.profiles.find(([id]) => id === item.profile.id);
+  if (!found) {
+    await vscode.window.showErrorMessage(CLI_PROFILE_CMD_TEXTS.notOnServer(item.profile.id));
+    deps.view.refresh();
+    return;
+  }
+  await editProfile(deps, new ProfileItem(found[0], found[1], found[0] === state.default));
 }

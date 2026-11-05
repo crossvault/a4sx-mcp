@@ -51,8 +51,8 @@ export interface Calls {
   modalChoices: (string | undefined)[];
   /** What the next input boxes resolve to, in order; when empty, `nextInput` answers. */
   inputQueue: (string | undefined)[];
-  /** What the next quick picks resolve to (indexes), in order; when empty, `nextPick` answers. */
-  pickQueue: (number | undefined)[];
+  /** What the next quick picks resolve to (indexes; an array of indexes for canPickMany), in order; when empty, `nextPick` answers. */
+  pickQueue: (number | number[] | undefined)[];
   /** vscode.env.shell: the default shell of the terminals (undefined = unknown). */
   shell: string | undefined;
   /** Non-modal information messages that offered buttons, and what the next one resolves to. */
@@ -351,6 +351,9 @@ const fake = {
     async showQuickPick(items: any[], options: unknown) {
       calls.quickPicks.push({ items, options });
       const pick = calls.pickQueue.length ? calls.pickQueue.shift() : calls.nextPick;
+      if (Array.isArray(pick)) {
+        return pick.map((i) => items[i]);
+      }
       return pick === undefined ? undefined : items[pick];
     },
   },
@@ -398,6 +401,11 @@ const fake = {
     },
   },
 };
+
+// The tests must not depend on where they run: inside an a4sx session (A4SX_HARNESS / A4SX_MESH_SESSION)
+// the extension refuses every CLI call. The tests of that refusal set these themselves.
+delete process.env.A4SX_HARNESS;
+delete process.env.A4SX_MESH_SESSION;
 
 const mod = Module as unknown as { _load: (request: string, ...rest: unknown[]) => unknown };
 const origLoad = mod._load;

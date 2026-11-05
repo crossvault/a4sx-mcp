@@ -18,7 +18,7 @@ import {
   CELL_CMD_TEXTS, CellCommandDeps, cliDetail, CONSENT_KEY, consentReducedIsolation, dailyUpdate, forgetCell, installCli, LAST_UPDATE_KEY, newCell, openCellOnWeb,
   setDefaultCell, startCell,
 } from "../../cellCommands";
-import { CELL_TEXTS, CellsLoad, CellsProvider, CliOutput, CliResolution, LocalCellItem, looksTooOld } from "../../cellsView";
+import { CELL_TEXTS, CellsLoad, CellsProvider, CliOutput, CliResolution, LocalCellItem, looksTooOld, MeshGroupItem } from "../../cellsView";
 import {
   bundledClaude, CLI_FILES, downloadCli, execSpec, Fetch, findPython, hashMatches, installedLauncher, launcherName, launcherText, ProvisionError, pythonCandidates,
   sha256Hex, updateArgs, updateDue, UPDATE_EVERY_MS, writeLauncher,
@@ -360,22 +360,40 @@ function harness(opts: {
   return { deps, runs, provider, states };
 }
 
+/** The local cells under their mesh groups (0.5.0), in the CLI's order. */
 async function items(h: Harness): Promise<LocalCellItem[]> {
-  return (await h.provider.getChildren()) as LocalCellItem[];
+  const out: LocalCellItem[] = [];
+  for (const top of await h.provider.getChildren()) {
+    if (top instanceof MeshGroupItem) {
+      out.push(...((await h.provider.getChildren(top)).filter((i) => i instanceof LocalCellItem) as LocalCellItem[]));
+    }
+  }
+  return out.sort((a, b) => h.provider.cells.indexOf(a.cell) - h.provider.cells.indexOf(b.cell));
 }
 
 describe("Cells view", () => {
   beforeEach(resetCalls);
 
-  it("lists the stored cells, the default first, with contextValues for the actions", async () => {
+  it("an older CLI's list: an update line, then the cells grouped by mesh (standalone last), default first; legacy contexts", async () => {
     const h = harness();
+    const top = await h.provider.getChildren();
+    assert.deepStrictEqual(h.runs, [{ cli: "/opt/a4sx bin/a4sx", args: ["--version"] }, { cli: "/opt/a4sx bin/a4sx", args: ["mesh", "cells", "--json"] }]);
+    assert.deepStrictEqual(top.map((i) => [i.label, i.description, i.contextValue]), [
+      [CELL_TEXTS.olderCli, undefined, undefined],
+      ["Lab", "1 cell here", "a4sx.cellMesh"],
+      ["Team mesh", "2 cells here", "a4sx.cellMesh"],
+      [CELL_TEXTS.standaloneGroup, "1 cell here", "a4sx.cellMesh.standalone"],
+    ]);
+    assert.strictEqual(top[0].command?.command, "a4sx.updateCli");
+    const team = await h.provider.getChildren(top[2]);
+    assert.deepStrictEqual(team.map((i) => [i.label, i.description, i.contextValue]), [
+      ["build", "default", "a4sx.localCell.default.legacy"],
+      ["docs", "", "a4sx.localCell.legacy"],
+    ]);
+    assert.strictEqual(h.runs.length, 2, "no `mesh peers` for an older CLI");
     const list = await items(h);
-    assert.deepStrictEqual(h.runs, [{ cli: "/opt/a4sx bin/a4sx", args: ["mesh", "cells", "--json"] }]);
-    assert.deepStrictEqual(list.map((i) => [i.label, i.description, i.contextValue]), [
-      ["build", "default · Team mesh", "a4sx.localCell.default"],
-      ["build", "Lab · waits for an admin", "a4sx.localCell"],
-      ["spare", "standalone", "a4sx.localCell.standalone"],
-      ["docs", "Team mesh", "a4sx.localCell"],
+    assert.deepStrictEqual(list.map((i) => [i.label, i.contextValue]), [
+      ["build", "a4sx.localCell.default.legacy"], ["build", "a4sx.localCell.legacy"], ["spare", "a4sx.localCell.standalone.legacy"], ["docs", "a4sx.localCell.legacy"],
     ]);
     assert.strictEqual(new Set(list.map((i) => i.id)).size, 4, "unique ids");
     assert.match(String(list[0].tooltip), /Server: session-exchange\.com/);
@@ -388,7 +406,7 @@ describe("Cells view", () => {
     assert.deepStrictEqual(h.states, [{ kind: "no-cli" }]);
     const e = harness({ answers: { "mesh cells --json": { code: 0, stdout: "[]", stderr: "" } } });
     assert.deepStrictEqual(await e.provider.getChildren(), []);
-    assert.deepStrictEqual(e.states, [{ kind: "ok", cells: [] }]);
+    assert.deepStrictEqual(e.states, [{ kind: "ok", cells: [], legacy: true }]);
   });
 
   it("an older CLI says so and offers the update; a failed read offers Refresh and the update", async () => {
@@ -495,7 +513,7 @@ describe("Cells: actions", () => {
     const h = harness();
     const list = await items(h);
     assert.ok(await setDefaultCell(h.deps, list[1]));
-    assert.deepStrictEqual(h.runs.map((r) => r.args.join(" ")), ["mesh cells --json", `mesh cell default build --mesh ${MESH2}`, "mesh cells --json"]);
+    assert.deepStrictEqual(h.runs.map((r) => r.args.join(" ")), ["--version", "mesh cells --json", `mesh cell default build --mesh ${MESH2}`, "mesh cells --json"]);
     assert.deepStrictEqual(calls.infos, [CELL_CMD_TEXTS.nowDefault("build")]);
   });
 
@@ -510,10 +528,10 @@ describe("Cells: actions", () => {
     const list = await items(h);
     assert.ok(!(await forgetCell(h.deps, list[3])));
     assert.deepStrictEqual(calls.modals.map((m) => [m.message, m.items, m.detail]), [[CELL_CMD_TEXTS.forgetTitle("docs"), [CELL_CMD_TEXTS.forget], CELL_CMD_TEXTS.forgetDetail]]);
-    assert.strictEqual(h.runs.length, 1);
+    assert.strictEqual(h.runs.length, 2, "only the version and the list");
     calls.modalChoices.push(CELL_CMD_TEXTS.forget);
     assert.ok(await forgetCell(h.deps, list[3]));
-    assert.deepStrictEqual(h.runs.map((r) => r.args.join(" ")).slice(1), ["mesh cell forget docs", "mesh cells --json"]);
+    assert.deepStrictEqual(h.runs.map((r) => r.args.join(" ")).slice(2), ["mesh cell forget docs", "mesh cells --json"]);
   });
 
   it("Open in browser: the mesh's page on the configured server", async () => {

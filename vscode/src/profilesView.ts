@@ -10,6 +10,8 @@ import { ApiError, Client, listProfiles, MESSAGES, Profile, ProfilesState, SCOPE
 const STEP_UP_SCOPES: readonly string[] = [SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, SCOPE_ORGANIZE];
 const SERVER_LINE_MAX = 200;
 import { MessageItem } from "./sessionsView";
+import { CliProfile, cliGate, parseCliError, parseCliVersion, parseProfilesAnswer, PROFILES_ARGS, ProfilesAnswer, VERSION_ARGS } from "./cliJson";
+import type { CliResolution, CliRunner } from "./cellsView";
 
 export const PROFILE_CONTEXT = "a4sx.profile";
 export const DEFAULT_PROFILE_CONTEXT = "a4sx.profile.default";
@@ -157,6 +159,103 @@ export function sortedProfiles(state: ProfilesState): [string, Profile][] {
   });
 }
 
+// --- 0.5.0: the profiles as the a4sx CLI lists them (`a4sx profiles --json`, CLI 0.25.0+) -----------------
+
+export const CLI_PROFILE_CONTEXT = "a4sx.cliProfile";
+export const CLI_DEFAULT_PROFILE_CONTEXT = "a4sx.cliProfile.default";
+export const PROFILE_DETAIL_CONTEXT = "a4sx.profileDetail";
+export const CLI_PROFILE_TEXTS = {
+  harness: "Harness",
+  model: "Model",
+  baseUrl: "Base URL",
+  operator: "Router operator",
+  headers: "Header names",
+  flags: "Flags",
+  env: "Env keys",
+  usedBy: "Used by",
+  none: "none",
+  cells: (n: number) => (n === 0 ? "no cells" : n === 1 ? "1 cell" : `${n} cells`),
+  updateCli: "Update a4sx to 0.25.0 or newer to see each profile's details here and to duplicate profiles.",
+  cliFailed: "Could not read the launch profiles from the a4sx CLI.",
+};
+
+/** A profile's details as shown: header NAMES and env KEYS only; of the header values, only the router operator. */
+export function profileDetails(p: CliProfile): [string, string][] {
+  const t = CLI_PROFILE_TEXTS;
+  const list = (v: readonly string[]) => (v.length ? v.join(", ") : t.none);
+  return [
+    [t.harness, p.harness ?? NOT_SET],
+    [t.model, p.model ?? NOT_SET],
+    [t.baseUrl, displayAddress(p.base_url) ?? NOT_SET],
+    [t.operator, p.operator ?? NOT_SET],
+    [t.headers, list(p.headerNames)],
+    [t.flags, shownFlags(p.flags).join(" ") || t.none],
+    [t.env, list(p.envKeys)],
+    [t.usedBy, t.cells(p.usedByCells)],
+  ];
+}
+
+export class CliProfileItem extends vscode.TreeItem {
+  constructor(public readonly profile: CliProfile, public readonly isDefault: boolean) {
+    super(profile.id, vscode.TreeItemCollapsibleState.Collapsed);
+    this.id = `cliProfile:${profile.id}`;
+    this.description = [isDefault ? DEFAULT_MARK : undefined, profile.model, displayAddress(profile.base_url), profile.operator ? `operator ${profile.operator}` : undefined]
+      .filter(Boolean).join(" · ");
+    this.tooltip = [`ID: ${profile.id}${isDefault ? " (default)" : ""}`, ...profileDetails(profile).map(([k, v]) => `${k}: ${v}`)].join("\n");
+    this.contextValue = isDefault ? CLI_DEFAULT_PROFILE_CONTEXT : CLI_PROFILE_CONTEXT;
+    this.iconPath = new vscode.ThemeIcon(isDefault ? "star-full" : "rocket");
+  }
+}
+
+export class ProfileDetailItem extends vscode.TreeItem {
+  constructor(profileId: string, label: string, value: string) {
+    super(label, vscode.TreeItemCollapsibleState.None);
+    this.id = `cliProfile:${profileId}/${label}`;
+    this.description = value;
+    this.tooltip = `${label}: ${value}`;
+    this.contextValue = PROFILE_DETAIL_CONTEXT;
+  }
+}
+
+/** The default first, then by id. */
+export function sortedCliProfiles(a: ProfilesAnswer): CliProfile[] {
+  return [...a.profiles].sort((x, y) => Number(y.id === a.default) - Number(x.id === a.default) || x.id.localeCompare(y.id));
+}
+
+export type CliProfilesLoad =
+  | { kind: "ok"; data: ProfilesAnswer }
+  /** No CLI, a bad a4sx.cliPath, a remote window, or inside an a4sx session: the server's list as before. */
+  | { kind: "unavailable" }
+  | { kind: "too-old" }
+  | { kind: "error"; message: string };
+
+export interface CliProfilesSource {
+  load(): Promise<CliProfilesLoad>;
+}
+
+/** Reads `a4sx profiles --json` behind the version gate (`gate` defaults to running `a4sx --version`). */
+export async function loadCliProfiles(
+  resolve: () => CliResolution, run: CliRunner, gate?: (cli: string) => Promise<"ok" | "too-old" | "unknown">,
+): Promise<CliProfilesLoad> {
+  const r = resolve();
+  if (r.kind !== "found") {
+    return { kind: "unavailable" };
+  }
+  const g = gate ? await gate(r.path) : cliGate(parseCliVersion((await run(r.path, VERSION_ARGS, 15_000)).stdout));
+  if (g === "too-old") {
+    return { kind: "too-old" };
+  }
+  const out = await run(r.path, PROFILES_ARGS, 30_000);
+  if (out.code !== 0 && /invalid choice|unrecognized arguments/.test(out.stderr)) {
+    return { kind: "too-old" };
+  }
+  const data = out.code === 0 ? parseProfilesAnswer(out.stdout) : undefined;
+  if (data) {
+    return { kind: "ok", data };
+  }
+  return { kind: "error", message: parseCliError(out.stdout)?.message ?? CLI_PROFILE_TEXTS.cliFailed };
+}
+
 export class ProfilesProvider implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Disposable {
   private readonly changed = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.changed.event;
@@ -166,10 +265,15 @@ export class ProfilesProvider implements vscode.TreeDataProvider<vscode.TreeItem
   /** A list a write just returned: the next getChildren shows it instead of asking again. */
   private pending: ProfilesState | undefined;
 
+  /** The CLI's list, when the view shows it (0.5.0); undefined: the server's list. */
+  cliData: ProfilesAnswer | undefined;
+
   constructor(
     private readonly auth: ProfileTokenSource,
     private readonly client: () => Client,
     private readonly onState: (state: ProfilesViewState) => void,
+    private readonly cli?: CliProfilesSource,
+    private readonly onSource: (fromCli: boolean) => void = () => undefined,
   ) {}
 
   refresh(): void {
@@ -193,9 +297,37 @@ export class ProfilesProvider implements vscode.TreeDataProvider<vscode.TreeItem
   }
 
   async getChildren(parent?: vscode.TreeItem): Promise<vscode.TreeItem[]> {
+    if (parent instanceof CliProfileItem) {
+      return profileDetails(parent.profile).map(([k, v]) => new ProfileDetailItem(parent.profile.id, k, v));
+    }
     if (parent) {
       return [];
     }
+    // 0.5.0: the a4sx CLI's list (with header names, env keys and the cells using each profile) when it has
+    // one; else the server's list with the sidebar's sign-in, as before.
+    const cli: CliProfilesLoad = this.cli ? await this.cli.load().catch((): CliProfilesLoad => ({ kind: "unavailable" })) : { kind: "unavailable" };
+    if (cli.kind === "ok") {
+      this.cliData = cli.data;
+      this.pending = undefined;
+      this.onSource(true);
+      if (cli.data.profiles.length === 0) {
+        this.set("empty");
+        return [new MessageItem(NO_PROFILES, "add", { command: "a4sx.createProfile", title: "Create" })];
+      }
+      this.set("ok");
+      return sortedCliProfiles(cli.data).map((p) => new CliProfileItem(p, p.id === cli.data.default));
+    }
+    this.cliData = undefined;
+    this.onSource(false);
+    const api = await this.serverChildren();
+    const note = cli.kind === "too-old"
+      ? new MessageItem(CLI_PROFILE_TEXTS.updateCli, "warning", { command: "a4sx.updateCli", title: "Update a4sx CLI" })
+      : cli.kind === "error" ? new MessageItem(cli.message, "warning", { command: "a4sx.refreshProfiles", title: "Refresh" }) : undefined;
+    // Signed out, the tree stays empty so the welcome's "Sign in" shows.
+    return note && api.length ? [note, ...api] : api;
+  }
+
+  private async serverChildren(): Promise<vscode.TreeItem[]> {
     let data: ProfilesState;
     try {
       const token = await this.auth.token();

@@ -6,6 +6,7 @@
 // name or id that doesn't match the CLI's own rule drops the row. The answer never holds a key.
 import * as os from "os";
 import * as path from "path";
+import type { CellPath, LocalState, MeshPolicy, RegistryState } from "./cliJson";
 
 /** The CLI's MESH_CELL_NAME_RE. */
 export const CELL_NAME = /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/;
@@ -35,6 +36,17 @@ export interface LocalCell {
   server?: string;
   /** The cell's launch profile id, when the CLI says which (newer CLIs only). */
   launchProfile?: string;
+  /** CLI 0.25.0+: whether it runs on this computer now, and its pid then. */
+  localState?: LocalState;
+  pid?: number;
+  /** CLI 0.25.0+: the mesh registry's state of the cell. */
+  registryState?: RegistryState;
+  /** CLI 0.25.0+: how this computer reaches the cell's mesh peers. */
+  path?: CellPath;
+  /** CLI 0.25.0+: the mesh's join policy (null: the CLI doesn't know it). */
+  meshPolicy?: MeshPolicy | null;
+  /** CLI 0.25.0+: the cell's tags (not shown yet). */
+  tags?: string[];
 }
 
 // eslint-disable-next-line no-control-regex
@@ -166,20 +178,82 @@ export function cellForgetArgs(cell: LocalCell, all: readonly LocalCell[]): stri
   return p && ["mesh", "cell", "forget", ...p];
 }
 
+export const AUTO_ALLOW_FLAG = "--auto-allow-ipc-messages";
+/** A saved session's id as `--a4sx-session=` takes it (terminalCommand.SESSION_ID). */
+const LIBRARY_SESSION = /^[A-Za-z0-9._:-]{1,128}$/;
+/** A Claude Code session id (resume.UUID). */
+const CLAUDE_SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The two toggles of "Run as cell in terminal". */
+export interface LaunchOptions {
+  /** "Keep my sign-in (reduced isolation)": --mesh-reduced-isolation. */
+  reduced: boolean;
+  /** "Deliver messages from mesh peers without asking": --auto-allow-ipc-messages. */
+  autoAllow: boolean;
+}
+
+/** What the cell resumes: a session on this computer (`-- --resume ID`), or a saved one (`--a4sx-session=ID`). */
+export type ResumeTarget = { kind: "local"; sessionId: string } | { kind: "library"; id: string };
+
+export function launchFlags(o: LaunchOptions): string[] {
+  return [...(o.reduced ? [REDUCED_FLAG] : []), ...(o.autoAllow ? [AUTO_ALLOW_FLAG] : [])];
+}
+
+/** The end of the launch command for a session; [] for none; undefined when its id isn't valid. */
+export function resumeTail(t: ResumeTarget | undefined): string[] | undefined {
+  if (!t) {
+    return [];
+  }
+  if (t.kind === "local") {
+    return CLAUDE_SESSION.test(t.sessionId) ? ["--", "--resume", t.sessionId] : undefined;
+  }
+  return LIBRARY_SESSION.test(t.id) ? [`--a4sx-session=${t.id}`] : undefined;
+}
+
+/** `launch --cell NAME [--mesh ID] [flags] [--a4sx-session=ID | -- --resume ID]`; undefined for a standalone or bad cell. */
+export function runAsCellArgs(cell: LocalCell, all: readonly LocalCell[], o: LaunchOptions, target?: ResumeTarget): string[] | undefined {
+  const tail = resumeTail(target);
+  if (!valid(cell) || !startableCell(cell) || !tail) {
+    return undefined;
+  }
+  return ["launch", "--cell", cell.name, ...(nameShared(cell, all) ? ["--mesh", cell.meshId!] : []), ...launchFlags(o), ...tail];
+}
+
+/** `launch --new-cell [flags] [--a4sx-session=ID | -- --resume ID]`: the browser approval picks the mesh and profile. */
+export function newCellRunArgs(o: LaunchOptions, target?: ResumeTarget): string[] | undefined {
+  const tail = resumeTail(target);
+  return tail && ["launch", "--new-cell", ...launchFlags(o), ...tail];
+}
+
+/** `mesh cell rename OLD NEW [--mesh ID|standalone]`; undefined when the new name isn't one the CLI takes. */
+export function cellRenameArgs(cell: LocalCell, all: readonly LocalCell[], newName: string): string[] | undefined {
+  const p = pickArgs(cell, all);
+  return p && CELL_NAME.test(newName) ? ["mesh", "cell", "rename", cell.name, newName, ...p.slice(1)] : undefined;
+}
+
+/** `mesh cell stop NAME [--mesh ID]`: only for a cell running on this computer. */
+export function cellStopArgs(cell: LocalCell, all: readonly LocalCell[]): string[] | undefined {
+  const p = pickArgs(cell, all);
+  return p && cell.localState === "running" ? ["mesh", "cell", "stop", ...p] : undefined;
+}
+
 /** The page for a cell on the website: its mesh's page, or the meshes page for a standalone cell. */
 export function cellPageUrl(base: string, cell: LocalCell): string {
   const origin = cell.server ?? base.replace(/\/+$/, "");
   return cell.meshId ? `${origin}/meshes/m/${encodeURIComponent(cell.meshId)}` : `${origin}/meshes`;
 }
 
-/** The view's description of a cell: default, mesh (or standalone), server, profile, state. */
-export function localCellDescription(cell: LocalCell, defaultServer: string): string {
+/** The view's description of a cell: default, mesh (or standalone; left out under its mesh group), server, profile, state. */
+export function localCellDescription(cell: LocalCell, defaultServer: string, grouped = false): string {
   const host = cell.server && cell.server !== defaultServer.replace(/\/+$/, "") ? cell.server.replace(/^https:\/\//, "") : undefined;
   return [
     cell.isDefault ? "default" : undefined,
-    cell.meshId ? cell.meshName ?? cell.meshId : "standalone",
+    grouped ? undefined : cell.meshId ? cell.meshName ?? cell.meshId : "standalone",
     host,
     cell.launchProfile ? `profile ${cell.launchProfile}` : undefined,
+    cell.localState,
+    cell.registryState ? `registry ${cell.registryState}` : undefined,
+    cell.path ? `path ${cell.path}` : undefined,
     cell.needsApproval ? "waits for an admin" : undefined,
     cell.duplicate ? "stored twice" : undefined,
   ].filter(Boolean).join(" · ");
@@ -191,6 +265,9 @@ export function localCellTooltip(cell: LocalCell, defaultServer: string): string
     cell.meshId ? `Mesh: ${cell.meshName ? `${cell.meshName} (${cell.meshId})` : cell.meshId}` : "Standalone: add it to a mesh in the browser to start it.",
     `Server: ${(cell.server ?? defaultServer).replace(/^https:\/\//, "")}`,
     ...(cell.launchProfile ? [`Launch profile: ${cell.launchProfile}`] : []),
+    ...(cell.localState ? [`On this computer: ${cell.localState}${cell.pid ? ` (pid ${cell.pid})` : ""}`] : []),
+    ...(cell.registryState ? [`Registry: ${cell.registryState}`] : []),
+    ...(cell.localState ? [`Path: ${cell.path ?? "none"}`] : []),
     `ID: ${cell.instanceId}`,
     ...(cell.created ? [`Stored: ${cell.created}`] : []),
     ...(cell.needsApproval ? ["Waits for a mesh admin to approve it."] : []),

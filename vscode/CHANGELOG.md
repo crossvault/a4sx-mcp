@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+- **Run as cell in terminal** on a session in **My sessions**: choose one of this computer's cells (name · mesh · launch profile) or **New cell…**, then two options: **Keep my sign-in (reduced isolation)** (`--mesh-reduced-isolation`, on by default) and **Deliver messages from mesh peers without asking** (`--auto-allow-ipc-messages`, off by default; turning it on shows a warning). A terminal then runs `a4sx launch --cell <cell> [options] -- --resume <session id>` in the folder the session ran in. A session that is only in your library runs with `--a4sx-session=<id>` instead. **New cell…** runs `a4sx launch --new-cell [options] …`, and the browser approval picks the mesh and launch profile.
+- **Cells** is grouped by mesh, with each mesh's join policy. Each cell shows its launch profile, whether it is stored or running here, its registry state and its path. Your cells in the same meshes on other machines appear read-only ("on another machine"). New actions: **Stop** (a cell running here), **Rename…** and **Copy launch command**. **Open in browser** is now **Open mesh in browser**, also on a mesh.
+- **Launch profiles** lists the profiles from the a4sx CLI when it is 0.25.0 or newer. Expand a profile for its details: harness, model, base URL, router operator, header names, flags, env keys, and how many cells use it. Header and env values are never shown, except the router operator. New actions: **Duplicate…** (`a4sx profile --copy`, with an optional new router operator), **Set as default** (`a4sx profile --set-default`) and **Delete** (`a4sx profile --delete`). **Edit** works as before.
+- With an a4sx CLI older than 0.25.0, the Cells and Launch profiles views say so and offer **Update the a4sx CLI**; the cells are still listed, and the profiles come from the a4sx server as before.
+- Inside an a4sx session (`A4SX_HARNESS=1` or `A4SX_MESH_SESSION=1` in VS Code's environment), the extension no longer runs the a4sx CLI at all, and says why. Every a4sx command must run as you, not as the session.
+
 ## 0.4.0
 
 - New view **Cells**: the mesh cells the a4sx CLI has stored on this computer, with their mesh, the default cell, and whether a mesh admin still has to approve them. The list comes from `a4sx mesh cells --json`. The extension never reads the cells' keys.
