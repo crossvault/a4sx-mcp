@@ -143,6 +143,8 @@ export interface SessionRow {
   harness?: string | { id?: string };
   versions?: number;
   version?: string;
+  /** The entry's session member ids ("lib-" + the first 12 letters and digits of the transcript's sessionId). */
+  sessions?: string[];
 }
 
 export async function listSessions(c: Client, token: string): Promise<SessionRow[]> {

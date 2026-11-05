@@ -8,12 +8,16 @@ import * as vscode from "vscode";
 import { createHash } from "crypto";
 import * as os from "os";
 import { CLI_NAME } from "./cli";
-import { cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, NEW_CELL_ARGS, showText } from "./cells";
-import { CellsProvider, CliResolution, CliRunner, LocalCellItem } from "./cellsView";
+import {
+  CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellRenameArgs, cellStopArgs, NEW_CELL_ARGS, showText,
+} from "./cells";
+import { CellsProvider, CliOutput, CliResolution, CliRunner, LocalCellItem, MeshGroupItem } from "./cellsView";
+import { IN_SESSION_MESSAGE, parseCliError } from "./cliJson";
 import {
   bundledClaude, downloadCli, Fetch, findPython, installedLauncher, ProvisionError, Runner, updateArgs, updateDue, WINGET_PYTHON_ARGS, writeLauncher,
 } from "./provision";
 import { openCommandTerminal, State } from "./resume";
+import { commandLine, programName, shellKind } from "./terminalCommand";
 
 export const CONSENT_KEY = "a4sx.cellReducedIsolationConsent";
 export const LAST_UPDATE_KEY = "a4sx.cliLastUpdate";
@@ -59,6 +63,16 @@ export const CELL_CMD_TEXTS = {
   howToInstall: "How to install",
   noStorage: "VS Code didn't give this extension a storage folder, so the a4sx CLI can't be installed here.",
   badServer: "The a4sx.serverUrl setting isn't a valid https address.",
+  stopTitle: (name: string) => `Stop the cell «${name}» on this computer?`,
+  stopDetail: "Its agent session ends. You can start the cell again from here.",
+  stop: "Stop",
+  stopped: (name: string) => `Stopped the cell «${name}».`,
+  renameTitle: (name: string) => `Rename the cell «${name}»`,
+  renamePrompt: "New name: lowercase letters, digits and -",
+  renameInvalid: "Use up to 48 lowercase letters, digits and -, starting and ending with a letter or digit.",
+  renameTaken: "Another cell in this mesh on this computer already has this name.",
+  renamed: (from: string, to: string) => `Renamed the cell «${from}» to «${to}».`,
+  copiedLaunch: "Copied the launch command.",
 };
 
 export interface CellCommandDeps {
@@ -126,6 +140,9 @@ export async function ensureCli(deps: CellCommandDeps): Promise<string | undefin
     case "remote-local":
       await vscode.window.showErrorMessage(CELL_CMD_TEXTS.remoteLocal);
       return undefined;
+    case "in-session":
+      await vscode.window.showErrorMessage(IN_SESSION_MESSAGE);
+      return undefined;
     case "no-cli": {
       const choice = await vscode.window.showInformationMessage(CELL_CMD_TEXTS.noCli, { modal: true }, CELL_CMD_TEXTS.installCli);
       if (choice !== CELL_CMD_TEXTS.installCli || !(await installCli(deps))) {
@@ -189,6 +206,11 @@ export function cliDetail(stderr: string): string | undefined {
   return showText(line?.replace(/^a4sx:\s*/, ""), 300);
 }
 
+/** What the CLI said about a refusal: its JSON error's message (0.25.0+), else its last stderr line. */
+export function cliErrorText(out: CliOutput): string | undefined {
+  return parseCliError(out.stdout)?.message ?? cliDetail(out.stderr);
+}
+
 export async function setDefaultCell(deps: CellCommandDeps, item: LocalCellItem | undefined): Promise<boolean> {
   if (!(item instanceof LocalCellItem)) {
     return false;
@@ -201,7 +223,7 @@ export async function setDefaultCell(deps: CellCommandDeps, item: LocalCellItem 
   const out = await deps.run(cli, args, 30_000);
   await deps.provider.refresh();
   if (out.code !== 0) {
-    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.cliFailed("make it the default", cliDetail(out.stderr)));
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.cliFailed("make it the default", cliErrorText(out)));
     return false;
   }
   void vscode.window.showInformationMessage(CELL_CMD_TEXTS.nowDefault(item.cell.name));
@@ -227,15 +249,17 @@ export async function forgetCell(deps: CellCommandDeps, item: LocalCellItem | un
   const out = await deps.run(cli, args, 30_000);
   await deps.provider.refresh();
   if (out.code !== 0) {
-    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.cliFailed("forget the cell", cliDetail(out.stderr)));
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.cliFailed("forget the cell", cliErrorText(out)));
     return false;
   }
   void vscode.window.showInformationMessage(CELL_CMD_TEXTS.forgotten(item.cell.name));
   return true;
 }
 
-export async function openCellOnWeb(deps: CellCommandDeps, item: LocalCellItem | undefined): Promise<void> {
-  if (!(item instanceof LocalCellItem)) {
+/** Open mesh in browser: on a cell, or on a mesh group (a standalone one opens the meshes page). */
+export async function openCellOnWeb(deps: CellCommandDeps, item: LocalCellItem | MeshGroupItem | undefined): Promise<void> {
+  const cell = item instanceof LocalCellItem ? item.cell : item instanceof MeshGroupItem ? item.cells[0] : undefined;
+  if (!cell) {
     return;
   }
   let base: string;
@@ -245,7 +269,107 @@ export async function openCellOnWeb(deps: CellCommandDeps, item: LocalCellItem |
     await vscode.window.showErrorMessage(CELL_CMD_TEXTS.badServer);
     return;
   }
-  await vscode.env.openExternal(vscode.Uri.parse(cellPageUrl(base, item.cell)));
+  await vscode.env.openExternal(vscode.Uri.parse(cellPageUrl(base, cell)));
+}
+
+/** Stop (a cell running on this computer): asks first, then `mesh cell stop NAME`. */
+export async function stopCell(deps: CellCommandDeps, item: LocalCellItem | undefined): Promise<boolean> {
+  if (!(item instanceof LocalCellItem)) {
+    return false;
+  }
+  const args = cellStopArgs(item.cell, item.all);
+  if (!args) {
+    return false;
+  }
+  const choice = await vscode.window.showWarningMessage(CELL_CMD_TEXTS.stopTitle(item.cell.name), { modal: true, detail: CELL_CMD_TEXTS.stopDetail }, CELL_CMD_TEXTS.stop);
+  if (choice !== CELL_CMD_TEXTS.stop) {
+    return false;
+  }
+  const cli = await ensureCli(deps);
+  if (!cli) {
+    return false;
+  }
+  const out = await deps.run(cli, args, 30_000);
+  await deps.provider.refresh();
+  if (out.code !== 0) {
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.cliFailed("stop the cell", cliErrorText(out)));
+    return false;
+  }
+  void vscode.window.showInformationMessage(CELL_CMD_TEXTS.stopped(item.cell.name));
+  return true;
+}
+
+/** The input box's check for a new cell name: the CLI's rule, and not another stored cell's in the same mesh. */
+export function validateNewCellName(raw: string, cell: { name: string; meshId?: string }, all: readonly { name: string; meshId?: string }[]): string | undefined {
+  const v = raw.trim();
+  if (!CELL_NAME.test(v)) {
+    return CELL_CMD_TEXTS.renameInvalid;
+  }
+  return v !== cell.name && all.some((c) => c.name === v && c.meshId === cell.meshId) ? CELL_CMD_TEXTS.renameTaken : undefined;
+}
+
+/** Rename (a cell in a mesh): an input box, then `mesh cell rename OLD NEW`. */
+export async function renameCell(deps: CellCommandDeps, item: LocalCellItem | undefined): Promise<boolean> {
+  if (!(item instanceof LocalCellItem) || item.cell.meshId === undefined) {
+    return false;
+  }
+  const cell = item.cell;
+  const raw = await vscode.window.showInputBox({
+    title: CELL_CMD_TEXTS.renameTitle(cell.name), prompt: CELL_CMD_TEXTS.renamePrompt, value: cell.name,
+    validateInput: (v) => validateNewCellName(v, cell, item.all) ?? null,
+  });
+  if (raw === undefined || raw.trim() === cell.name) {
+    return false;
+  }
+  const to = raw.trim();
+  const problem = validateNewCellName(to, cell, item.all);
+  const args = problem ? undefined : cellRenameArgs(cell, item.all, to);
+  if (!args) {
+    await vscode.window.showErrorMessage(problem ?? CELL_CMD_TEXTS.renameInvalid);
+    return false;
+  }
+  const cli = await ensureCli(deps);
+  if (!cli) {
+    return false;
+  }
+  const out = await deps.run(cli, args, 30_000);
+  await deps.provider.refresh();
+  if (out.code !== 0) {
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.cliFailed("rename the cell", cliErrorText(out)));
+    return false;
+  }
+  void vscode.window.showInformationMessage(CELL_CMD_TEXTS.renamed(cell.name, to));
+  return true;
+}
+
+/**
+ * The launch command as the user would type it in the default shell (a POSIX shell when it is unknown, or
+ * when a piece can't be quoted for it): the program by name when it is on PATH, else its full path.
+ */
+export function typedCommand(found: string, args: readonly string[], shell: string | undefined, pathEnv?: string, platform?: NodeJS.Platform): string | undefined {
+  const exe = programName(found, CLI_NAME, pathEnv, platform);
+  const kind = shellKind(shell);
+  return (kind && commandLine(exe, args, kind)) ?? commandLine(exe, args, "posix");
+}
+
+/** Copy launch command: `a4sx launch --cell NAME [--mesh ID] --mesh-reduced-isolation`, quoted for the default shell. */
+export async function copyCellLaunch(deps: CellCommandDeps, item: LocalCellItem | undefined): Promise<string | undefined> {
+  if (!(item instanceof LocalCellItem)) {
+    return undefined;
+  }
+  const args = cellLaunchArgs(item.cell, item.all);
+  if (!args) {
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.badCell);
+    return undefined;
+  }
+  const cli = await ensureCli(deps);
+  const line = cli && typedCommand(cli, args, vscode.env.shell);
+  if (!line) {
+    return undefined;
+  }
+  await vscode.env.clipboard.writeText(line);
+  void vscode.window.showInformationMessage(CELL_CMD_TEXTS.copiedLaunch);
+  return line;
 }
 
 /**
@@ -255,6 +379,10 @@ export async function openCellOnWeb(deps: CellCommandDeps, item: LocalCellItem |
  */
 export async function installCli(deps: CellCommandDeps): Promise<boolean> {
   const platform = deps.platform ?? process.platform;
+  if (deps.resolve().kind === "in-session") {
+    await vscode.window.showErrorMessage(IN_SESSION_MESSAGE);
+    return false;
+  }
   if (!deps.cliDir) {
     await vscode.window.showErrorMessage(CELL_CMD_TEXTS.noStorage);
     return false;
@@ -335,7 +463,7 @@ export async function updateCliInTerminal(deps: CellCommandDeps): Promise<vscode
  */
 export async function dailyUpdate(deps: CellCommandDeps, now: number = Date.now()): Promise<boolean> {
   const launcher = installedLauncher(deps.cliDir, deps.platform ?? process.platform);
-  if (!launcher || !updateDue(deps.state.get<unknown>(LAST_UPDATE_KEY), now)) {
+  if (!launcher || deps.resolve().kind === "in-session" || !updateDue(deps.state.get<unknown>(LAST_UPDATE_KEY), now)) {
     return false;
   }
   await deps.state.update(LAST_UPDATE_KEY, now);

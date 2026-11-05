@@ -9,11 +9,12 @@ This extension connects VS Code to a4sx. It adds:
   - **My sessions** lists the sessions in your library, newest first, with their date and size, in folders. For each session you can:
     - **Resume in terminal**. It opens a terminal with your default shell. With the a4sx command-line tool, it runs `a4sx launch` for the session there, and VS Code asks which launch profile to use if you have more than one. Without it, the extension copies the session into Claude Code's local history and runs `claude --resume` there.
     - **Resume in Claude Code**, which copies the session into Claude Code's local history for the open folder and opens it in the Claude Code extension's panel. It doesn't need the a4sx command-line tool. If more than one folder is open, VS Code asks which one. If no folder is open, you can use your home folder or choose one; the window then opens that folder and the session opens there.
+    - **Run as cell in terminal**, which runs the session as one of this computer's mesh cells (see [Run as cell in terminal](#run-as-cell-in-terminal)).
     - **Open on the web**.
     - **Copy session id**.
     - **Move to folder…** and **Remove from folder**.
-  - **Launch profiles** lists your launch profiles. The default one is marked. You can create, edit and delete profiles.
-  - **Cells** lists the mesh cells stored on this computer by the a4sx command-line tool. You can start one in a terminal, start a new one, make one the default, or forget one. If the tool isn't installed, the view installs it for you.
+  - **Launch profiles** lists your launch profiles. The default one is marked. You can create, edit, duplicate and delete profiles, and set the default.
+  - **Cells** lists the mesh cells stored on this computer by the a4sx command-line tool, grouped by mesh, and your cells in those meshes on other machines. You can start, stop, rename, copy the launch command of, make default or forget a cell here, or start a new one. If the tool isn't installed, the view installs it for you.
   - **Meshes** lists the a4sx meshes you're in and your cells in each one. It appears only when your a4sx server has meshes.
   - **Marketplace** searches the sessions that others publish. A result opens on session-exchange.com. You don't need to sign in to search.
 - **The a4sx MCP servers for agent mode.** The a4sx tools show up in the tools list of agent mode in VS Code chat.
@@ -46,21 +47,45 @@ The first time you change a profile, the extension asks for one more permission 
 
 On an older a4sx server, the view shows "Launch profiles need a newer a4sx server." and the profile actions are hidden.
 
+**With the a4sx CLI 0.25.0 or newer**, the view lists the profiles as the CLI sees them (`a4sx profiles --json`). Expand a profile to see its details: harness, model, base URL (`scheme://host[:port]`), router operator, header names, flags (keys and tokens shown as `••••`, and every value of a flag whose name says key, token, secret, password, auth, credential or cookie), env keys, and how many of your cells use it ("unknown" when the CLI can't tell). Header values and env values are never shown; the only header value shown is the router operator (`X-Fleet-Operator`). On these profiles:
+
+- **Edit** works as above.
+- **Duplicate…** asks for the copy's id and, optionally, a new router operator, then runs `a4sx profile --copy <id> --name <new id> [--header X-Fleet-Operator=<operator>]`. If the new id is taken, it asks before it replaces that profile (`--force`).
+- **Set as default** runs `a4sx profile --set-default <id>`.
+- **Delete** asks first ("Cells using it: <n>", or "unknown"), then runs `a4sx profile --delete <id>`.
+
+With an older CLI, the view shows a line that offers the update, and lists the profiles from the a4sx server as before.
+
 ## Cells
 
-A cell is an agent session that joins one of your meshes from this computer. The **Cells** view lists the cells the a4sx command-line tool has stored here (`a4sx mesh cells --json`). For each cell it shows its mesh (or "standalone"), and marks the default cell with a star. A cell that waits for a mesh admin says so. The extension reads only that list: it never reads the cells' keys.
+A cell is an agent session that joins one of your meshes from this computer. The **Cells** view lists the cells the a4sx command-line tool has stored here (`a4sx mesh cells --json`), grouped by mesh. Each mesh shows its join policy ("policy: open", "own" or "closed", or "unknown"); cells that aren't in a mesh yet are under **Standalone (no mesh)**. For each cell, the view shows its launch profile, whether it is stored or running on this computer, its state in the mesh registry and how this computer reaches the mesh (path), and marks the default cell with a star. A cell that waits for a mesh admin says so. Under each mesh, its other cells (from `a4sx mesh peers <mesh> --json`) that aren't stored on this computer are listed too, read-only: yours as "yours, on another machine", other people's as "on another machine". The extension reads only these lists: it never reads the cells' keys.
 
 - **Start in terminal** opens a new terminal in your workspace folder and runs `a4sx launch --cell <name> --mesh-reduced-isolation` there. If two stored cells share a name, `--mesh <mesh id>` picks the right one. Signing in, and anything else the CLI asks, happens in that terminal. If more than one folder is open, VS Code asks which one.
+- **Stop** (on a cell running on this computer) runs `a4sx mesh cell stop <name>`, after you confirm.
+- **Rename…** (on a cell in a mesh) runs `a4sx mesh cell rename <name> <new name>`.
+- **Copy launch command** copies the `a4sx launch --cell …` command, quoted for your default shell.
 - **New cell** (in the view's title bar) runs `a4sx launch --new-cell --mesh-reduced-isolation` in a new terminal. The CLI opens your browser, where you approve the new cell, and then starts it in the terminal. The list updates when the cell is stored.
 - **Set as default** runs `a4sx mesh cell default <name>`. A bare `a4sx launch --cell` starts the default cell.
 - **Forget on this computer** runs `a4sx mesh cell forget <name>`, after you confirm. It removes the cell's key from this computer. The cell stays in your account until you remove it on the website.
-- **Open in browser** opens the cell's mesh on the website. A standalone cell isn't in a mesh yet, so it can't be started; add it to a mesh on the website first.
+- **Open mesh in browser** opens the cell's mesh on the website. A standalone cell isn't in a mesh yet, so it can't be started; add it to a mesh on the website first.
+
+With an a4sx CLI older than 0.25.0, the view lists the cells with a line that offers **Update the a4sx CLI**; running state, registry state, path, other machines' cells, **Stop** and **Rename…** need the update.
 
 **Reduced isolation.** Where this computer can't sandbox your agent, a cell runs as your own user. Your agent could then act as that cell in its mesh, skip the cell's outgoing checks, and read and use the a4sx sign-ins and keys saved on this computer. The first time you start a cell on a computer, a dialog explains this, and the cell starts only if you accept. The answer is remembered for that computer. Where the sandbox works, the cell runs in it and this doesn't apply.
 
 **Claude Code.** If the Claude Code extension is installed, the terminals the view starts tell the a4sx CLI to use the `claude` that comes with that extension (through the `A4SX_CLAUDE` environment variable), unless you set `A4SX_CLAUDE` yourself.
 
 The list is read when the view is first shown, on **Refresh cells**, after each action in the view, when a terminal the view started closes, and when the CLI's cell list changes.
+
+### Run as cell in terminal
+
+**Run as cell in terminal** (on a session in **My sessions**) runs that session as a cell:
+
+1. Choose one of this computer's cells (name · mesh · launch profile), or **New cell…**.
+2. Choose the options: **Keep my sign-in (reduced isolation)** (on by default) adds `--mesh-reduced-isolation`. **Deliver messages from mesh peers without asking** (off by default) adds `--auto-allow-ipc-messages`; turning it on shows a warning first. If `ipc.auto_allow_messages` is on in your a4sx config (`a4sx config show`), the toggle starts on and says so: turning it off here doesn't change the config.
+3. A terminal runs `a4sx launch --cell <cell> [options] -- --resume <session id>` in the folder the session ran in. If the session isn't on this computer, only in your library, it runs `a4sx launch --cell <cell> [options] --a4sx-session=<id>` in your workspace folder instead, which fetches it. **New cell…** runs `a4sx launch --new-cell [options] …`; the browser approval picks the mesh and launch profile. A session that is only in your library is fetched with your a4sx sign-in, so with **Keep my sign-in** off the extension warns first and starts only with it on.
+
+**Inside an a4sx session.** If VS Code itself was started inside an a4sx session (`A4SX_HARNESS=1` or `A4SX_MESH_SESSION=1` in its environment), the extension never runs the a4sx CLI: it would act as that session, not as you. The views and commands say so instead.
 
 ### Installing the a4sx CLI
 

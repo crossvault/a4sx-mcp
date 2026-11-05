@@ -13,12 +13,15 @@ import { CLAUDE_EXTENSION_ID, claudeResumeUri } from "./claudeResume";
 import { CLI_NAME, findClaude, findCli, CliLookup } from "./cli";
 import { cellsListDir } from "./cells";
 import {
-  CellCommandDeps, dailyUpdate, forgetCell, installCli, newCell, openCellOnWeb, setDefaultCell, startCell, updateCliInTerminal,
+  CellCommandDeps, copyCellLaunch, dailyUpdate, forgetCell, installCli, newCell, openCellOnWeb, renameCell, setDefaultCell, startCell, stopCell, updateCliInTerminal,
 } from "./cellCommands";
 import {
-  CellsLoad, CellsProvider, CELLS_EMPTY, CELLS_NO_CLI, CliOutput, CliResolution, CliRunner, CMD_DEFAULT_CELL, CMD_FORGET_CELL, CMD_INSTALL_CLI, CMD_NEW_CELL,
-  CMD_OPEN_CELL, CMD_REFRESH_CELLS, CMD_START_CELL, CMD_UPDATE_CLI, LocalCellItem, VIEW_CELLS,
+  CellsLoad, CellsProvider, CELLS_EMPTY, CELLS_NO_CLI, CliOutput, CliResolution, CliRunner, CMD_COPY_CELL_LAUNCH, CMD_DEFAULT_CELL, CMD_FORGET_CELL, CMD_INSTALL_CLI,
+  CMD_NEW_CELL, CMD_OPEN_CELL, CMD_REFRESH_CELLS, CMD_RENAME_CELL, CMD_START_CELL, CMD_STOP_CELL, CMD_UPDATE_CLI, LocalCellItem, MeshGroupItem, VIEW_CELLS,
 } from "./cellsView";
+import { IN_SESSION_MESSAGE, insideMeshSession } from "./cliJson";
+import { findLocalSession, librarySlug } from "./localSession";
+import { runAsCell, RunAsCellSession } from "./runAsCell";
 import { execSpec, Fetch, installedLauncher, Runner } from "./provision";
 import { clearFilter, filterSessions, moveToFolder, removeFromFolder } from "./folderCommands";
 import { CMD_OPEN_LISTING, ListingItem, MarketplaceProvider } from "./marketplaceView";
@@ -29,8 +32,10 @@ import {
 import {
   CMD_CREATE_MESH, CMD_OPEN_MESH, CMD_OPEN_MESHES, CMD_REDEEM_INVITE, CMD_REFRESH_MESHES, CMD_START_IN_MESH, MeshesProvider, MeshItem, MESHES_AVAILABLE,
 } from "./meshesView";
-import { changeDefault, createProfile, editProfile, pickProfileForResume, removeProfile } from "./profileCommands";
-import { ProfileItem, ProfilesProvider, ProfilesViewState } from "./profilesView";
+import {
+  changeDefault, CliProfileDeps, createProfile, deleteCliProfile, duplicateProfile, editCliProfile, editProfile, pickProfileForResume, removeProfile, setDefaultProfile,
+} from "./profileCommands";
+import { CliProfileItem, CliProfilesLoad, loadCliProfiles, ProfileItem, ProfilesProvider, ProfilesViewState } from "./profilesView";
 import { SessionItem, SessionsProvider, ViewState } from "./sessionsView";
 import {
   CLAUDE_INSTALL_URL, offerCliInstallOnce, offerProfilesStepUp, openClaudeTerminal, openCommandTerminal, PendingAction, pickFolderWhenNoneOpen, ResumeFolder,
@@ -67,8 +72,14 @@ export const CMD_EDIT_PROFILE = "a4sx.editProfile";
 export const CMD_CHANGE_DEFAULT = "a4sx.changeDefaultElsewhere";
 export const CMD_DELETE_PROFILE = "a4sx.deleteProfile";
 export const CMD_ALLOW_SCOPE = "a4sx.allowScope";
+export const CMD_RUN_AS_CELL = "a4sx.runAsCell";
+export const CMD_DUPLICATE_PROFILE = "a4sx.duplicateProfile";
+export const CMD_SET_DEFAULT_PROFILE = "a4sx.setDefaultProfile";
 export { CMD_OPEN_LISTING, CMD_CREATE_MESH, CMD_OPEN_MESH, CMD_OPEN_MESHES, CMD_REDEEM_INVITE, CMD_REFRESH_MESHES, CMD_START_IN_MESH };
-export { CMD_REFRESH_CELLS, CMD_NEW_CELL, CMD_START_CELL, CMD_DEFAULT_CELL, CMD_FORGET_CELL, CMD_OPEN_CELL, CMD_INSTALL_CLI, CMD_UPDATE_CLI, VIEW_CELLS };
+export {
+  CMD_REFRESH_CELLS, CMD_NEW_CELL, CMD_START_CELL, CMD_DEFAULT_CELL, CMD_FORGET_CELL, CMD_OPEN_CELL, CMD_INSTALL_CLI, CMD_UPDATE_CLI, CMD_STOP_CELL, CMD_RENAME_CELL,
+  CMD_COPY_CELL_LAUNCH, VIEW_CELLS,
+};
 export const VIEW_SESSIONS = "a4sx.sessions";
 export const VIEW_PROFILES = "a4sx.profiles";
 export const VIEW_MARKETPLACE = "a4sx.marketplace";
@@ -151,6 +162,18 @@ async function stopIfLocalInRemoteWindow(): Promise<boolean> {
   return true;
 }
 
+/**
+ * Shows the message and returns true inside an a4sx session (A4SX_HARNESS=1 or A4SX_MESH_SESSION=1 in this
+ * extension's env): every a4sx call must run as the user, never as the session.
+ */
+export async function stopIfInMeshSession(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  if (!insideMeshSession(env)) {
+    return false;
+  }
+  await vscode.window.showErrorMessage(IN_SESSION_MESSAGE);
+  return true;
+}
+
 const REMOTE_LABELS: Record<string, string> = {
   "ssh-remote": "SSH",
   wsl: "WSL",
@@ -218,7 +241,7 @@ export async function reportMissingCli(result: Exclude<CliLookup, { found: true 
 }
 
 export async function saveSession(lookup: (configured: string | undefined) => CliLookup = findCliOrOwn): Promise<vscode.Terminal | undefined> {
-  if (await stopIfLocalInRemoteWindow()) {
+  if (await stopIfInMeshSession() || await stopIfLocalInRemoteWindow()) {
     return undefined;
   }
   const result = lookupCli(lookup);
@@ -241,7 +264,11 @@ export async function openLibrary(): Promise<void> {
 }
 
 /** Swappable in unit tests: the network and the interactive login. */
-export const runtime: { fetch: FetchLike; download: Fetch; login: (client: Client, req: LoginRequest) => ReturnType<typeof vscodeLogin> } = {
+export const runtime: {
+  fetch: FetchLike; download: Fetch; login: (client: Client, req: LoginRequest) => ReturnType<typeof vscodeLogin>;
+  /** The Launch profiles view's CLI list (undefined: the real `a4sx profiles --json`). */
+  cliProfiles?: () => Promise<CliProfilesLoad>;
+} = {
   fetch: (url, init) => fetch(url, init),
   /** Install a4sx CLI's downloads (public files, no key). */
   // no redirects: the sha256 header must come from the configured server itself
@@ -316,6 +343,9 @@ export async function resumeSession(
     }
     return resumeWithClaude(item, claudeLookup);
   }
+  if (await stopIfInMeshSession()) {
+    return undefined;
+  }
   const profile = await choose();
   if (!profile) {
     return undefined;
@@ -364,7 +394,7 @@ export const PROFILES_PAGE = "/account/workspace#profiles";
 
 /** Opens a terminal that runs `a4sx profile --name ID` directly (no shell): shows the profile and how to change it. */
 export async function runProfileCli(profileId: string, lookup: (configured: string | undefined) => CliLookup = findCliOrOwn): Promise<vscode.Terminal | undefined> {
-  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(profileId) || await stopIfLocalInRemoteWindow()) {
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(profileId) || await stopIfInMeshSession() || await stopIfLocalInRemoteWindow()) {
     return undefined;
   }
   const result = lookupCli(lookup);
@@ -379,7 +409,7 @@ export async function runProfileCli(profileId: string, lookup: (configured: stri
 
 /** Opens a terminal that runs the CLI's own `a4sx profile --set-default ID` directly (no shell). */
 export async function runSetDefaultCli(profileId: string, lookup: (configured: string | undefined) => CliLookup = findCliOrOwn): Promise<vscode.Terminal | undefined> {
-  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(profileId) || await stopIfLocalInRemoteWindow()) {
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(profileId) || await stopIfInMeshSession() || await stopIfLocalInRemoteWindow()) {
     return undefined;
   }
   const result = lookupCli(lookup);
@@ -642,6 +672,11 @@ export const runPreflight: PreflightRunner = async (cliPath, args) => (await run
  */
 export const runCli: CliRunner = (cli, args, timeoutMs = 30_000) =>
   new Promise<CliOutput>((resolve) => {
+    // Never inside an a4sx session (the commands check first; this is the last line of defence).
+    if (insideMeshSession()) {
+      resolve({ code: null, stdout: "", stderr: IN_SESSION_MESSAGE });
+      return;
+    }
     const spec = execSpec(cli, args);
     if (!spec) {
       resolve({ code: null, stdout: "", stderr: "" });
@@ -694,7 +729,7 @@ export async function startSessionInMesh(
     await vscode.window.showErrorMessage(MESH_TEXTS.notActive);
     return undefined;
   }
-  if (await stopIfLocalInRemoteWindow()) {
+  if (await stopIfInMeshSession() || await stopIfLocalInRemoteWindow()) {
     return undefined;
   }
   const cli = lookupCli(lookup);
@@ -777,7 +812,10 @@ async function cellFolder(): Promise<string | vscode.Uri | undefined | null> {
 }
 
 /** Which CLI the Cells view runs (see findCliOrOwn), or why there is none. */
-export function resolveCellsCli(lookup: (configured: string | undefined) => CliLookup = findCliOrOwn): CliResolution {
+export function resolveCellsCli(lookup: (configured: string | undefined) => CliLookup = findCliOrOwn, env: NodeJS.ProcessEnv = process.env): CliResolution {
+  if (insideMeshSession(env)) {
+    return { kind: "in-session" };
+  }
   if (remoteWindowButLocalExtension()) {
     return { kind: "remote-local" };
   }
@@ -786,6 +824,20 @@ export function resolveCellsCli(lookup: (configured: string | undefined) => CliL
     return { kind: "found", path: r.path };
   }
   return r.reason === "configured-path-invalid" ? { kind: "bad-config" } : { kind: "no-cli" };
+}
+
+/** A My sessions item as "Run as cell in terminal" takes it: its library id, and where it is on this computer. */
+export function runAsCellSession(item: SessionItem | undefined, projectsDir?: string): RunAsCellSession | undefined {
+  if (!(item instanceof SessionItem)) {
+    return undefined;
+  }
+  return {
+    id: item.row.id,
+    findLocal: async () => {
+      const slug = librarySlug(item.row);
+      return slug ? findLocalSession(slug, projectsDir) : undefined;
+    },
+  };
 }
 
 function setContext(key: string, value: unknown): void {
@@ -828,7 +880,12 @@ export function activate(context: vscode.ExtensionContext): void {
     setContext("a4sx.sessionsEmpty", state === "empty");
     setContext("a4sx.foldersSupported", sessions.foldersSupported());
   }, (filter) => setContext("a4sx.sessionsFiltered", !!filter));
-  const profiles = new ProfilesProvider(auth, client, setProfilesContext);
+  // Launch profiles: the a4sx CLI's list when it has `profiles --json` (0.25.0+), else the server's (as before).
+  const profiles = new ProfilesProvider(
+    auth, client, setProfilesContext,
+    { load: () => (runtime.cliProfiles ?? (() => loadCliProfiles(() => resolveCellsCli(), runCli, (cli) => cells.versions.gate(cli))))() },
+    (fromCli) => setContext("a4sx.profilesFromCli", fromCli),
+  );
   const market = new MarketplaceProvider(client);
   // Hidden until GET /meshes answers: a server without meshes (404) never shows the view.
   setContext(MESHES_AVAILABLE, false);
@@ -864,11 +921,17 @@ export function activate(context: vscode.ExtensionContext): void {
   };
   const cellsView = vscode.window.createTreeView(VIEW_CELLS, { treeDataProvider: cells });
   const refreshCells = () => void cells.refresh();
+  /** Refresh after an update or a settings change: the CLI's version is asked again too. */
+  const refreshAll = () => {
+    cells.versions.clear();
+    refreshCells();
+    profiles.refresh();
+  };
   // A terminal the view started closed (a new cell may be stored, or the CLI was updated): read again.
   if (typeof vscode.window.onDidCloseTerminal === "function") {
     context.subscriptions.push(vscode.window.onDidCloseTerminal((t) => {
       if (cellTerminals.delete(t)) {
-        refreshCells();
+        refreshAll();   // the terminal may have been an update or a new cell
       }
     }));
   }
@@ -886,6 +949,7 @@ export function activate(context: vscode.ExtensionContext): void {
   chooseResumeProfile = () => pickProfileForResume(auth, client);
   native = { auth, state: context.globalState };
   const folderDeps = { auth, client, sessions };
+  const cliProfileDeps: CliProfileDeps = { cells: cellDeps, view: profiles };
   const profileDeps = { auth, client, view: profiles, elsewhere: {
     website: openProfilesOnWeb,
     cli: (id: string) => runProfileCli(id).then(() => undefined),
@@ -917,7 +981,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("a4sx.cliPath") || e.affectsConfiguration("a4sx.serverUrl")) {
-        refreshCells();
+        refreshAll();
       }
       if (e.affectsConfiguration("a4sx.serverUrl")) {
         syncSignedIn();
@@ -940,11 +1004,15 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_CLEAR_FILTER, () => clearFilter(sessions)),
     vscode.commands.registerCommand(CMD_MOVE_TO_FOLDER, (item?: SessionItem) => moveToFolder(folderDeps, item)),
     vscode.commands.registerCommand(CMD_REMOVE_FROM_FOLDER, (item?: SessionItem) => removeFromFolder(folderDeps, item)),
-    vscode.commands.registerCommand(CMD_REFRESH_PROFILES, () => profiles.refresh()),
+    vscode.commands.registerCommand(CMD_REFRESH_PROFILES, () => { cells.versions.clear(); profiles.refresh(); }),
     vscode.commands.registerCommand(CMD_CREATE_PROFILE, () => createProfile(profileDeps)),
-    vscode.commands.registerCommand(CMD_EDIT_PROFILE, (item?: ProfileItem) => editProfile(profileDeps, item)),
+    vscode.commands.registerCommand(CMD_EDIT_PROFILE, (item?: ProfileItem | CliProfileItem) =>
+      (item instanceof CliProfileItem ? editCliProfile(profileDeps, item) : editProfile(profileDeps, item))),
     vscode.commands.registerCommand(CMD_CHANGE_DEFAULT, (item?: ProfileItem) => changeDefault(profileDeps, item)),
-    vscode.commands.registerCommand(CMD_DELETE_PROFILE, (item?: ProfileItem) => removeProfile(profileDeps, item)),
+    vscode.commands.registerCommand(CMD_DELETE_PROFILE, (item?: ProfileItem | CliProfileItem) =>
+      (item instanceof CliProfileItem ? deleteCliProfile(cliProfileDeps, item) : removeProfile(profileDeps, item))),
+    vscode.commands.registerCommand(CMD_DUPLICATE_PROFILE, (item?: CliProfileItem) => duplicateProfile(cliProfileDeps, item)),
+    vscode.commands.registerCommand(CMD_SET_DEFAULT_PROFILE, (item?: CliProfileItem) => setDefaultProfile(cliProfileDeps, item)),
     vscode.commands.registerCommand(CMD_REFRESH_MESHES, () => meshes.refresh()),
     vscode.commands.registerCommand(CMD_OPEN_MESHES, () => openMeshesOnWeb()),
     vscode.commands.registerCommand(CMD_CREATE_MESH, () => openMeshesOnWeb()),
@@ -953,12 +1021,16 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_START_IN_MESH, (item?: MeshItem) => startSessionInMesh(auth, item)),
     cells,
     cellsView,
-    vscode.commands.registerCommand(CMD_REFRESH_CELLS, () => cells.refresh()),
+    vscode.commands.registerCommand(CMD_REFRESH_CELLS, () => { cells.versions.clear(); return cells.refresh(); }),
     vscode.commands.registerCommand(CMD_NEW_CELL, () => newCell(cellDeps)),
     vscode.commands.registerCommand(CMD_START_CELL, (item?: LocalCellItem) => startCell(cellDeps, item)),
     vscode.commands.registerCommand(CMD_DEFAULT_CELL, (item?: LocalCellItem) => setDefaultCell(cellDeps, item)),
     vscode.commands.registerCommand(CMD_FORGET_CELL, (item?: LocalCellItem) => forgetCell(cellDeps, item)),
-    vscode.commands.registerCommand(CMD_OPEN_CELL, (item?: LocalCellItem) => openCellOnWeb(cellDeps, item)),
+    vscode.commands.registerCommand(CMD_OPEN_CELL, (item?: LocalCellItem | MeshGroupItem) => openCellOnWeb(cellDeps, item)),
+    vscode.commands.registerCommand(CMD_STOP_CELL, (item?: LocalCellItem) => stopCell(cellDeps, item)),
+    vscode.commands.registerCommand(CMD_RENAME_CELL, (item?: LocalCellItem) => renameCell(cellDeps, item)),
+    vscode.commands.registerCommand(CMD_COPY_CELL_LAUNCH, (item?: LocalCellItem) => copyCellLaunch(cellDeps, item)),
+    vscode.commands.registerCommand(CMD_RUN_AS_CELL, (item?: SessionItem) => runAsCell(cellDeps, runAsCellSession(item))),
     vscode.commands.registerCommand(CMD_INSTALL_CLI, () => installCli(cellDeps)),
     vscode.commands.registerCommand(CMD_UPDATE_CLI, () => updateCliInTerminal(cellDeps)),
     // From the "Sign in again to allow …" item: the item names the permission, so no extra modal.
