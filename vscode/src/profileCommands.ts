@@ -377,7 +377,7 @@ export const CLI_PROFILE_CMD_TEXTS = {
   duplicated: (dst: string, src: string) => `Created the launch profile "${dst}" as a copy of "${src}".`,
   nowDefault: (id: string) => `"${id}" is now your default launch profile.`,
   confirmDelete: (id: string) => `Delete the launch profile "${id}"?`,
-  deleteUsed: (n: number) => (n === 1 ? "1 cell on this computer uses it." : `${n} cells on this computer use it.`),
+  deleteUsed: (n: number | undefined) => `Cells using it: ${n === undefined ? "unknown" : n}`,
   deleted: (id: string) => `Deleted the launch profile "${id}".`,
   failed: (what: string, detail: string | undefined) => `Could not ${what}${detail ? `: ${detail}` : "."}`,
   notOnServer: (id: string) => `The launch profile "${id}" isn't in your a4sx account. Refresh the list.`,
@@ -447,15 +447,15 @@ export async function setDefaultProfile(deps: CliProfileDeps, item: CliProfileIt
   return true;
 }
 
-/** Delete: asks first (saying how many cells use it), then `a4sx profile --delete ID`. */
+/** Delete: asks first (saying how many cells use it, or "unknown"), then `a4sx profile --delete ID`. */
 export async function deleteCliProfile(deps: CliProfileDeps, item: CliProfileItem | undefined): Promise<boolean> {
   const args = item instanceof CliProfileItem ? profileDeleteArgs(item.profile.id) : undefined;
   if (!args) {
     return false;
   }
   const t = CLI_PROFILE_CMD_TEXTS;
-  const n = item!.profile.usedByCells;
-  const choice = await vscode.window.showWarningMessage(t.confirmDelete(item!.profile.id), { modal: true, ...(n ? { detail: t.deleteUsed(n) } : {}) }, PROFILE_TEXTS.delete);
+  // An unknown count (the CLI couldn't ask the server) is said as such, never as 0.
+  const choice = await vscode.window.showWarningMessage(t.confirmDelete(item!.profile.id), { modal: true, detail: t.deleteUsed(item!.profile.usedByCells) }, PROFILE_TEXTS.delete);
   if (choice !== PROFILE_TEXTS.delete || !(await runProfileCli(deps, args, "delete the launch profile"))) {
     return false;
   }

@@ -39,8 +39,10 @@ export const CELL_TEXTS = {
   policy: (p: MeshPolicy | null | undefined) => `policy: ${p ?? "unknown"}`,
   meshCount: (n: number) => (n === 1 ? "1 cell here" : `${n} cells here`),
   onAnotherMachine: "on another machine",
+  yoursOnAnotherMachine: "yours, on another machine",
   peersFailed: "Could not read the cells on other machines.",
   remoteTooltip: "On another machine: read-only here.",
+  yoursRemoteTooltip: "Yours, on another machine: read-only here.",
 };
 
 /** The view's states: what getChildren shows. */
@@ -125,18 +127,18 @@ export class MeshGroupItem extends vscode.TreeItem {
   }
 }
 
-/** A cell of the same mesh on another machine: read-only. */
+/** A cell of the same mesh that isn't stored on this computer (yours or someone else's): read-only. */
 export class RemoteCellItem extends vscode.TreeItem {
   constructor(public readonly meshId: string, public readonly peer: RemoteCell) {
     super(peer.name, vscode.TreeItemCollapsibleState.None);
     this.id = `remoteCell:${meshId}/${peer.instanceId}`;
-    this.description = [CELL_TEXTS.onAnotherMachine, peer.state, peer.tier].filter(Boolean).join(" · ");
+    this.description = [peer.own ? CELL_TEXTS.yoursOnAnotherMachine : CELL_TEXTS.onAnotherMachine, peer.state, peer.tier].filter(Boolean).join(" · ");
     this.tooltip = [
-      `Cell: ${peer.name}`, CELL_TEXTS.remoteTooltip, ...(peer.aid ? [`Address: ${peer.aid}`] : []), ...(peer.state ? [`State: ${peer.state}`] : []),
+      `Cell: ${peer.name}`, peer.own ? CELL_TEXTS.yoursRemoteTooltip : CELL_TEXTS.remoteTooltip, ...(peer.aid ? [`Address: ${peer.aid}`] : []), ...(peer.state ? [`State: ${peer.state}`] : []),
       ...(peer.tier ? [`Isolation: ${peer.tier}`] : []), `ID: ${peer.instanceId}`,
     ].join("\n");
     this.contextValue = REMOTE_CELL_CONTEXT;
-    this.iconPath = new vscode.ThemeIcon("vm");
+    this.iconPath = new vscode.ThemeIcon(peer.own ? "vm-active" : "vm");
   }
 }
 
@@ -264,8 +266,10 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
     if (peers.kind === "error") {
       return [...local, new MessageItem(CELL_TEXTS.peersFailed, "warning")];
     }
-    const mine = new Set(group.all.map((c) => c.instanceId));
-    return [...local, ...peers.peers.filter((p) => !mine.has(p.instanceId)).map((p) => new RemoteCellItem(group.meshId!, p))];
+    // `own` is the caller's account, not this computer: a cell stored here is already listed above.
+    const here = new Set(group.all.map((c) => c.instanceId));
+    const elsewhere = peers.peers.filter((p) => !here.has(p.instanceId)).sort((a, b) => Number(b.own) - Number(a.own) || a.name.localeCompare(b.name));
+    return [...local, ...elsewhere.map((p) => new RemoteCellItem(group.meshId!, p))];
   }
 
   private peersOf(meshId: string): Promise<PeersLoad> {

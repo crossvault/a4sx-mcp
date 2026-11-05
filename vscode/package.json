@@ -608,7 +608,7 @@
         },
         {
           "command": "a4sx.renameCell",
-          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.standalone)?(\\.default)?$/",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?$/",
           "group": "1_cell@4"
         },
         {

@@ -20,7 +20,7 @@ import {
   CELL_TEXTS, CellsProvider, CliOutput, CliResolution, LocalCellItem, MeshGroupItem, RemoteCellItem,
 } from "../../cellsView";
 import {
-  cliGate, IN_SESSION_MESSAGE, insideMeshSession, MIN_JSON_CLI, parseCellsAnswer, parseCliError, parseCliVersion, parsePeersAnswer, parseProfilesAnswer,
+  cliGate, configAutoAllow, IN_SESSION_MESSAGE, insideMeshSession, MIN_JSON_CLI, parseCellsAnswer, parseCliError, parseCliVersion, parsePeersAnswer, parseProfilesAnswer,
   profileCopyArgs, profileDeleteArgs, profileSetDefaultArgs, versionAtLeast,
 } from "../../cliJson";
 import { findLocalSession, librarySlug, slugMatches, transcriptCwd } from "../../localSession";
@@ -28,8 +28,11 @@ import { projectDirName } from "../../nativeSeed";
 import {
   CLI_PROFILE_CMD_TEXTS, deleteCliProfile, duplicateProfile, setDefaultProfile, validateOperator,
 } from "../../profileCommands";
-import { CLI_PROFILE_TEXTS, CliProfileItem, CliProfilesLoad, loadCliProfiles, ProfileDetailItem, ProfilesProvider } from "../../profilesView";
+import { CLI_PROFILE_TEXTS, CliProfileItem, CliProfilesLoad, loadCliProfiles, ProfileDetailItem, profileDetails, ProfilesProvider } from "../../profilesView";
+
+const profileDetailsFlags = (p: Parameters<typeof profileDetails>[0]) => profileDetails(p).find(([k]) => k === "Flags")![1];
 import { cellChoices, runAsCell, RUN_AS_CELL_TEXTS, RunAsCellSession } from "../../runAsCell";
+import { shownFlags } from "../../profilesView";
 import { SessionItem } from "../../sessionsView";
 import { commandLine } from "../../terminalCommand";
 
@@ -65,6 +68,7 @@ const V1_PEERS = {
   peers: [
     { instance_id: "ins_A1", name: "build", aid: "build@team", tier: "sandbox", state: "online", own: true, tags: [] },
     { instance_id: "ins_Z9", name: "laptop-agent", aid: "laptop-agent@team", tier: "uid", state: "online", own: false },
+    { instance_id: "ins_Y8", name: "desk-agent", aid: "desk-agent@team", tier: "sandbox", state: "offline", own: true },
     { instance_id: "ins_bad id", name: "x", own: false },
   ],
 };
@@ -160,6 +164,17 @@ describe("CLI JSON: `mesh cells --json` v1", () => {
     ]);
   });
 
+  it("the old row fields are read in v1 too: default, needs_approval, duplicate, created, base", () => {
+    const a = parseCellsAnswer(JSON.stringify({ v: 1, default: null, cells: [
+      row({ name: "a", default: true, needs_approval: true, duplicate: true, created: "2026-11-04T09:00:00Z", base: "staging.example.com" }),
+      row({ name: "b", instance_id: "ins_B9" }),
+    ] }))!;
+    assert.deepStrictEqual([a.cells[0].isDefault, a.cells[0].needsApproval, a.cells[0].duplicate, a.cells[0].created, a.cells[0].server], [true, true, true, "2026-11-04", "https://staging.example.com"]);
+    assert.deepStrictEqual([a.cells[1].isDefault, a.cells[1].needsApproval, a.cells[1].duplicate, a.cells[1].created, a.cells[1].server], [false, false, false, undefined, undefined]);
+    const item = new LocalCellItem(a.cells[0], a.cells, BASE);
+    assert.strictEqual(item.description, "default · staging.example.com · stored · registry active · waits for an admin · stored twice");
+  });
+
   it("tags are read tolerantly (missing, empty, or with junk) and never break a row", () => {
     const a = parseCellsAnswer(JSON.stringify({ v: 1, default: null, cells: [row({ name: "a" }), row({ name: "b", tags: undefined }), row({ name: "c", tags: "x" }), row({ name: "d", tags: ["ok", 1, null, "\u202e"] })] }))!;
     assert.deepStrictEqual(a.cells.map((c) => c.tags), [[], [], [], ["ok"]]);
@@ -188,10 +203,13 @@ describe("CLI JSON: `mesh cells --json` v1", () => {
 });
 
 describe("CLI JSON: `mesh peers --json` and `profiles --json`", () => {
-  it("peers: only the other machines' cells (own: false) with valid ids; another mesh's answer is no answer", () => {
+  it("peers: every cell with a valid id, `own` = the caller's account (not this computer); another mesh's answer is no answer", () => {
     assert.deepStrictEqual(parsePeersAnswer(JSON.stringify(V1_PEERS), MESH), [
-      { instanceId: "ins_Z9", name: "laptop-agent", aid: "laptop-agent@team", tier: "uid", state: "online", tags: [] },
+      { instanceId: "ins_A1", name: "build", own: true, aid: "build@team", tier: "sandbox", state: "online", tags: [] },
+      { instanceId: "ins_Z9", name: "laptop-agent", own: false, aid: "laptop-agent@team", tier: "uid", state: "online", tags: [] },
+      { instanceId: "ins_Y8", name: "desk-agent", own: true, aid: "desk-agent@team", tier: "sandbox", state: "offline", tags: [] },
     ]);
+    assert.strictEqual(parsePeersAnswer(JSON.stringify({ v: 1, mesh_id: MESH, peers: [{ instance_id: "ins_Q1", name: "q" }] }), MESH)![0].own, false, "no `own`: not yours");
     assert.strictEqual(parsePeersAnswer(JSON.stringify(V1_PEERS), MESH2), undefined);
     assert.strictEqual(parsePeersAnswer("[]", MESH), undefined);
   });
@@ -324,6 +342,7 @@ describe("command builders", () => {
     assert.deepStrictEqual(cellRenameArgs(docs, cells, "notes"), ["mesh", "cell", "rename", "docs", "notes"]);
     assert.deepStrictEqual(cellRenameArgs(docs, shared, "notes"), ["mesh", "cell", "rename", "docs", "notes", "--mesh", MESH]);
     assert.strictEqual(cellRenameArgs(docs, cells, "Bad Name"), undefined);
+    assert.strictEqual(cellRenameArgs(spare, cells, "spare-2"), undefined, "a standalone cell isn't renamed");
     assert.deepStrictEqual(cellStopArgs(build, cells), ["mesh", "cell", "stop", "build"]);
     assert.strictEqual(cellStopArgs(docs, cells), undefined, "not running");
     assert.strictEqual(validateNewCellName("build", docs, cells), CELL_CMD_TEXTS.renameTaken);
@@ -384,9 +403,13 @@ describe("Cells view: grouped by mesh, with the other machines' cells", () => {
     assert.deepStrictEqual(team.map((i) => [i.label, i.description, i.contextValue]), [
       ["build", "default · profile work · running · registry active · path lan", "a4sx.localCell.default.running"],
       ["docs", "stored · registry reserved", "a4sx.localCell"],
+      ["desk-agent", "yours, on another machine · offline · sandbox", "a4sx.remoteCell"],
       ["laptop-agent", "on another machine · online · uid", "a4sx.remoteCell"],
     ]);
-    assert.ok(team[2] instanceof RemoteCellItem);
+    assert.ok(team[2] instanceof RemoteCellItem && team[3] instanceof RemoteCellItem);
+    assert.match(String(team[2].tooltip), /^Cell: desk-agent\nYours, on another machine: read-only here\./);
+    assert.match(String(team[3].tooltip), /^Cell: laptop-agent\nOn another machine: read-only here\./);
+    assert.ok(!team.some((i) => i instanceof RemoteCellItem && i.peer.instanceId === "ins_A1"), "your cell stored here is listed once, as local");
     assert.match(String(team[0].tooltip), /On this computer: running \(pid 4242\)\nRegistry: active\nPath: lan/);
     assert.match(String(team[1].tooltip), /Path: none/);
     assert.deepStrictEqual(h.runs, ["--version", "mesh cells --json", `mesh peers ${MESH} --json`]);
@@ -405,7 +428,7 @@ describe("Cells view: grouped by mesh, with the other machines' cells", () => {
     assert.deepStrictEqual(table, {
       "a4sx.startCell": [true, false, false, true, true],
       "a4sx.stopCell": [false, true, false, false, false],
-      "a4sx.renameCell": [true, false, true, false, true],
+      "a4sx.renameCell": [true, false, false, false, true],
       "a4sx.forgetCell": [true, false, true, true, true],
       "a4sx.setDefaultCell": [true, false, true, true, false],
       "a4sx.copyCellLaunch": [true, true, false, true, true],
@@ -434,6 +457,15 @@ describe("Cells view: grouped by mesh, with the other machines' cells", () => {
     const line = await copyCellLaunch(h.deps, build);
     assert.strictEqual(line, `'${CLI}' 'launch' '--cell' 'build' '--mesh-reduced-isolation'`);
     assert.strictEqual(calls.clipboard, line);
+  });
+
+  it("Rename isn't offered for a standalone cell: no box, nothing runs", async () => {
+    const h = harness();
+    const spare = (await localItems(h)).find((i) => i.cell.name === "spare")!;
+    assert.strictEqual(spare.contextValue, "a4sx.localCell.standalone");
+    assert.ok(!(await renameCell(h.deps, spare)));
+    assert.strictEqual(calls.inputs.length, 0);
+    assert.ok(!h.runs.some((r) => r.startsWith("mesh cell rename")));
   });
 
   it("a refusal shows the CLI's JSON message", async () => {
@@ -493,8 +525,46 @@ describe("Run as cell in terminal", () => {
     assert.strictEqual(calls.terminals.length, 0);
     calls.pickQueue.push(0, [1]);
     calls.modalChoices.push(RUN_AS_CELL_TEXTS.autoAllowAccept);
+    await runAsCell(h.deps, local());
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--cell' 'build' '--auto-allow-ipc-messages' '--' '--resume' '${SID}'\n`]);
+  });
+
+  it("a library-only session with Keep my sign-in off: a warning first (the CLI can't seed without it); Cancel starts nothing", async () => {
+    const h = harness();
+    calls.pickQueue.push(0, []);
+    assert.strictEqual(await runAsCell(h.deps, library), undefined);
+    assert.deepStrictEqual(calls.modals.map((m) => [m.kind, m.message, m.items, m.detail]),
+      [["warning", RUN_AS_CELL_TEXTS.seedSignInTitle, [RUN_AS_CELL_TEXTS.seedSignInAccept], RUN_AS_CELL_TEXTS.seedSignInDetail]]);
+    assert.strictEqual(calls.terminals.length, 0);
+    calls.pickQueue.push(3, []);
+    calls.modalChoices.push(RUN_AS_CELL_TEXTS.seedSignInAccept);
     await runAsCell(h.deps, library);
-    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--cell' 'build' '--auto-allow-ipc-messages' '--a4sx-session=${LIB_ID}'\n`]);
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--new-cell' '--mesh-reduced-isolation' '--a4sx-session=${LIB_ID}'\n`]);
+    // A session on this computer needs no sign-in to resume: no warning.
+    calls.pickQueue.push(0, []);
+    await runAsCell(h.deps, local());
+    assert.strictEqual(calls.modals.length, 2);
+    assert.deepStrictEqual(calls.terminals[1].sent, [`'${CLI}' 'launch' '--cell' 'build' '--' '--resume' '${SID}'\n`]);
+  });
+
+  it("the CLI's config: `a4sx config show` turns the auto-allow toggle on and says where it comes from; off, the toggle names the config key", async () => {
+    assert.strictEqual(configAutoAllow(JSON.stringify({ version: 1, ipc: { auto_allow_messages: true } })), true);
+    assert.strictEqual(configAutoAllow(JSON.stringify({ version: 1 })), false);
+    assert.strictEqual(configAutoAllow(""), undefined);
+    const on = harness({ "config show": out({ version: 1, ipc: { auto_allow_messages: true } }) });
+    calls.pickQueue.push(0, undefined);
+    await runAsCell(on.deps, local());
+    assert.ok(on.runs.includes("config show"));
+    assert.deepStrictEqual(calls.quickPicks[1].items.map((i: any) => [i.picked, i.detail]), [
+      [true, RUN_AS_CELL_TEXTS.keepSignInDetail], [true, RUN_AS_CELL_TEXTS.autoAllowFromConfig],
+    ]);
+    const off = harness({ "config show": out("", 1, "a4sx: no config at ~/.config/a4sx/config.json") });
+    calls.pickQueue.push(0, undefined);
+    await runAsCell(off.deps, local());
+    assert.deepStrictEqual(calls.quickPicks[3].items.map((i: any) => [i.picked, i.detail]), [
+      [true, RUN_AS_CELL_TEXTS.keepSignInDetail], [false, RUN_AS_CELL_TEXTS.autoAllowDetail],
+    ]);
+    assert.match(RUN_AS_CELL_TEXTS.autoAllowDetail, /ipc\.auto_allow_messages/);
   });
 
   it("Keep my sign-in asks the per-computer consent once; Esc in either pick starts nothing", async () => {
@@ -640,10 +710,34 @@ describe("Launch profiles from the a4sx CLI", () => {
     calls.modalChoices.push("Delete");
     assert.ok(!(await deleteCliProfile(deps, work)));
     assert.deepStrictEqual(calls.modals.map((m) => [m.message, m.detail]), [
-      [CLI_PROFILE_CMD_TEXTS.confirmDelete("lab"), undefined], [CLI_PROFILE_CMD_TEXTS.confirmDelete("lab"), undefined],
-      [CLI_PROFILE_CMD_TEXTS.confirmDelete("work"), CLI_PROFILE_CMD_TEXTS.deleteUsed(2)],
+      [CLI_PROFILE_CMD_TEXTS.confirmDelete("lab"), "Cells using it: 0"], [CLI_PROFILE_CMD_TEXTS.confirmDelete("lab"), "Cells using it: 0"],
+      [CLI_PROFILE_CMD_TEXTS.confirmDelete("work"), "Cells using it: 2"],
     ]);
     assert.deepStrictEqual(h.runs.filter((r) => r.startsWith("profile")), ["profile --set-default lab", "profile --delete lab", "profile --delete work"]);
     assert.deepStrictEqual(calls.errors.map((e) => e.message), [CLI_PROFILE_CMD_TEXTS.failed("delete the launch profile", "2 cells use this profile.")]);
+  });
+
+  it("an unknown used_by_cells (null) is never 0: details say \"unknown\", Delete says \"Cells using it: unknown\"", async () => {
+    const data = parseProfilesAnswer(JSON.stringify({ v: 1, default: null, profiles: [{ id: "solo", used_by_cells: null, header_names: [], flags: [], env_keys: [] }, { id: "zero", used_by_cells: 0 }] }))!;
+    assert.deepStrictEqual(data.profiles.map((p) => p.usedByCells), [undefined, 0]);
+    const v = view({ kind: "ok", data });
+    const [solo] = (await v.getChildren()) as CliProfileItem[];
+    assert.strictEqual((await v.getChildren(solo)).find((d) => d.label === "Used by")!.description, "unknown");
+    const h = harness();
+    await deleteCliProfile({ cells: h.deps, view: v }, solo);
+    assert.deepStrictEqual(calls.modals.map((m) => m.detail), ["Cells using it: unknown"]);
+    assert.strictEqual(h.runs.length, 0, "cancelled");
+  });
+
+  it("flags are masked by name too (--api-key, --token, *secret*, *password*, *auth* …), whatever the value looks like", () => {
+    assert.deepStrictEqual(shownFlags([
+      "--token", "abc", "--client-secret-file=/x/y", "--db-password", "hunter2", "--auth-header=X", "--no-auth", "--verbose",
+      "--api-key=plain", "--model=opus", "--session-cookie", "c1", "<redacted>", "--temperature=0.2",
+    ]), [
+      "--token", "••••", "--client-secret-file=••••", "--db-password", "••••", "--auth-header=••••", "--no-auth", "--verbose",
+      "--api-key=••••", "--model=opus", "--session-cookie", "••••", "<redacted>", "--temperature=0.2",
+    ]);
+    const p = parseProfilesAnswer(JSON.stringify({ v: 1, profiles: [{ id: "x", flags: ["--github-token=ghx_short", "--debug"] }] }))!.profiles[0];
+    assert.strictEqual(profileDetailsFlags(p), "--github-token=•••• --debug");
   });
 });

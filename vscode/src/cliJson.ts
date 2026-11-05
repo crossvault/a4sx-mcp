@@ -166,6 +166,8 @@ export function parseCellsAnswer(stdout: string): CellsAnswer | undefined {
 export interface RemoteCell {
   instanceId: string;
   name: string;
+  /** In your own account (`own` means the caller's account, not this computer). */
+  own: boolean;
   aid?: string;
   tier?: string;
   state?: string;
@@ -176,7 +178,10 @@ export function peersArgs(meshId: string): string[] | undefined {
   return CLI_MESH_ID.test(meshId) ? ["mesh", "peers", meshId, "--json"] : undefined;
 }
 
-/** The other machines' cells in the answer (`own: false`), or undefined when it isn't the v1 answer. */
+/**
+ * The mesh's cells in the answer, yours (`own: true`, the caller's account) and other people's, or undefined when
+ * it isn't the v1 answer. The view drops those stored on this computer (by instance id); the rest run elsewhere.
+ */
 export function parsePeersAnswer(stdout: string, meshId: string): RemoteCell[] | undefined {
   const raw = parseJson(stdout);
   if (!isObject(raw) || raw.v !== 1 || !Array.isArray(raw.peers) || (raw.mesh_id !== undefined && raw.mesh_id !== meshId)) {
@@ -184,14 +189,14 @@ export function parsePeersAnswer(stdout: string, meshId: string): RemoteCell[] |
   }
   const out: RemoteCell[] = [];
   for (const p of raw.peers) {
-    if (!isObject(p) || p.own !== false || typeof p.instance_id !== "string" || !INSTANCE_ID.test(p.instance_id)) {
+    if (!isObject(p) || typeof p.instance_id !== "string" || !INSTANCE_ID.test(p.instance_id)) {
       continue;
     }
     const name = showText(p.name, 48);
     if (!name) {
       continue;
     }
-    const peer: RemoteCell = { instanceId: p.instance_id, name, tags: parseTags(p.tags) };
+    const peer: RemoteCell = { instanceId: p.instance_id, name, own: p.own === true, tags: parseTags(p.tags) };
     const aid = showText(p.aid, 96);
     const tier = showText(p.tier, 24);
     const state = showText(p.state, 24);
@@ -230,7 +235,8 @@ export interface CliProfile {
   /** As the CLI sent them; shown only through profilesView.shownFlags (credential values masked). */
   flags: string[];
   envKeys: string[];
-  usedByCells: number;
+  /** How many of your cells use it; undefined when the CLI doesn't know (null), never taken as 0. */
+  usedByCells?: number;
 }
 
 export interface ProfilesAnswer {
@@ -254,8 +260,10 @@ export function parseProfilesAnswer(stdout: string): ProfilesAnswer | undefined 
       headerNames: strings(p.header_names, HEADER_NAME),
       flags: Array.isArray(p.flags) ? p.flags.filter((f): f is string => typeof f === "string" && f.length <= 512) : [],
       envKeys: strings(p.env_keys, ENV_KEY),
-      usedByCells: typeof p.used_by_cells === "number" && Number.isInteger(p.used_by_cells) && p.used_by_cells > 0 ? p.used_by_cells : 0,
     };
+    if (typeof p.used_by_cells === "number" && Number.isInteger(p.used_by_cells) && p.used_by_cells >= 0) {
+      prof.usedByCells = p.used_by_cells;
+    }
     for (const k of ["harness", "model", "base_url"] as const) {
       const v = showText(p[k], 200);
       if (v) {
@@ -285,4 +293,17 @@ export function profileSetDefaultArgs(id: string): string[] | undefined {
 
 export function profileDeleteArgs(id: string): string[] | undefined {
   return PROFILE_ID.test(id) ? ["profile", "--delete", id] : undefined;
+}
+
+// --- `a4sx config show` -------------------------------------------------------------------------------
+
+export const CONFIG_SHOW_ARGS: readonly string[] = ["config", "show"];
+
+/** Whether the CLI's config turns on `ipc.auto_allow_messages`; undefined when the answer isn't the config. */
+export function configAutoAllow(stdout: string): boolean | undefined {
+  const raw = parseJson(stdout);
+  if (!isObject(raw)) {
+    return undefined;
+  }
+  return isObject(raw.ipc) && raw.ipc.auto_allow_messages === true;
 }

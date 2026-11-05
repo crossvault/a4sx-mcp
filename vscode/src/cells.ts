@@ -225,9 +225,9 @@ export function newCellRunArgs(o: LaunchOptions, target?: ResumeTarget): string[
   return tail && ["launch", "--new-cell", ...launchFlags(o), ...tail];
 }
 
-/** `mesh cell rename OLD NEW [--mesh ID|standalone]`; undefined when the new name isn't one the CLI takes. */
+/** `mesh cell rename OLD NEW [--mesh ID]`; undefined for a standalone cell or a name the CLI doesn't take. */
 export function cellRenameArgs(cell: LocalCell, all: readonly LocalCell[], newName: string): string[] | undefined {
-  const p = pickArgs(cell, all);
+  const p = startableCell(cell) ? pickArgs(cell, all) : undefined;
   return p && CELL_NAME.test(newName) ? ["mesh", "cell", "rename", cell.name, newName, ...p.slice(1)] : undefined;
 }
 

@@ -308,9 +308,9 @@ export function validateNewCellName(raw: string, cell: { name: string; meshId?: 
   return v !== cell.name && all.some((c) => c.name === v && c.meshId === cell.meshId) ? CELL_CMD_TEXTS.renameTaken : undefined;
 }
 
-/** Rename: an input box, then `mesh cell rename OLD NEW`. */
+/** Rename (a cell in a mesh): an input box, then `mesh cell rename OLD NEW`. */
 export async function renameCell(deps: CellCommandDeps, item: LocalCellItem | undefined): Promise<boolean> {
-  if (!(item instanceof LocalCellItem)) {
+  if (!(item instanceof LocalCellItem) || item.cell.meshId === undefined) {
     return false;
   }
   const cell = item.cell;

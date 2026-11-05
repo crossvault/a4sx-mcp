@@ -41,6 +41,11 @@ export function hiddenCount(p: Profile): number {
 
 /** Flag text that looks like a credential (the server drops such header values too). */
 export const SECRET_FLAG = /(^|[=\s:])(bearer\b|basic\s|sk-|sk_live|sk_test|ghp_|github_pat_|xox[baprs]-|ya29\.)|authorization|(api[-_]?key|token|secret|password)(=|$)/i;
+/**
+ * 0.5.0: a flag NAME that holds a credential (`--api-key`, `--token`, `--client-secret-file`, `--db-password`,
+ * `--auth-header`, …), as the CLI masks them: its value is never shown, whatever it looks like.
+ */
+const SECRET_FLAG_NAME = /^-{1,2}[a-z0-9_.-]*(api[-_]?key|key|token|secret|passw(?:or)?d|passphrase|credential|auth|bearer|cookie)[a-z0-9_.-]*$/i;
 /** A flag that only names a credential, so the next flag is its value (`--api-key VALUE`). */
 const SECRET_NAME = /^-{0,2}[a-z0-9_-]*(api[-_]?key|token|secret|password|authorization)$/i;
 
@@ -51,9 +56,14 @@ const SECRET_NAME = /^-{0,2}[a-z0-9_-]*(api[-_]?key|token|secret|password|author
 export function secretFlags(flags: readonly string[]): boolean[] {
   const out = flags.map(() => false);
   for (let i = 0; i < flags.length; i++) {
-    if (SECRET_FLAG.test(flags[i])) {
+    const f = flags[i];
+    const eq = f.indexOf("=");
+    // A bare credential name takes the next flag as its value (for the wider name rule: unless that is a flag).
+    const bareName = eq < 0 && (SECRET_NAME.test(f) || SECRET_FLAG_NAME.test(f));
+    const takesNext = eq < 0 && i + 1 < flags.length && (SECRET_NAME.test(f) || (SECRET_FLAG_NAME.test(f) && !flags[i + 1].startsWith("-")));
+    if (SECRET_FLAG.test(f) || (eq > 0 && SECRET_FLAG_NAME.test(f.slice(0, eq))) || bareName) {
       out[i] = true;
-      if (SECRET_NAME.test(flags[i]) && i + 1 < flags.length) {
+      if (takesNext) {
         out[i + 1] = true;
         i++;
       }
@@ -64,7 +74,7 @@ export function secretFlags(flags: readonly string[]): boolean[] {
 
 /** One flag as it may be shown: the value part of a credential-looking flag becomes ••••. */
 export function maskFlag(flag: string): string {
-  if (SECRET_NAME.test(flag)) {
+  if (SECRET_NAME.test(flag) || SECRET_FLAG_NAME.test(flag)) {
     return flag;   // just the name; its value is the next flag
   }
   const eq = flag.indexOf("=");
@@ -174,7 +184,7 @@ export const CLI_PROFILE_TEXTS = {
   env: "Env keys",
   usedBy: "Used by",
   none: "none",
-  cells: (n: number) => (n === 0 ? "no cells" : n === 1 ? "1 cell" : `${n} cells`),
+  cells: (n: number | undefined) => (n === undefined ? "unknown" : n === 0 ? "no cells" : n === 1 ? "1 cell" : `${n} cells`),
   updateCli: "Update a4sx to 0.25.0 or newer to see each profile's details here and to duplicate profiles.",
   cliFailed: "Could not read the launch profiles from the a4sx CLI.",
 };

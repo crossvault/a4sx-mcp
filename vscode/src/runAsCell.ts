@@ -10,7 +10,8 @@ import * as vscode from "vscode";
 import { CLI_NAME } from "./cli";
 import { LaunchOptions, LocalCell, newCellRunArgs, ResumeTarget, runAsCellArgs, startableCell } from "./cells";
 import { CELL_CMD_TEXTS, CellCommandDeps, cellTerminalEnv, consentReducedIsolation, ensureCli } from "./cellCommands";
-import { CELL_TEXTS, CMD_UPDATE_CLI } from "./cellsView";
+import { CELL_TEXTS, CliRunner, CMD_UPDATE_CLI } from "./cellsView";
+import { CONFIG_SHOW_ARGS, configAutoAllow } from "./cliJson";
 import { LocalSession } from "./localSession";
 import { openCommandTerminal } from "./resume";
 
@@ -26,7 +27,12 @@ export const RUN_AS_CELL_TEXTS = {
   keepSignIn: "Keep my sign-in (reduced isolation)",
   keepSignInDetail: "The cell runs as your user and can use the a4sx sign-ins and keys saved on this computer.",
   autoAllow: "Deliver messages from mesh peers without asking",
-  autoAllowDetail: "Off: you approve each message another session in the mesh sends to this one.",
+  autoAllowDetail: "Off: you approve each message another session in the mesh sends to this one, unless ipc.auto_allow_messages is on in your a4sx config.",
+  autoAllowFromConfig: "On in your a4sx config (ipc.auto_allow_messages): turning it off here doesn't change that. `a4sx config set ipc.auto_allow_messages false` does.",
+  seedSignInTitle: "This session is only in your a4sx library. Keep your sign-in for this start?",
+  seedSignInDetail:
+    "The cell fetches the session from your library with your a4sx sign-in. Without \"Keep my sign-in\", the a4sx CLI refuses to start it.",
+  seedSignInAccept: "Keep my sign-in and start",
   autoAllowTitle: "Deliver messages from mesh peers without asking?",
   autoAllowWarning:
     "Messages that other sessions in the mesh send to this cell will reach the agent without you approving each one. " +
@@ -61,12 +67,27 @@ export function cellChoices(cells: readonly LocalCell[]): { label: string; descr
   ];
 }
 
-/** The two toggles; "Keep my sign-in" starts on, "Deliver … without asking" off. undefined: Esc. */
-export async function pickLaunchOptions(): Promise<LaunchOptions | undefined> {
+/** Whether `a4sx config show` (a local file, no network) turns on ipc.auto_allow_messages; false when unknown. */
+export async function readConfigAutoAllow(run: CliRunner, cli: string): Promise<boolean> {
+  try {
+    return configAutoAllow((await run(cli, CONFIG_SHOW_ARGS, 10_000)).stdout) === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The two toggles; "Keep my sign-in" starts on, "Deliver … without asking" off (on, and saying so, when the
+ * CLI's config already turns it on). undefined: Esc.
+ */
+export async function pickLaunchOptions(configAutoAllowOn = false): Promise<LaunchOptions | undefined> {
   const t = RUN_AS_CELL_TEXTS;
   const items = [
     { label: t.keepSignIn, description: "--mesh-reduced-isolation", detail: t.keepSignInDetail, picked: true, key: "reduced" as const },
-    { label: t.autoAllow, description: "--auto-allow-ipc-messages", detail: t.autoAllowDetail, picked: false, key: "autoAllow" as const },
+    {
+      label: t.autoAllow, description: "--auto-allow-ipc-messages", detail: configAutoAllowOn ? t.autoAllowFromConfig : t.autoAllowDetail,
+      picked: configAutoAllowOn, key: "autoAllow" as const,
+    },
   ];
   const picked = await vscode.window.showQuickPick(items, { title: t.optionsTitle, placeHolder: t.optionsPlaceholder, canPickMany: true, ignoreFocusOut: true });
   if (!picked) {
@@ -109,9 +130,18 @@ export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession
   if (!picked) {
     return undefined;
   }
-  const options = await pickLaunchOptions();
+  const options = await pickLaunchOptions(await readConfigAutoAllow(deps.run, cli));
   if (!options) {
     return undefined;
+  }
+  // A library-only session is seeded with the user's a4sx sign-in, which only "Keep my sign-in" keeps in the
+  // cell (the CLI refuses otherwise: LAUNCH_TEXT_SEED_SIGNIN). Say so before anything starts.
+  if (target.kind === "library" && !options.reduced) {
+    const choice = await vscode.window.showWarningMessage(t.seedSignInTitle, { modal: true, detail: t.seedSignInDetail }, t.seedSignInAccept);
+    if (choice !== t.seedSignInAccept) {
+      return undefined;
+    }
+    options.reduced = true;
   }
   const args = picked.choice.kind === "cell" ? runAsCellArgs(picked.choice.cell, load.cells, options, target) : newCellRunArgs(options, target);
   if (!args) {
