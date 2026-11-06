@@ -525,6 +525,27 @@ describe("0.5.1 review: paths, venvs, every Python on PATH, one repair at a time
     assert.strictEqual(await findPython(pythons({ python3: "/usr/bin/python3" }), "linux"), "/usr/bin/python3", "elsewhere POSIX paths as before");
   });
 
+  it("a drive path with forward slashes (C:/msys64/…) is a Windows path: found, and a launcher holding it isn't repaired", async () => {
+    const MINGW = "C:/msys64/mingw64/bin/python.exe";
+    assert.strictEqual(await findPython(pythons({ python: MINGW }), "win32", {}, () => []), MINGW);
+    const dir = ownCopy(MINGW);
+    assert.ok(!launcherNeedsRepair(dir, "win32"));
+    const tried: string[] = [];
+    assert.strictEqual(await repairLauncher(dir, pythons({}, tried), "win32"), "ok");
+    assert.deepStrictEqual(tried, []);
+    assert.ok(launcherNeedsRepair(ownCopy("/c/msys64/mingw64/bin/python.exe"), "win32"), "an MSYS-style /c/… path still is");
+  });
+
+  it("each interpreter is probed once: a PATH entry that bare python already reported (any case) is skipped", async () => {
+    const venvDir = "C:\\proj\\.venv\\Scripts";
+    const have = new Set([`${venvDir}\\python.exe`, "C:\\Other\\python.exe"]);
+    const tried: string[] = [];
+    const run = pythons({ python: { exe: VENV, base: STORE_EXE }, [`${venvDir}\\python.exe`]: GOOD_EXE, "C:\\Other\\python.exe": { exe: "C:\\Other\\python.exe", base: STORE_EXE } }, tried);
+    const env = { PATH: "c:\\PROJ\\.venv\\Scripts;C:\\Other" };
+    assert.deepStrictEqual(await searchPython(run, "win32", env, () => [], (p) => have.has(p) || have.has(p.replace(/^c:\\PROJ/, "C:\\proj"))), { kind: "store-only", exe: VENV });
+    assert.deepStrictEqual(tried, ["py", "python", "python3", "C:\\Other\\python.exe"], "the venv's python.exe was not probed a second time");
+  });
+
   it("a venv built on the Store Python is the Store build too (by sys._base_executable, or sys.base_prefix)", async () => {
     assert.deepStrictEqual(await searchPython(pythons({ python: { exe: VENV, base: STORE_EXE } }), "win32", {}, () => []), { kind: "store-only", exe: VENV });
     assert.deepStrictEqual(await searchPython(pythons({ python: { exe: VENV, base: "", prefix: STORE_PREFIX } }), "win32", {}, () => []), { kind: "store-only", exe: VENV });

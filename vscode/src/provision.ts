@@ -194,8 +194,11 @@ export const PYTHON_PROBE =
   `import sys, json; print(json.dumps([sys.executable, getattr(sys, '_base_executable', '') or '', sys.base_prefix]) ` +
   `if sys.version_info >= (${MIN_PYTHON[0]}, ${MIN_PYTHON[1]}) else '')`;
 
-/** A Windows path a launcher can start: a drive letter or a UNC share (not an MSYS/Cygwin `/usr/bin/python3`, not a rooted `\foo`). */
-const WIN_ABS = /^(?:[A-Za-z]:\\|\\\\[^\\?.][^\\]*\\[^\\]+)/;
+/**
+ * A Windows path a launcher can start: a drive letter (C:\ or C:/) or a UNC share (not an MSYS/Cygwin
+ * `/usr/bin/python3`, not a rooted `\foo`).
+ */
+const WIN_ABS = /^(?:[A-Za-z]:[\\/]|\\\\[^\\?.][^\\]*\\[^\\]+)/;
 
 /** An absolute path for `platform` that the launcher can hold: on Windows only with a drive or a UNC share. */
 export function usablePythonPath(exe: string, platform: NodeJS.Platform): boolean {
@@ -302,7 +305,15 @@ export async function searchPython(
   run: Runner, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, listDir?: (d: string) => string[], isFile?: (p: string) => boolean,
 ): Promise<PythonSearch> {
   let store: string | undefined;
+  // Each interpreter is probed once: a path candidate is skipped when it was tried, or an earlier probe
+  // (bare python / python3) reported it as its sys.executable.
+  const key = (p: string) => (platform === "win32" ? p.toLowerCase() : p);
+  const probed = new Set<string>();
   for (const [cmd, ...rest] of pythonCandidates(platform, env, listDir, isFile)) {
+    if (rest.length === 0 && probed.has(key(cmd))) {
+      continue;
+    }
+    probed.add(key(cmd));
     let r: { code: number | null; stdout: string };
     try {
       r = await run(cmd, [...rest, "-c", PYTHON_PROBE], 15_000);
@@ -310,6 +321,9 @@ export async function searchPython(
       continue;
     }
     const probe = r.code === 0 ? parseProbe(r.stdout) : undefined;
+    if (probe) {
+      probed.add(key(probe.exe));
+    }
     if (probe && usablePythonPath(probe.exe, platform)) {
       if (![probe.exe, ...probe.base].some(isStorePython)) {
         return { kind: "found", exe: probe.exe };
