@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+- On Windows, **Install a4sx CLI** no longer sets up the CLI with the Microsoft Store Python. The a4sx CLI refuses that Python (Claude Code can't see the files it writes), so in 0.5.0 a cell could stop with "this Python is the Microsoft Store build … Nothing was started." The extension now skips it and also looks in `%ProgramFiles%\Python3*`. If the Store Python is the only one, it says so and offers `winget install Python.Python.3.12`.
+- If the extension's own copy of the CLI was set up with the Store Python, the extension switches it to another Python on its own when there is one. Otherwise the next CLI action offers to install one.
+- On Windows, an a4sx CLI installed with `install.ps1` (in `%LOCALAPPDATA%\Programs\a4sx`) is now found even when VS Code's `PATH` doesn't include that folder yet, and is used before the extension's own copy.
+
 ## 0.5.0
 
 - **Run as cell in terminal** on a session in **My sessions**: choose one of this computer's cells (name · mesh · launch profile) or **New cell…**, then two options: **Keep my sign-in (reduced isolation)** (`--mesh-reduced-isolation`, on by default) and **Deliver messages from mesh peers without asking** (`--auto-allow-ipc-messages`, off by default; turning it on shows a warning; it starts on, and says so, when `ipc.auto_allow_messages` is on in your a4sx config). A terminal then runs `a4sx launch --cell <cell> [options] -- --resume <session id>` in the folder the session ran in. A session that is only in your library runs with `--a4sx-session=<id>` instead; it needs your sign-in, so with **Keep my sign-in** off the extension warns first. **New cell…** runs `a4sx launch --new-cell [options] …`, and the browser approval picks the mesh and launch profile.

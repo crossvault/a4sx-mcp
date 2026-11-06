@@ -195,18 +195,20 @@ export type Runner = (file: string, args: readonly string[], timeoutMs: number) 
 /**
  * The Python commands to try, as install.ps1 does on Windows: the py launcher, python, python3, then
  * the per-user folders a fresh `winget install Python.Python.3.1x` uses (the extension host's PATH
- * doesn't change until VS Code restarts). Elsewhere python3, then python.
+ * doesn't change until VS Code restarts), then the all-users folders in %ProgramFiles%; newest first in
+ * each. Elsewhere python3, then python.
  */
 export function pythonCandidates(platform: NodeJS.Platform, env: NodeJS.ProcessEnv = process.env, listDir: (d: string) => string[] = safeList): string[][] {
   if (platform !== "win32") {
     return [["python3"], ["python"]];
   }
   const out: string[][] = [["py", "-3"], ["python"], ["python3"]];
-  const local = env.LOCALAPPDATA;
-  if (local) {
-    const root = path.win32.join(local, "Programs", "Python");
-    const dirs = listDir(root).filter((d) => /^Python3\d{1,2}$/i.test(d)).sort((a, b) => Number(b.slice(7)) - Number(a.slice(7)));
-    out.push(...dirs.map((d) => [path.win32.join(root, d, "python.exe")]));
+  const roots = [env.LOCALAPPDATA && path.win32.join(env.LOCALAPPDATA, "Programs", "Python"), env.ProgramFiles];
+  for (const root of roots) {
+    if (root) {
+      const dirs = listDir(root).filter((d) => /^Python3\d{1,2}$/i.test(d)).sort((a, b) => Number(b.slice(7)) - Number(a.slice(7)));
+      out.push(...dirs.map((d) => [path.win32.join(root, d, "python.exe")]));
+    }
   }
   return out;
 }
@@ -220,10 +222,27 @@ function safeList(d: string): string[] {
 }
 
 /**
- * The first Python 3.10+ that answers the probe: its sys.executable (an absolute path, so the launcher
- * doesn't depend on PATH). The Microsoft Store stub fails the probe and is skipped.
+ * The Microsoft Store build of Python, by its real path (sys.executable), as install.ps1 and the CLI tell it:
+ * it keeps what it writes under AppData in its own package folder, where Claude Code can't see it, so the
+ * CLI refuses to run with it. An alias in WindowsApps that resolves elsewhere (e.g. the python.org install
+ * manager's) is not the Store build.
  */
-export async function findPython(run: Runner, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, listDir?: (d: string) => string[]): Promise<string | undefined> {
+export const STORE_PYTHON = /\\(WindowsApps|Packages)\\PythonSoftwareFoundation\.Python\.[0-9]/i;
+
+export function isStorePython(exe: string): boolean {
+  return STORE_PYTHON.test(exe);
+}
+
+/** What the search found: a Python the CLI can use, only the Store build, or none at all. */
+export type PythonSearch = { kind: "found"; exe: string } | { kind: "store-only"; exe: string } | { kind: "none" };
+
+/**
+ * The first Python 3.10+ that answers the probe and isn't the Store build: its sys.executable (an absolute
+ * path, so the launcher doesn't depend on PATH). The Store's install stub fails the probe; a full Store
+ * install answers it and is skipped by its path, and the search goes on.
+ */
+export async function searchPython(run: Runner, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, listDir?: (d: string) => string[]): Promise<PythonSearch> {
+  let store: string | undefined;
   for (const [cmd, ...rest] of pythonCandidates(platform, env, listDir)) {
     let r: { code: number | null; stdout: string };
     try {
@@ -234,10 +253,55 @@ export async function findPython(run: Runner, platform: NodeJS.Platform = proces
     const exe = r.stdout.trim().split(/\r?\n/).pop()?.trim() ?? "";
     const isAbs = platform === "win32" ? path.win32.isAbsolute(exe) : path.posix.isAbsolute(exe);
     if (r.code === 0 && exe && isAbs && !CONTROL.test(exe)) {
-      return exe;
+      if (!isStorePython(exe)) {
+        return { kind: "found", exe };
+      }
+      store ??= exe;
     }
   }
-  return undefined;
+  return store ? { kind: "store-only", exe: store } : { kind: "none" };
+}
+
+/** searchPython's Python, or undefined (none, or only the Store build). */
+export async function findPython(run: Runner, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, listDir?: (d: string) => string[]): Promise<string | undefined> {
+  const r = await searchPython(run, platform, env, listDir);
+  return r.kind === "found" ? r.exe : undefined;
+}
+
+/**
+ * True when the extension's own launcher in `dir` runs a Store Python (written by 0.5.0 or older). Cheap:
+ * it reads the launcher's few bytes, nothing is run.
+ */
+export function launcherUsesStorePython(dir: string | undefined, platform: NodeJS.Platform = process.platform): boolean {
+  const launcher = installedLauncher(dir, platform);
+  if (!launcher) {
+    return false;
+  }
+  try {
+    return isStorePython(fs.readFileSync(launcher, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Repairs the extension's own launcher when it runs a Store Python: rewrites it with the Python the search
+ * finds. "ok": nothing to repair (no launcher, or a good one); "repaired"; else why it can't be: only the
+ * Store build ("store-only") or no Python at all ("none"). Throws writeLauncher's ProvisionError when the
+ * launcher can't be written; it then stays as it was.
+ */
+export async function repairLauncher(
+  dir: string | undefined, run: Runner, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, listDir?: (d: string) => string[],
+): Promise<"ok" | "repaired" | "store-only" | "none"> {
+  if (!dir || !launcherUsesStorePython(dir, platform)) {
+    return "ok";
+  }
+  const found = await searchPython(run, platform, env, listDir);
+  if (found.kind !== "found") {
+    return found.kind;
+  }
+  writeLauncher(found.exe, dir, platform);
+  return "repaired";
 }
 
 export const WINGET_PYTHON_ARGS: readonly string[] = ["install", "Python.Python.3.12"];
