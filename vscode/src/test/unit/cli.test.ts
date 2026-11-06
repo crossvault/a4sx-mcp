@@ -96,10 +96,34 @@ describe("findCli", () => {
       fs.rmdirSync(other);
     });
 
-    it("the defaults are ~/.local/bin, /usr/local/bin, /opt/homebrew/bin; none on Windows", () => {
+    it("the defaults are ~/.local/bin, /usr/local/bin, /opt/homebrew/bin; on Windows the installer's %LOCALAPPDATA%\\Programs\\a4sx", () => {
       assert.deepStrictEqual(defaultFallbackDirs("darwin", "/Users/u"), ["/Users/u/.local/bin", "/usr/local/bin", "/opt/homebrew/bin"]);
       assert.deepStrictEqual(defaultFallbackDirs("linux", "/home/u"), ["/home/u/.local/bin", "/usr/local/bin", "/opt/homebrew/bin"]);
-      assert.deepStrictEqual(defaultFallbackDirs("win32", "C:\\Users\\u"), []);
+      assert.deepStrictEqual(defaultFallbackDirs("win32", "C:\\Users\\u", { LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local" }), ["C:\\Users\\u\\AppData\\Local\\Programs\\a4sx"]);
+      assert.deepStrictEqual(defaultFallbackDirs("win32", "C:\\Users\\u", {}), []);
+      assert.deepStrictEqual(defaultFallbackDirs("win32", "C:\\Users\\u", { LOCALAPPDATA: "AppData\\Local" }), [], "a relative LOCALAPPDATA is not used");
+      assert.deepStrictEqual(defaultFallbackDirs("linux", "/home/u", { LOCALAPPDATA: "C:\\L" }), ["/home/u/.local/bin", "/usr/local/bin", "/opt/homebrew/bin"]);
+    });
+
+    it("on Windows: a4sx.cliPath, then PATH, then the installer's folder (a stale PATH still finds the installed a4sx.cmd)", () => {
+      const installer = fs.mkdtempSync(path.join(os.tmpdir(), "a4sx-vscode-programs-"));
+      const onPath = fs.mkdtempSync(path.join(os.tmpdir(), "a4sx-vscode-winpath-"));
+      const installed = path.join(installer, "a4sx.cmd");
+      const pathCmd = path.join(onPath, "a4sx.cmd");
+      fs.writeFileSync(installed, "@echo off\r\n");
+      fs.writeFileSync(pathCmd, "@echo off\r\n");
+      // (lowercase: Windows matches PATHEXT case-insensitively; this test runs on a case-sensitive file system)
+      const win = { pathExt: ".exe;.cmd", platform: "win32" as const, fallbackDirs: [installer] };
+      try {
+        assert.deepStrictEqual(findCli("", { ...win, pathEnv: "" }), { found: true, path: installed });
+        assert.deepStrictEqual(findCli("", { ...win, pathEnv: onPath }), { found: true, path: pathCmd });
+        assert.deepStrictEqual(findCli(exe, { ...win, pathEnv: onPath }), { found: true, path: exe });
+      } finally {
+        fs.unlinkSync(installed);
+        fs.unlinkSync(pathCmd);
+        fs.rmdirSync(installer);
+        fs.rmdirSync(onPath);
+      }
     });
 
     it("finds a4sx in ~/.local/bin when PATH lacks it", () => {

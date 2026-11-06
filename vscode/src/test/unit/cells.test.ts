@@ -8,24 +8,29 @@ import { execFileSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { calls, fakeMemento, resetCalls } from "../fakeVscode";
+import { calls, fakeMemento, fakeSecrets, resetCalls } from "../fakeVscode";
 import * as ext from "../../extension";
 import {
   cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellsListDir, CELLS_LIST_ARGS, LocalCell, localCellDescription, NEW_CELL_ARGS, parseCellsJson,
   serverOrigin, showText,
 } from "../../cells";
 import {
-  CELL_CMD_TEXTS, CellCommandDeps, cliDetail, CONSENT_KEY, consentReducedIsolation, dailyUpdate, forgetCell, installCli, LAST_UPDATE_KEY, newCell, openCellOnWeb,
-  setDefaultCell, startCell,
+  CELL_CMD_TEXTS, CellCommandDeps, cliDetail, CONSENT_KEY, consentReducedIsolation, dailyUpdate, forgetCell, installCli, LAST_UPDATE_KEY, machineKey, newCell,
+  openCellOnWeb, ownCliCheck, repairOnce, repairOwnCli, setDefaultCell, startCell,
 } from "../../cellCommands";
+import { IN_SESSION_MESSAGE } from "../../cliJson";
+import { RESUME_TEXTS } from "../../resume";
+import { SessionItem } from "../../sessionsView";
 import { CELL_TEXTS, CellsLoad, CellsProvider, CliOutput, CliResolution, LocalCellItem, looksTooOld, MeshGroupItem } from "../../cellsView";
 import {
-  bundledClaude, CLI_FILES, downloadCli, execSpec, Fetch, findPython, hashMatches, installedLauncher, launcherName, launcherText, ProvisionError, pythonCandidates,
-  sha256Hex, updateArgs, updateDue, UPDATE_EVERY_MS, writeLauncher,
+  bundledClaude, CLI_FILES, downloadCli, execSpec, Fetch, findPython, hashMatches, installedLauncher, isStorePython, launcherName, launcherText, launcherNeedsRepair,
+  ProvisionError, PROVISION_TEXTS, pythonCandidates, pythonFolders, repairLauncher, searchPython, sha256Hex, updateArgs, updateDue, UPDATE_EVERY_MS, writeLauncher,
 } from "../../provision";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const pkg = require("../../../package.json");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const vscodeFake = require("vscode");
 
 const MESH = "msh_0123456789abcdef0123456789abcdef";
 const MESH2 = "msh_fedcba9876543210fedcba9876543210";
@@ -42,6 +47,9 @@ const CLI_ANSWER = [
 function tmpdir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "a4sx-cells-test-"));
 }
+
+/** The Python probe's line: sys.executable, sys._base_executable, sys.base_prefix. */
+const probeOut = (exe: string, base = exe, prefix = "") => `${JSON.stringify([exe, base, prefix])}\r\n`;
 
 describe("cells: reading `a4sx mesh cells --json`", () => {
   it("parses the CLI's answer: name, mesh, default, approval; a standalone cell has no mesh", () => {
@@ -265,12 +273,20 @@ describe("provisioning: download, sha256, launcher", () => {
 });
 
 describe("provisioning: Python, updates, the bundled claude", () => {
-  it("Windows candidates: py -3, python, python3, then per-user installs, newest first", () => {
-    const list = () => ["Python39", "Python312", "Python310", "Launcher", "Python313"];
-    assert.deepStrictEqual(pythonCandidates("win32", { LOCALAPPDATA: "C:\\L" }, list), [
+  it("Windows candidates: py -3, python, python3, then per-user installs, then %ProgramFiles%\\Python3*, newest first in each", () => {
+    const dirs: Record<string, string[]> = {
+      "C:\\L\\Programs\\Python": ["Python39", "Python312", "Python310", "Launcher", "Python313"],
+      "C:\\Program Files": ["Python311", "Python314", "PythonSoftwareFoundation", "Common Files"],
+    };
+    const list = (d: string) => dirs[d] ?? [];
+    assert.deepStrictEqual(pythonCandidates("win32", { LOCALAPPDATA: "C:\\L", ProgramFiles: "C:\\Program Files" }, list), [
       ["py", "-3"], ["python"], ["python3"],
       ["C:\\L\\Programs\\Python\\Python313\\python.exe"], ["C:\\L\\Programs\\Python\\Python312\\python.exe"],
       ["C:\\L\\Programs\\Python\\Python310\\python.exe"], ["C:\\L\\Programs\\Python\\Python39\\python.exe"],
+      ["C:\\Program Files\\Python314\\python.exe"], ["C:\\Program Files\\Python311\\python.exe"],
+    ]);
+    assert.deepStrictEqual(pythonCandidates("win32", { ProgramFiles: "C:\\Program Files" }, list), [
+      ["py", "-3"], ["python"], ["python3"], ["C:\\Program Files\\Python314\\python.exe"], ["C:\\Program Files\\Python311\\python.exe"],
     ]);
     assert.deepStrictEqual(pythonCandidates("linux"), [["python3"], ["python"]]);
   });
@@ -285,13 +301,14 @@ describe("provisioning: Python, updates, the bundled claude", () => {
       if (file === "python") {
         return { code: 0, stdout: "" };                    // 3.9: the probe prints nothing
       }
-      return { code: 0, stdout: "C:\\Py\\python.exe\r\n" };
+      return { code: 0, stdout: probeOut("C:\\Py\\python.exe") };
     };
     assert.strictEqual(await findPython(run, "win32", {}, () => []), "C:\\Py\\python.exe");
     assert.deepStrictEqual(tried, [["py", "-3"], ["python"], ["python3"]]);
     const none = async () => { throw new Error("ENOENT"); };
     assert.strictEqual(await findPython(none, "linux"), undefined);
-    assert.strictEqual(await findPython(async () => ({ code: 0, stdout: "python3" }), "linux"), undefined, "a relative path is no answer");
+    assert.strictEqual(await findPython(async () => ({ code: 0, stdout: probeOut("python3") }), "linux"), undefined, "a relative path is no answer");
+    assert.strictEqual(await findPython(async () => ({ code: 0, stdout: "/usr/bin/python3\n" }), "linux"), undefined, "a line that isn't the probe's JSON is no answer");
   });
 
   it("updates: once a day; --base only for a server other than the default", () => {
@@ -312,6 +329,383 @@ describe("provisioning: Python, updates, the bundled claude", () => {
     assert.strictEqual(bundledClaude(undefined, "linux"), undefined);
     assert.strictEqual(bundledClaude("ext/cc", "linux", () => true), undefined);          // a relative extension path is never used
     assert.strictEqual(bundledClaude("ext\\cc", "win32", () => true), undefined);
+  });
+});
+
+// --- 0.5.1: the Microsoft Store Python ----------------------------------------------------------
+
+/** A full Store install's sys.executable, as `python` reported it on a Windows 11 box (CLI 0.25.0 refused it). */
+const STORE_EXE = "C:\\Users\\kartan\\AppData\\Local\\Microsoft\\WindowsApps\\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\\python.exe";
+const GOOD_EXE = "C:\\Users\\kartan\\AppData\\Local\\Programs\\Python\\Python312\\python.exe";
+
+/**
+ * A Python runner: `answers[file]` is the probe's sys.executable ("" = too old: the probe prints nothing), or
+ * { exe, base, prefix } (a venv), or { code } (a program that fails, like the Store's install stub, exit 9009);
+ * a missing file throws (not installed).
+ */
+type PyAnswer = string | { exe?: string; base?: string; prefix?: string; code?: number };
+function pythons(answers: Record<string, PyAnswer>, tried: string[] = []): CellCommandDeps["python"] {
+  return async (file) => {
+    tried.push(file);
+    if (!(file in answers)) {
+      throw new Error("ENOENT");
+    }
+    const a = answers[file];
+    if (typeof a === "string") {
+      return { code: 0, stdout: a ? probeOut(a) : "\r\n" };
+    }
+    return { code: a.code ?? 0, stdout: a.exe ? probeOut(a.exe, a.base, a.prefix) : "" };
+  };
+}
+
+/** The extension's own copy with a launcher that runs `python` (Windows form). */
+function ownCopy(python: string): string {
+  const dir = path.join(tmpdir(), "cli");
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, "a4sx.py"), "");
+  writeLauncher(python, dir, "win32");
+  return dir;
+}
+
+describe("0.5.1: the Microsoft Store Python", () => {
+  beforeEach(resetCalls);
+
+  it("the Store build is told by its real path, as install.ps1 and the CLI tell it", () => {
+    for (const exe of [
+      STORE_EXE,
+      "C:\\Users\\k\\AppData\\Local\\Microsoft\\WindowsApps\\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\\python.exe",
+      "C:\\Program Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.12_3.12.2032.0_x64__qbz5n2kfra8p0\\python.exe",
+      "C:\\Users\\k\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\python.exe",
+      "c:\\users\\k\\appdata\\local\\microsoft\\windowsapps\\pythonsoftwarefoundation.python.3.11_qbz5n2kfra8p0\\python.exe",
+    ]) {
+      assert.ok(isStorePython(exe), exe);
+    }
+    for (const exe of [
+      "C:\\Python312\\python.exe", GOOD_EXE, "C:\\Program Files\\Python313\\python.exe",
+      "C:\\Users\\k\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",          // the alias itself, before it resolves
+      "C:\\Users\\k\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",     // the python.org install manager
+      "/usr/bin/python3",
+    ]) {
+      assert.ok(!isStorePython(exe), exe);
+    }
+  });
+
+  it("findPython skips a full Store install and goes on down the candidates", async () => {
+    const tried: string[] = [];
+    const run = pythons({ python: STORE_EXE, python3: STORE_EXE, [GOOD_EXE]: GOOD_EXE }, tried);
+    const env = { LOCALAPPDATA: "C:\\Users\\kartan\\AppData\\Local" };
+    const list = (d: string) => (d.endsWith("Programs\\Python") ? ["Python312"] : []);
+    assert.strictEqual(await findPython(run, "win32", env, list), GOOD_EXE);
+    assert.deepStrictEqual(tried, ["py", "python", "python3", GOOD_EXE]);
+    assert.deepStrictEqual(await searchPython(run, "win32", env, list), { kind: "found", exe: GOOD_EXE });
+  });
+
+  it("only the Store build: \"store-only\", not \"none\"; no Python at all: \"none\"", async () => {
+    assert.deepStrictEqual(await searchPython(pythons({ python: STORE_EXE }), "win32", {}, () => []), { kind: "store-only", exe: STORE_EXE });
+    assert.strictEqual(await findPython(pythons({ python: STORE_EXE }), "win32", {}, () => []), undefined);
+    assert.deepStrictEqual(await searchPython(pythons({}), "win32", {}, () => []), { kind: "none" });
+    assert.deepStrictEqual(await searchPython(pythons({ python: "" }), "win32", {}, () => []), { kind: "none" }, "too old is no Python");
+  });
+
+  it("the own launcher: a Store Python in it is seen from its text; repair rewrites it with a better Python", async () => {
+    const dir = ownCopy(STORE_EXE);
+    assert.ok(launcherNeedsRepair(dir, "win32"));
+    assert.strictEqual(await repairLauncher(dir, pythons({ python: STORE_EXE, python3: GOOD_EXE }), "win32", {}, () => []), "repaired");
+    assert.ok(!launcherNeedsRepair(dir, "win32"));
+    assert.strictEqual(fs.readFileSync(path.join(dir, "a4sx.cmd"), "utf8"), launcherText(GOOD_EXE, dir, "win32"));
+    const tried: string[] = [];
+    assert.strictEqual(await repairLauncher(dir, pythons({ python: GOOD_EXE }, tried), "win32"), "ok");
+    assert.deepStrictEqual(tried, [], "a good launcher runs nothing");
+    assert.strictEqual(await repairLauncher(undefined, pythons({}), "win32"), "ok");
+    assert.strictEqual(await repairLauncher(tmpdir(), pythons({}), "win32"), "ok", "no launcher: nothing to repair");
+  });
+
+  it("repair without a better Python leaves the launcher as it is and says why", async () => {
+    const dir = ownCopy(STORE_EXE);
+    const before = fs.readFileSync(path.join(dir, "a4sx.cmd"), "utf8");
+    assert.strictEqual(await repairLauncher(dir, pythons({ python: STORE_EXE }), "win32", {}, () => []), "store-only");
+    assert.strictEqual(await repairLauncher(dir, pythons({}), "win32", {}, () => []), "none");
+    assert.strictEqual(fs.readFileSync(path.join(dir, "a4sx.cmd"), "utf8"), before);
+  });
+
+  it("Install a4sx CLI with only the Store Python: the Store message and the winget offer; nothing is downloaded", async () => {
+    const seen: string[] = [];
+    const h = harness({
+      resolve: { kind: "no-cli" }, cliDir: tmpdir(), platform: "win32", python: pythons({ python: STORE_EXE }), fetch: async (u) => { seen.push(u); throw new Error("x"); },
+    });
+    calls.modalChoices.push(CELL_CMD_TEXTS.installPython);
+    calls.shell = "C:\\Program Files\\PowerShell\\7\\pwsh.exe";
+    assert.ok(!(await installCli(h.deps)));
+    assert.deepStrictEqual(calls.modals.map((m) => [m.kind, m.message, m.items, m.detail]), [
+      ["error", CELL_CMD_TEXTS.storePythonWin, [CELL_CMD_TEXTS.installPython], "winget install Python.Python.3.12"],
+    ]);
+    assert.deepStrictEqual(calls.terminals[0].sent, ["& 'winget' 'install' 'Python.Python.3.12'\n"]);
+    assert.deepStrictEqual(seen, []);
+  });
+
+  it("Install a4sx CLI writes the better Python into the launcher, never the Store one", async () => {
+    const dir = path.join(tmpdir(), "cli");
+    const body = Buffer.from('__version__ = "0.25.0"\n');
+    const fetch: Fetch = async (url) => {
+      const ok = url.endsWith("/cli/a4sx.py");
+      return {
+        status: ok ? 200 : 404,
+        headers: { get: (n: string) => (ok && n === "x-a4sx-sha256" ? sha256Hex(body) : null) },
+        arrayBuffer: async () => (ok ? body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer : new ArrayBuffer(0)),
+      };
+    };
+    const h = harness({ resolve: { kind: "no-cli" }, cliDir: dir, platform: "win32", fetch, python: pythons({ py: STORE_EXE, python: GOOD_EXE }) });
+    assert.ok(await installCli(h.deps));
+    assert.strictEqual(fs.readFileSync(path.join(dir, "a4sx.cmd"), "utf8"), launcherText(GOOD_EXE, dir, "win32"));
+  });
+
+  it("at activation: a Store launcher is rewritten silently when a better Python is there", async () => {
+    const dir = ownCopy(STORE_EXE);
+    const h = harness({ cliDir: dir, platform: "win32", python: pythons({ python: GOOD_EXE }) });
+    assert.ok(await repairOwnCli(h.deps));
+    assert.ok(!launcherNeedsRepair(dir, "win32"));
+    assert.deepStrictEqual([calls.modals, calls.errors, calls.infos], [[], [], []], "silent");
+    const still = harness({ cliDir: ownCopy(STORE_EXE), platform: "win32", python: pythons({ python: STORE_EXE }) });
+    assert.ok(!(await repairOwnCli(still.deps)));
+    assert.deepStrictEqual([calls.modals, calls.errors], [[], []], "no message at activation; the next CLI action says it");
+  });
+
+  it("before the own copy is used: repaired silently, then the cell starts", async () => {
+    const dir = ownCopy(STORE_EXE);
+    const launcher = installedLauncher(dir, "win32")!;
+    const state = fakeMemento({ [CONSENT_KEY]: [machineKey()] });
+    const h = harness({ resolve: { kind: "found", path: launcher }, cliDir: dir, platform: "win32", state, python: pythons({ python: STORE_EXE, python3: GOOD_EXE }) });
+    assert.ok(await newCell(h.deps));
+    assert.ok(!launcherNeedsRepair(dir, "win32"));
+    assert.deepStrictEqual(calls.modals, []);
+    assert.strictEqual(calls.terminals.length, 1);
+  });
+
+  it("before the own copy is used: only the Store Python left: the Store message with the winget offer; nothing starts", async () => {
+    const dir = ownCopy(STORE_EXE);
+    const launcher = installedLauncher(dir, "win32")!;
+    const state = fakeMemento({ [CONSENT_KEY]: [machineKey()] });
+    const h = harness({ resolve: { kind: "found", path: launcher }, cliDir: dir, platform: "win32", state, python: pythons({ python: STORE_EXE }) });
+    assert.strictEqual(await newCell(h.deps), undefined);
+    assert.deepStrictEqual(calls.modals.map((m) => [m.message, m.items]), [[CELL_CMD_TEXTS.storePythonWin, [CELL_CMD_TEXTS.installPython]]]);
+    assert.strictEqual(calls.terminals.length, 0);
+    const none = harness({ resolve: { kind: "found", path: launcher }, cliDir: dir, platform: "win32", state, python: pythons({}) });
+    resetCalls();
+    assert.strictEqual(await newCell(none.deps), undefined);
+    assert.deepStrictEqual(calls.modals.map((m) => m.message), [CELL_CMD_TEXTS.noPythonWin], "no Python at all: the plain message");
+  });
+
+  it("a CLI that isn't the own copy is used as it is (its Python is the installer's business)", async () => {
+    const dir = ownCopy(STORE_EXE);
+    const state = fakeMemento({ [CONSENT_KEY]: [machineKey()] });
+    const tried: string[] = [];
+    const h = harness({ resolve: { kind: "found", path: "C:\\Users\\k\\AppData\\Local\\Programs\\a4sx\\a4sx.cmd" }, cliDir: dir, platform: "win32", state, python: pythons({}, tried) });
+    assert.ok(await newCell(h.deps));
+    assert.deepStrictEqual(tried, []);
+  });
+
+  it("the daily update skips a launcher that still runs a Store Python", async () => {
+    const h = harness({ cliDir: ownCopy(STORE_EXE), platform: "win32", state: fakeMemento() });
+    assert.ok(!(await dailyUpdate(h.deps, Date.parse("2026-11-06T12:00:00Z"))));
+    assert.strictEqual(h.runs.length, 0);
+  });
+});
+
+describe("0.5.1 review: paths, venvs, every Python on PATH, one repair at a time", () => {
+  beforeEach(resetCalls);
+  const VENV = "C:\\proj\\.venv\\Scripts\\python.exe";
+  const STORE_PREFIX = "C:\\Program Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0";
+
+  it("on Windows only a drive or UNC path is a Python: an MSYS/Cygwin /usr/bin/python3 or a rooted \\foo is skipped", async () => {
+    const tried: string[] = [];
+    const run = pythons({ python: "/usr/bin/python3", python3: "\\usr\\bin\\python.exe", py: "\\\\srv\\tools\\py\\python.exe" }, tried);
+    assert.strictEqual(await findPython(run, "win32", {}, () => []), "\\\\srv\\tools\\py\\python.exe", "a UNC share is fine");
+    assert.deepStrictEqual(await searchPython(pythons({ python: "/usr/bin/python3", python3: "\\usr\\bin\\python.exe" }), "win32", {}, () => []), { kind: "none" });
+    assert.deepStrictEqual(await searchPython(pythons({ python: "\\\\?\\C:\\Py\\python.exe" }), "win32", {}, () => []), { kind: "none" }, "no device paths");
+    assert.strictEqual(await findPython(pythons({ python3: "/usr/bin/python3" }), "linux"), "/usr/bin/python3", "elsewhere POSIX paths as before");
+  });
+
+  it("a drive path with forward slashes (C:/msys64/…) is a Windows path: found, and a launcher holding it isn't repaired", async () => {
+    const MINGW = "C:/msys64/mingw64/bin/python.exe";
+    assert.strictEqual(await findPython(pythons({ python: MINGW }), "win32", {}, () => []), MINGW);
+    const dir = ownCopy(MINGW);
+    assert.ok(!launcherNeedsRepair(dir, "win32"));
+    const tried: string[] = [];
+    assert.strictEqual(await repairLauncher(dir, pythons({}, tried), "win32"), "ok");
+    assert.deepStrictEqual(tried, []);
+    assert.ok(launcherNeedsRepair(ownCopy("/c/msys64/mingw64/bin/python.exe"), "win32"), "an MSYS-style /c/… path still is");
+  });
+
+  it("each interpreter is probed once: a PATH entry that bare python already reported (any case) is skipped", async () => {
+    const venvDir = "C:\\proj\\.venv\\Scripts";
+    const have = new Set([`${venvDir}\\python.exe`, "C:\\Other\\python.exe"]);
+    const tried: string[] = [];
+    const run = pythons({ python: { exe: VENV, base: STORE_EXE }, [`${venvDir}\\python.exe`]: GOOD_EXE, "C:\\Other\\python.exe": { exe: "C:\\Other\\python.exe", base: STORE_EXE } }, tried);
+    const env = { PATH: "c:\\PROJ\\.venv\\Scripts;C:\\Other" };
+    assert.deepStrictEqual(await searchPython(run, "win32", env, () => [], (p) => have.has(p) || have.has(p.replace(/^c:\\PROJ/, "C:\\proj"))), { kind: "store-only", exe: VENV });
+    assert.deepStrictEqual(tried, ["py", "python", "python3", "C:\\Other\\python.exe"], "the venv's python.exe was not probed a second time");
+  });
+
+  it("a venv built on the Store Python is the Store build too (by sys._base_executable, or sys.base_prefix)", async () => {
+    assert.deepStrictEqual(await searchPython(pythons({ python: { exe: VENV, base: STORE_EXE } }), "win32", {}, () => []), { kind: "store-only", exe: VENV });
+    assert.deepStrictEqual(await searchPython(pythons({ python: { exe: VENV, base: "", prefix: STORE_PREFIX } }), "win32", {}, () => []), { kind: "store-only", exe: VENV });
+    assert.strictEqual(await findPython(pythons({ python: { exe: VENV, base: STORE_EXE }, python3: { exe: VENV, base: GOOD_EXE, prefix: "C:\\Py312" } }), "win32", {}, () => []), VENV,
+      "a venv on another Python is fine");
+  });
+
+  it("the Store stub exits non-zero and is skipped; non-zero is never an answer, even with output", async () => {
+    assert.deepStrictEqual(await searchPython(pythons({ py: { code: 9009 }, python: { code: 9009 }, python3: { code: 9009 } }), "win32", {}, () => []), { kind: "none" });
+    assert.deepStrictEqual(await searchPython(pythons({ py: { code: 9009 }, python: STORE_EXE }), "win32", {}, () => []), { kind: "store-only", exe: STORE_EXE });
+    assert.deepStrictEqual(await searchPython(pythons({ python: { code: 1, exe: GOOD_EXE } }), "win32", {}, () => []), { kind: "none" });
+  });
+
+  it("Python3* folders as install.ps1 globs them (Python312-32, Python313-arm64), newest first by version", () => {
+    assert.deepStrictEqual(pythonFolders(["Python312-32", "Python313-arm64", "Python39", "Python312", "Python3", "Launcher", "Python310", "python314"]),
+      ["python314", "Python313-arm64", "Python312", "Python312-32", "Python310", "Python39", "Python3"]);
+  });
+
+  it("every python.exe, then every python3.exe, in the PATH folders; quoted and duplicate folders handled, non-Windows paths ignored", () => {
+    const have = new Set(["C:\\A\\python.exe", "C:\\C\\python.exe", "C:\\B\\python3.exe", "C:\\L\\Programs\\Python\\Python312\\python.exe", "/usr/bin/python.exe"]);
+    const env = { PATH: "C:\\A;\"C:\\B\";;/usr/bin;C:\\C;c:\\a;C:\\L\\Programs\\Python\\Python312", LOCALAPPDATA: "C:\\L" };
+    const list = (d: string) => (d === "C:\\L\\Programs\\Python" ? ["Python312"] : []);
+    assert.deepStrictEqual(pythonCandidates("win32", env, list, (p) => have.has(p)), [
+      ["py", "-3"], ["python"], ["python3"],
+      ["C:\\A\\python.exe"], ["C:\\C\\python.exe"], ["C:\\L\\Programs\\Python\\Python312\\python.exe"], ["C:\\B\\python3.exe"],
+    ]);
+    assert.deepStrictEqual(pythonCandidates("win32", { Path: "C:\\A" }, () => [], (p) => have.has(p)).slice(3), [["C:\\A\\python.exe"]], "Path as Windows spells it");
+  });
+
+  it("a Store Python first on PATH no longer hides a good one further down", async () => {
+    const have = new Set(["C:\\WA\\python.exe", "C:\\Good\\python.exe"]);
+    const run = pythons({ python: STORE_EXE, "C:\\WA\\python.exe": STORE_EXE, "C:\\Good\\python.exe": "C:\\Good\\python.exe" });
+    assert.deepStrictEqual(await searchPython(run, "win32", { PATH: "C:\\WA;C:\\Good" }, () => [], (p) => have.has(p)), { kind: "found", exe: "C:\\Good\\python.exe" });
+  });
+
+  it("an own launcher with an MSYS path is repaired too; one not in the launcher's own form is left alone", async () => {
+    const dir = ownCopy("/usr/bin/python3");
+    assert.ok(launcherNeedsRepair(dir, "win32"));
+    assert.strictEqual(await repairLauncher(dir, pythons({ python: "/usr/bin/python3", python3: GOOD_EXE }), "win32", {}, () => []), "repaired");
+    assert.strictEqual(fs.readFileSync(path.join(dir, "a4sx.cmd"), "utf8"), launcherText(GOOD_EXE, dir, "win32"));
+    const custom = ownCopy(GOOD_EXE);
+    fs.writeFileSync(path.join(custom, "a4sx.cmd"), "@echo off\r\nrem PythonSoftwareFoundation.Python.3.11 \\WindowsApps\\ my own\r\npython a4sx.py %*\r\n");
+    assert.ok(!launcherNeedsRepair(custom, "win32"));
+    assert.ok(!launcherNeedsRepair(dir, "linux"), "only the Windows launcher is checked");
+  });
+
+  it("one repair at a time: activation and an action share the search and the write", async () => {
+    const dir = ownCopy(STORE_EXE);
+    const tried: string[] = [];
+    let repaired = 0;
+    const h = harness({ cliDir: dir, platform: "win32", python: pythons({ python: GOOD_EXE }, tried) });
+    h.deps.onRepaired = () => repaired++;
+    const [a, b] = await Promise.all([repairOwnCli(h.deps), ownCliCheck(h.deps, installedLauncher(dir, "win32")!)]);
+    assert.deepStrictEqual([a, b], [true, "ok"]);
+    assert.strictEqual(tried.filter((f) => f === "python").length, 1, "one search");
+    assert.strictEqual(repaired, 1);
+    assert.strictEqual(await repairOnce(h.deps), "ok", "the next one starts fresh and finds nothing to do");
+  });
+
+  it("after an action-time repair, the CLI's version is asked again and the views read it again", async () => {
+    const dir = ownCopy(STORE_EXE);
+    const launcher = installedLauncher(dir, "win32")!;
+    const state = fakeMemento({ [CONSENT_KEY]: [machineKey()] });
+    let profiles = 0;
+    const h = harness({ resolve: { kind: "found", path: launcher }, cliDir: dir, platform: "win32", state, python: pythons({ python: GOOD_EXE }) });
+    h.deps.onRepaired = () => profiles++;
+    await h.provider.getChildren();
+    const versions = () => h.runs.filter((r) => r.args.join(" ") === "--version").length;
+    assert.strictEqual(versions(), 1);
+    assert.ok(await newCell(h.deps));
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(versions(), 2, "the version cache was cleared and Cells read again");
+    assert.strictEqual(profiles, 1, "Launch profiles read again");
+  });
+
+  it("a launcher that can't be rewritten: its error, nothing starts, the launcher stays", async () => {
+    const dir = ownCopy(STORE_EXE);
+    const before = fs.readFileSync(path.join(dir, "a4sx.cmd"), "utf8");
+    const h = harness({ cliDir: dir, platform: "win32", python: pythons({ python: "C:\\100%\\python.exe" }) });
+    assert.strictEqual(await ownCliCheck(h.deps, installedLauncher(dir, "win32")!), "stop");
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [PROVISION_TEXTS.unsafePath]);
+    assert.strictEqual(fs.readFileSync(path.join(dir, "a4sx.cmd"), "utf8"), before);
+  });
+
+  it("the full Windows order: a4sx.cliPath, PATH, the installer's folder, then the extension's own copy", () => {
+    const own = ownCopy(STORE_EXE);
+    const onPath = tmpdir();
+    const installer = tmpdir();
+    const configured = path.join(tmpdir(), "a4sx.cmd");
+    for (const f of [path.join(onPath, "a4sx.cmd"), path.join(installer, "a4sx.cmd"), configured]) {
+      fs.writeFileSync(f, "@echo off\r\n");
+    }
+    // (the installer's folder is given here: on Windows it is %LOCALAPPDATA%\\Programs\\a4sx, which a Linux test can't join)
+    const win = { platform: "win32" as const, pathExt: ".exe;.cmd", fallbackDirs: [installer] };
+    assert.deepStrictEqual(ext.findCliOrOwn(configured, { ...win, pathEnv: onPath }, own), { found: true, path: configured });
+    assert.deepStrictEqual(ext.findCliOrOwn("", { ...win, pathEnv: onPath }, own), { found: true, path: path.join(onPath, "a4sx.cmd") });
+    assert.deepStrictEqual(ext.findCliOrOwn("", { ...win, pathEnv: "" }, own), { found: true, path: path.join(installer, "a4sx.cmd") });
+    assert.deepStrictEqual(ext.findCliOrOwn("", { ...win, pathEnv: "", fallbackDirs: [] }, own), { found: true, path: path.join(own, "a4sx.cmd") });
+    assert.deepStrictEqual(ext.findCliOrOwn("", { ...win, pathEnv: "", fallbackDirs: [] }, tmpdir()), { found: false, reason: "not-on-path" });
+  });
+});
+
+describe("0.5.1 review: Resume in terminal with the own copy on a Store Python", () => {
+  beforeEach(resetCalls);
+  const session = new SessionItem({ id: "c-123", label: "my-base" });
+
+  /** Activates with globalStorage in a temp folder, then makes the own copy's checks Windows ones. */
+  async function activateOwn(python: CellCommandDeps["python"]): Promise<string> {
+    const storage = tmpdir();
+    ext.activate({ subscriptions: [], secrets: fakeSecrets(), globalState: fakeMemento(), globalStorageUri: vscodeFake.Uri.file(storage) } as any);
+    await new Promise((r) => setImmediate(r));                 // the activation's own (POSIX) repair check is done
+    const deps = ext.sidebar!.cellDeps;
+    deps.platform = "win32";
+    deps.python = python;
+    fs.mkdirSync(path.join(storage, "cli"));
+    fs.writeFileSync(path.join(storage, "cli", "a4sx.py"), "");
+    writeLauncher(STORE_EXE, path.join(storage, "cli"), "win32");
+    return installedLauncher(path.join(storage, "cli"), "win32")!;
+  }
+
+  it("inside an a4sx session the session stop comes first: no Python search, no offer", async () => {
+    const tried: string[] = [];
+    const launcher = await activateOwn(pythons({ python: STORE_EXE }, tried));
+    const saved = process.env.A4SX_HARNESS;
+    process.env.A4SX_HARNESS = "1";
+    try {
+      assert.strictEqual(await ext.resumeSession(session, () => ({ found: true, path: launcher }), async () => ({}), () => undefined), undefined);
+    } finally {
+      if (saved === undefined) {
+        delete process.env.A4SX_HARNESS;
+      } else {
+        process.env.A4SX_HARNESS = saved;
+      }
+    }
+    assert.deepStrictEqual(tried, []);
+    assert.deepStrictEqual(calls.modals, []);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [IN_SESSION_MESSAGE]);
+  });
+
+  it("only the Store Python, offer declined: as without a CLI (claude --resume); offer taken: stops there", async () => {
+    const launcher = await activateOwn(pythons({ python: STORE_EXE }));
+    let claudeLooked = 0;
+    await ext.resumeSession(session, () => ({ found: true, path: launcher }), async () => ({}), () => { claudeLooked++; return undefined; });
+    assert.deepStrictEqual(calls.modals.map((m) => m.message), [CELL_CMD_TEXTS.storePythonWin]);
+    assert.strictEqual(claudeLooked, 1, "fell back to the CLI-free resume");
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [RESUME_TEXTS.noClaude]);
+    resetCalls();
+    calls.modalChoices.push(CELL_CMD_TEXTS.installPython);
+    claudeLooked = 0;
+    assert.strictEqual(await ext.resumeSession(session, () => ({ found: true, path: launcher }), async () => ({}), () => { claudeLooked++; return undefined; }), undefined);
+    assert.strictEqual(claudeLooked, 0);
+    assert.deepStrictEqual(calls.terminals.map((t) => t.options.name), [CELL_CMD_TEXTS.pythonTerminal]);
+  });
+
+  it("Save this session with the own copy on a Store Python: repaired silently, then it runs", async () => {
+    const launcher = await activateOwn(pythons({ python: GOOD_EXE }));
+    const t = await ext.saveSession(() => ({ found: true, path: launcher }));
+    assert.ok(t);
+    assert.ok(!launcherNeedsRepair(path.dirname(launcher), "win32"));
+    assert.deepStrictEqual(calls.modals, []);
   });
 });
 
@@ -564,7 +958,7 @@ describe("Cells: installing the CLI", () => {
   it("New cell without a CLI offers the install; it finds Python, downloads, checks, writes the launcher, then starts", async () => {
     const dir = path.join(tmpdir(), "cli");
     const state = fakeMemento({ [CONSENT_KEY]: [require("../../cellCommands").machineKey()] });
-    const python = async (_f: string, args: readonly string[]) => ({ code: 0, stdout: args.includes("-c") ? "/usr/bin/python3\n" : "" });
+    const python = async (_f: string, args: readonly string[]) => ({ code: 0, stdout: args.includes("-c") ? probeOut("/usr/bin/python3") : "" });
     const h = harness({ resolve: { kind: "no-cli" }, cliDir: dir, fetch, python, state, platform: "linux" });
     calls.modalChoices.push(CELL_CMD_TEXTS.installCli);
     const t = await newCell(h.deps);
@@ -596,7 +990,7 @@ describe("Cells: installing the CLI", () => {
     resetCalls();
     const dir = path.join(tmpdir(), "cli");
     const bad: Fetch = async () => ({ status: 200, headers: { get: () => "0".repeat(64) }, arrayBuffer: async () => new ArrayBuffer(4) });
-    const h2 = harness({ resolve: { kind: "no-cli" }, cliDir: dir, platform: "linux", fetch: bad, python: async () => ({ code: 0, stdout: "/usr/bin/python3" }) });
+    const h2 = harness({ resolve: { kind: "no-cli" }, cliDir: dir, platform: "linux", fetch: bad, python: async () => ({ code: 0, stdout: probeOut("/usr/bin/python3") }) });
     assert.ok(!(await installCli(h2.deps)));
     assert.match(calls.errors[0].message, /doesn't match the checksum/);
     assert.strictEqual(fs.existsSync(path.join(dir, "a4sx")), false);

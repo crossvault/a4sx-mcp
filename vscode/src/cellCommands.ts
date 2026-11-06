@@ -14,7 +14,8 @@ import {
 import { CellsProvider, CliOutput, CliResolution, CliRunner, LocalCellItem, MeshGroupItem } from "./cellsView";
 import { IN_SESSION_MESSAGE, parseCliError } from "./cliJson";
 import {
-  bundledClaude, downloadCli, Fetch, findPython, installedLauncher, ProvisionError, Runner, updateArgs, updateDue, WINGET_PYTHON_ARGS, writeLauncher,
+  bundledClaude, downloadCli, Fetch, installedLauncher, launcherNeedsRepair, ProvisionError, repairLauncher, RepairResult, Runner, searchPython, updateArgs, updateDue,
+  WINGET_PYTHON_ARGS, writeLauncher,
 } from "./provision";
 import { openCommandTerminal, State } from "./resume";
 import { commandLine, programName, shellKind } from "./terminalCommand";
@@ -57,6 +58,9 @@ export const CELL_CMD_TEXTS = {
   downloading: "Downloading…",
   installed: (v: string) => `Installed the a4sx CLI ${v}. Sign-ins and cells are set up in a terminal the first time you start a cell.`,
   noPythonWin: "The a4sx CLI needs Python 3.10 or newer. Install it with winget?",
+  storePythonWin:
+    "Only the Microsoft Store Python was found. The a4sx CLI can't use it (Claude Code can't see the files it writes), " +
+    "so it can't run until another Python is installed. Install Python 3.12 with winget?",
   installPython: "Install Python",
   pythonNext: "When Python is installed, run Install a4sx CLI again.",
   noPython: "The a4sx CLI needs Python 3.10 or newer. Install it, then try again.",
@@ -92,6 +96,8 @@ export interface CellCommandDeps {
   platform?: NodeJS.Platform;
   /** Terminals this view started: a refresh follows when one closes. */
   terminals: Set<vscode.Terminal>;
+  /** After the own copy's launcher was repaired: the views that show the CLI read it again (Launch profiles). */
+  onRepaired?: () => void;
 }
 
 /** This machine, as the consent remembers it: a hash, so no host name is stored. */
@@ -131,7 +137,7 @@ export async function ensureCli(deps: CellCommandDeps): Promise<string | undefin
   const r = deps.resolve();
   switch (r.kind) {
     case "found":
-      return r.path;
+      return (await ownCliUsable(deps, r.path)) ? r.path : undefined;
     case "bad-config":
       if ((await vscode.window.showErrorMessage(CELL_CMD_TEXTS.badConfig, CELL_CMD_TEXTS.openSettings)) === CELL_CMD_TEXTS.openSettings) {
         await vscode.commands.executeCommand("workbench.action.openSettings", "a4sx.cliPath");
@@ -151,6 +157,79 @@ export async function ensureCli(deps: CellCommandDeps): Promise<string | undefin
       const again = deps.resolve();
       return again.kind === "found" ? again.path : undefined;
     }
+  }
+}
+
+/** The repair in flight, per launcher folder: activation and an action never search and write at the same time. */
+const repairs = new Map<string, Promise<RepairResult>>();
+
+/**
+ * repairLauncher for the own copy, shared by everyone who asks while it runs. After a rewrite, the CLI's
+ * version is asked again and the Cells and Launch profiles views read it again.
+ */
+export function repairOnce(deps: CellCommandDeps): Promise<RepairResult> {
+  const dir = deps.cliDir;
+  if (!dir) {
+    return Promise.resolve("ok");
+  }
+  const running = repairs.get(dir);
+  if (running) {
+    return running;
+  }
+  const p = (async () => {
+    const r = await repairLauncher(dir, deps.python, deps.platform ?? process.platform);
+    if (r === "repaired") {
+      deps.provider.versions.clear();
+      void deps.provider.refresh();
+      deps.onRepaired?.();
+    }
+    return r;
+  })().finally(() => repairs.delete(dir));
+  repairs.set(dir, p);
+  return p;
+}
+
+/**
+ * Before the own copy is used: "ok" when `cli` isn't the extension's own launcher, or its Python is one the
+ * CLI accepts (a better Python found now replaces a Store one silently). Otherwise the user was told:
+ * "declined" when they turned down the Python offer, "stop" when they took it or saw an error.
+ */
+export async function ownCliCheck(deps: CellCommandDeps, cli: string): Promise<"ok" | "declined" | "stop"> {
+  const platform = deps.platform ?? process.platform;
+  if (!deps.cliDir || installedLauncher(deps.cliDir, platform) !== cli) {
+    return "ok";
+  }
+  let r: RepairResult;
+  try {
+    r = await repairOnce(deps);
+  } catch (e) {
+    await vscode.window.showErrorMessage(e instanceof ProvisionError ? e.message : String(e));
+    return "stop";
+  }
+  if (r === "ok" || r === "repaired") {
+    return "ok";
+  }
+  return (await offerPython(platform, r === "store-only")) ? "stop" : "declined";
+}
+
+/** ownCliCheck as a yes/no: false when the own copy can't run (the user was told). */
+export async function ownCliUsable(deps: CellCommandDeps, cli: string): Promise<boolean> {
+  return (await ownCliCheck(deps, cli)) === "ok";
+}
+
+/**
+ * Once, at activation and silently: a launcher of the extension's own copy that runs a Python the CLI can't
+ * use is rewritten with a better one when there is one. True when it was rewritten. Otherwise the next CLI
+ * action shows the Python offer (ownCliCheck).
+ */
+export async function repairOwnCli(deps: CellCommandDeps): Promise<boolean> {
+  if (deps.resolve().kind === "in-session") {
+    return false;
+  }
+  try {
+    return (await repairOnce(deps)) === "repaired";
+  } catch {
+    return false;
   }
 }
 
@@ -397,16 +476,16 @@ export async function installCli(deps: CellCommandDeps): Promise<boolean> {
   const dir = deps.cliDir;
   const result = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: CELL_CMD_TEXTS.installing, cancellable: false },
-    async (progress): Promise<{ ok: true; version: string } | { ok: false; error?: string; python?: true }> => {
+    async (progress): Promise<{ ok: true; version: string } | { ok: false; error?: string; python?: "none" | "store-only" }> => {
       progress.report({ message: CELL_CMD_TEXTS.findingPython });
-      const python = await findPython(deps.python, platform);
-      if (!python) {
-        return { ok: false, python: true };
+      const python = await searchPython(deps.python, platform);
+      if (python.kind !== "found") {
+        return { ok: false, python: python.kind };
       }
       progress.report({ message: CELL_CMD_TEXTS.downloading });
       try {
         const version = await downloadCli(base, dir, deps.fetch);
-        writeLauncher(python, dir, platform);
+        writeLauncher(python.exe, dir, platform);
         return { ok: true, version };
       } catch (e) {
         return { ok: false, error: e instanceof ProvisionError ? e.message : String(e) };
@@ -415,7 +494,7 @@ export async function installCli(deps: CellCommandDeps): Promise<boolean> {
   );
   if (!result.ok) {
     if (result.python) {
-      await offerPython(platform);
+      await offerPython(platform, result.python === "store-only");
     } else {
       await vscode.window.showErrorMessage(result.error ?? CELL_CMD_TEXTS.cliFailed("install the a4sx CLI", undefined));
     }
@@ -427,18 +506,26 @@ export async function installCli(deps: CellCommandDeps): Promise<boolean> {
   return true;
 }
 
-async function offerPython(platform: NodeJS.Platform): Promise<void> {
+/**
+ * No usable Python: on Windows, `winget install Python.Python.3.12` in a terminal (saying so when only the
+ * Store build is there). True when the user took the offer.
+ */
+async function offerPython(platform: NodeJS.Platform, storeOnly = false): Promise<boolean> {
   if (platform === "win32") {
-    const choice = await vscode.window.showErrorMessage(CELL_CMD_TEXTS.noPythonWin, { modal: true, detail: `winget ${WINGET_PYTHON_ARGS.join(" ")}` }, CELL_CMD_TEXTS.installPython);
+    const message = storeOnly ? CELL_CMD_TEXTS.storePythonWin : CELL_CMD_TEXTS.noPythonWin;
+    const choice = await vscode.window.showErrorMessage(message, { modal: true, detail: `winget ${WINGET_PYTHON_ARGS.join(" ")}` }, CELL_CMD_TEXTS.installPython);
     if (choice === CELL_CMD_TEXTS.installPython) {
       openCommandTerminal(CELL_CMD_TEXTS.pythonTerminal, "winget", "winget", WINGET_PYTHON_ARGS);
       void vscode.window.showInformationMessage(CELL_CMD_TEXTS.pythonNext);
+      return true;
     }
-    return;
+    return false;
   }
   if ((await vscode.window.showErrorMessage(CELL_CMD_TEXTS.noPython, CELL_CMD_TEXTS.howToInstall)) === CELL_CMD_TEXTS.howToInstall) {
     await vscode.env.openExternal(vscode.Uri.parse(PYTHON_DOWNLOAD_URL));
+    return true;
   }
+  return false;
 }
 
 /** Update the a4sx CLI: `a4sx update` in a terminal, so its output shows. */
@@ -462,8 +549,10 @@ export async function updateCliInTerminal(deps: CellCommandDeps): Promise<vscode
  * on every window. Resolves true when an update ran and succeeded.
  */
 export async function dailyUpdate(deps: CellCommandDeps, now: number = Date.now()): Promise<boolean> {
-  const launcher = installedLauncher(deps.cliDir, deps.platform ?? process.platform);
-  if (!launcher || deps.resolve().kind === "in-session" || !updateDue(deps.state.get<unknown>(LAST_UPDATE_KEY), now)) {
+  const platform = deps.platform ?? process.platform;
+  const launcher = installedLauncher(deps.cliDir, platform);
+  // A launcher whose Python the CLI can't use can't update either; repairOwnCli runs first.
+  if (!launcher || launcherNeedsRepair(deps.cliDir, platform) || deps.resolve().kind === "in-session" || !updateDue(deps.state.get<unknown>(LAST_UPDATE_KEY), now)) {
     return false;
   }
   await deps.state.update(LAST_UPDATE_KEY, now);

@@ -91,11 +91,11 @@ The list is read when the view is first shown, on **Refresh cells**, after each 
 
 If the a4sx command-line tool isn't found, the **Cells** view offers **Install a4sx CLI**. The same button appears wherever the extension needs the CLI. The extension then:
 
-1. Looks for Python 3.10 or newer (on Windows: `py -3`, `python`, `python3`, then the per-user Python folders). On Windows, if there is none, it offers to run `winget install Python.Python.3.12` in a terminal. Run **Install a4sx CLI** again when that's done.
+1. Looks for Python 3.10 or newer (on Windows: `py -3`, `python`, `python3`, then the per-user Python folders, then the ones in `%ProgramFiles%`). It skips the Microsoft Store Python: the CLI can't use it, because Claude Code can't see the files it writes. On Windows, if there is no other Python, it offers to run `winget install Python.Python.3.12` in a terminal. Run **Install a4sx CLI** again when that's done.
 2. Downloads the CLI's files (`a4sx.py`, and `ipc_proxy.py` when the server has it) from session-exchange.com, or your `a4sx.serverUrl`. Each file must match the SHA-256 checksum the server sends with it. Otherwise nothing is installed.
 3. Saves them in the extension's own storage folder, with a small launcher that runs them with that Python. It doesn't need admin rights, and it doesn't change your `PATH` or your shell profile. Nothing downloaded is run through a shell.
 
-An `a4sx` on your `PATH`, or in `a4sx.cliPath`, is used first. The extension's own copy is used only when there is none. The extension updates its own copy once a day in the background (`a4sx update`). **Update a4sx CLI** runs the update in a terminal at any time. An `a4sx` you installed yourself is not updated automatically.
+An `a4sx` in `a4sx.cliPath`, on your `PATH`, or in the installer's folder is used first. The extension's own copy is used only when there is none. If that copy was set up with the Microsoft Store Python (0.5.0 could do that), the extension switches it to another Python on its own when there is one; otherwise it offers to install one. The extension updates its own copy once a day in the background (`a4sx update`). **Update a4sx CLI** runs the update in a terminal at any time. An `a4sx` you installed yourself is not updated automatically.
 
 ## Meshes
 
@@ -119,7 +119,7 @@ To sign out, run **a4sx: Sign out**. The extension asks the a4sx server to revok
 ## Requirements
 
 - VS Code 1.101 or later. The MCP servers are used by agent mode in VS Code chat.
-- For **Save this session**, for launch profiles in **Resume in terminal**, and for the **Cells** view: the a4sx command-line tool, signed in with `a4sx login`. The extension looks for `a4sx` on your `PATH`, then in `~/.local/bin`, `/usr/local/bin` and `/opt/homebrew/bin`, then in its own storage. **Install a4sx CLI** installs it there (see [Installing the a4sx CLI](#installing-the-a4sx-cli)); it needs Python 3.10 or newer. You can also use the [install guide](https://session-exchange.com/guide/cli).
+- For **Save this session**, for launch profiles in **Resume in terminal**, and for the **Cells** view: the a4sx command-line tool, signed in with `a4sx login`. The extension looks for `a4sx` on your `PATH`, then in `~/.local/bin`, `/usr/local/bin` and `/opt/homebrew/bin` (on Windows: `%LOCALAPPDATA%\Programs\a4sx`, the installer's folder), then in its own storage. **Install a4sx CLI** installs it there (see [Installing the a4sx CLI](#installing-the-a4sx-cli)); it needs Python 3.10 or newer. You can also use the [install guide](https://session-exchange.com/guide/cli).
 - For starting cells: Linux or Windows (native, WSL, Remote-SSH or a dev container), as the a4sx CLI requires.
 - For **Resume in terminal** without the a4sx command-line tool: Claude Code's `claude` command. The extension looks for it on your `PATH`, then in the same folders and in `~/.claude/local`.
 - For **Resume in Claude Code**: the Claude Code extension. The resumed session runs on the Claude Code extension's own sign-in, not on your a4sx launch profile or router.

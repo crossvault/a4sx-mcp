@@ -27,12 +27,15 @@ export interface LookupEnv {
 /**
  * Where the a4sx installer puts the CLI. A VS Code started from the dock or a menu often has a PATH
  * without these (the installer adds `~/.local/bin` only in the shell's rc file), so they are tried
- * after PATH. None on Windows. `home` is the home directory of the host the extension runs on: in a
- * remote window (SSH, WSL, containers) that is the remote user's home on the remote host.
+ * after PATH. On Windows, install.ps1's folder `%LOCALAPPDATA%\Programs\a4sx`: a VS Code that was
+ * already running during the install doesn't see the new PATH. `home` is the home directory of the host
+ * the extension runs on: in a remote window (SSH, WSL, containers) that is the remote user's home on the
+ * remote host.
  */
-export function defaultFallbackDirs(platform: NodeJS.Platform, home: string): string[] {
+export function defaultFallbackDirs(platform: NodeJS.Platform, home: string, env: NodeJS.ProcessEnv = process.env): string[] {
   if (platform === "win32") {
-    return [];
+    const local = env.LOCALAPPDATA;
+    return local && path.win32.isAbsolute(local) ? [path.win32.join(local, "Programs", CLI_NAME)] : [];
   }
   return [path.join(home, ".local", "bin"), "/usr/local/bin", "/opt/homebrew/bin"];
 }

@@ -10,10 +10,11 @@ import * as path from "path";
 import { Client, DEFAULT_SERVER, FetchLike, listingWebUrl, MESSAGES, normalizeServerUrl, PROFILE_ID, sessionWebUrl } from "./api";
 import { A4sxAuthProvider, AUTH_ID, AUTH_LABEL, LoginCancelled, LoginRequest, SECRET_KEY, vscodeLogin } from "./auth";
 import { CLAUDE_EXTENSION_ID, claudeResumeUri } from "./claudeResume";
-import { CLI_NAME, findClaude, findCli, CliLookup } from "./cli";
+import { CLI_NAME, findClaude, findCli, CliLookup, LookupEnv } from "./cli";
 import { cellsListDir } from "./cells";
 import {
-  CellCommandDeps, copyCellLaunch, dailyUpdate, forgetCell, installCli, newCell, openCellOnWeb, renameCell, setDefaultCell, startCell, stopCell, updateCliInTerminal,
+  CellCommandDeps, copyCellLaunch, dailyUpdate, forgetCell, installCli, newCell, openCellOnWeb, ownCliCheck, ownCliUsable, renameCell, repairOwnCli, setDefaultCell, startCell, stopCell,
+  updateCliInTerminal,
 } from "./cellCommands";
 import {
   CellsLoad, CellsProvider, CELLS_EMPTY, CELLS_NO_CLI, CliOutput, CliResolution, CliRunner, CMD_COPY_CELL_LAUNCH, CMD_DEFAULT_CELL, CMD_FORGET_CELL, CMD_INSTALL_CLI,
@@ -101,17 +102,28 @@ export function mcpServerDefinitions(): vscode.McpServerDefinition[] {
 
 /** <globalStorage>/cli: the extension's own copy of the a4sx CLI (Install a4sx CLI). Set by activate(). */
 let ownCliDir: string | undefined;
+/** The Cells view's deps (for the own copy's Python check). Set by activate(). */
+let ownCliDeps: CellCommandDeps | undefined;
+
+/**
+ * Lookup, then: the extension's own copy must have a Python the CLI accepts (a Store Python is replaced
+ * when a better one is there; otherwise the user is offered one and this is undefined).
+ */
+async function lookupUsableCli(lookup: (configured: string | undefined) => CliLookup): Promise<CliLookup | undefined> {
+  const r = lookupCli(lookup);
+  return r.found && ownCliDeps && !(await ownCliUsable(ownCliDeps, r.path)) ? undefined : r;
+}
 
 /**
  * findCli, then the extension's own copy: a4sx.cliPath when set (and nothing else), else `a4sx` on PATH
  * and in the installer's folders, else the copy Install a4sx CLI put into the extension's storage.
  */
-export function findCliOrOwn(configured: string | undefined): CliLookup {
-  const r = findCli(configured);
+export function findCliOrOwn(configured: string | undefined, env: LookupEnv = {}, ownDir: string | undefined = ownCliDir): CliLookup {
+  const r = findCli(configured, env);
   if (r.found || r.reason !== "not-on-path") {
     return r;
   }
-  const own = installedLauncher(ownCliDir);
+  const own = installedLauncher(ownDir, env.platform);
   return own ? { found: true, path: own } : r;
 }
 
@@ -244,7 +256,10 @@ export async function saveSession(lookup: (configured: string | undefined) => Cl
   if (await stopIfInMeshSession() || await stopIfLocalInRemoteWindow()) {
     return undefined;
   }
-  const result = lookupCli(lookup);
+  const result = await lookupUsableCli(lookup);
+  if (!result) {
+    return undefined;
+  }
   if (!result.found) {
     await reportMissingCli(result);
     return undefined;
@@ -346,6 +361,14 @@ export async function resumeSession(
   if (await stopIfInMeshSession()) {
     return undefined;
   }
+  // The own copy without a Python it can run: as without a CLI when the user turns down the Python offer.
+  const own = ownCliDeps ? await ownCliCheck(ownCliDeps, result.path) : "ok";
+  if (own === "declined") {
+    return resumeWithClaude(item, claudeLookup);
+  }
+  if (own === "stop") {
+    return undefined;
+  }
   const profile = await choose();
   if (!profile) {
     return undefined;
@@ -397,7 +420,10 @@ export async function runProfileCli(profileId: string, lookup: (configured: stri
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(profileId) || await stopIfInMeshSession() || await stopIfLocalInRemoteWindow()) {
     return undefined;
   }
-  const result = lookupCli(lookup);
+  const result = await lookupUsableCli(lookup);
+  if (!result) {
+    return undefined;
+  }
   if (!result.found) {
     await reportMissingCli(result);
     return undefined;
@@ -412,7 +438,10 @@ export async function runSetDefaultCli(profileId: string, lookup: (configured: s
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(profileId) || await stopIfInMeshSession() || await stopIfLocalInRemoteWindow()) {
     return undefined;
   }
-  const result = lookupCli(lookup);
+  const result = await lookupUsableCli(lookup);
+  if (!result) {
+    return undefined;
+  }
   if (!result.found) {
     await reportMissingCli(result);
     return undefined;
@@ -732,7 +761,10 @@ export async function startSessionInMesh(
   if (await stopIfInMeshSession() || await stopIfLocalInRemoteWindow()) {
     return undefined;
   }
-  const cli = lookupCli(lookup);
+  const cli = await lookupUsableCli(lookup);
+  if (!cli) {
+    return undefined;
+  }
   if (!cli.found) {
     await reportMissingCli(cli);
     return undefined;
@@ -918,7 +950,9 @@ export function activate(context: vscode.ExtensionContext): void {
     fetch: (url, init) => runtime.download(url, init),
     python: runPython,
     terminals: cellTerminals,
+    onRepaired: () => profiles.refresh(),
   };
+  ownCliDeps = cellDeps;
   const cellsView = vscode.window.createTreeView(VIEW_CELLS, { treeDataProvider: cells });
   const refreshCells = () => void cells.refresh();
   /** Refresh after an update or a settings change: the CLI's version is asked again too. */
@@ -1052,8 +1086,12 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   }
   sidebar = { auth, sessions, profiles, market, meshes, meshPoller, cells, cellDeps };
-  // Once a day, silently: `a4sx update` for the extension's own copy of the CLI.
-  void dailyUpdate(cellDeps).then((ran) => { if (ran) { refreshCells(); } });
+  // Silently: the own copy's launcher gets a Python the CLI accepts (0.5.0 could write a Store Python into
+  // it); then, once a day, `a4sx update` for the extension's own copy of the CLI.
+  // A repair reads the views again itself (repairOnce).
+  void repairOwnCli(cellDeps)
+    .then(() => dailyUpdate(cellDeps))
+    .then((ran) => { if (ran) { refreshCells(); } });
   // The probe (GET /meshes only) decides whether the view shows; the cells are read when it is shown,
   // then every 30 s while it is visible.
   void meshes.probe();
