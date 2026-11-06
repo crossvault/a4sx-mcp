@@ -186,28 +186,67 @@ export function installedLauncher(dir: string | undefined, platform: NodeJS.Plat
 
 // --- Python ---------------------------------------------------------------------------------------
 
-/** Prints sys.executable when the interpreter is new enough, else nothing. */
-export const PYTHON_PROBE = `import sys; print(sys.executable if sys.version_info >= (${MIN_PYTHON[0]}, ${MIN_PYTHON[1]}) else '')`;
+/**
+ * Prints, when the interpreter is new enough (else nothing), one JSON line: sys.executable, then what a venv
+ * is built on (sys._base_executable, and sys.base_prefix), so a venv on the Store Python is told too.
+ */
+export const PYTHON_PROBE =
+  `import sys, json; print(json.dumps([sys.executable, getattr(sys, '_base_executable', '') or '', sys.base_prefix]) ` +
+  `if sys.version_info >= (${MIN_PYTHON[0]}, ${MIN_PYTHON[1]}) else '')`;
+
+/** A Windows path a launcher can start: a drive letter or a UNC share (not an MSYS/Cygwin `/usr/bin/python3`, not a rooted `\foo`). */
+const WIN_ABS = /^(?:[A-Za-z]:\\|\\\\[^\\?.][^\\]*\\[^\\]+)/;
+
+/** An absolute path for `platform` that the launcher can hold: on Windows only with a drive or a UNC share. */
+export function usablePythonPath(exe: string, platform: NodeJS.Platform): boolean {
+  if (!exe || CONTROL.test(exe)) {
+    return false;
+  }
+  return platform === "win32" ? WIN_ABS.test(exe) : path.posix.isAbsolute(exe);
+}
 
 /** Runs a program with an argv array (never a shell); resolves its exit code and stdout. */
 export type Runner = (file: string, args: readonly string[], timeoutMs: number) => Promise<{ code: number | null; stdout: string }>;
 
+/** Python3* folders (Python312, Python312-32, Python313-arm64), newest first by the version number. */
+export function pythonFolders(names: readonly string[]): string[] {
+  const minor = (d: string) => Number(/^Python3(\d{1,3})/i.exec(d)?.[1] ?? -1);
+  return names.filter((d) => /^Python3/i.test(d)).sort((a, b) => minor(b) - minor(a) || (a < b ? -1 : a > b ? 1 : 0));
+}
+
 /**
- * The Python commands to try, as install.ps1 does on Windows: the py launcher, python, python3, then
- * the per-user folders a fresh `winget install Python.Python.3.1x` uses (the extension host's PATH
- * doesn't change until VS Code restarts), then the all-users folders in %ProgramFiles%; newest first in
- * each. Elsewhere python3, then python.
+ * The Python commands to try, as install.ps1 does on Windows: the py launcher, python, python3, then every
+ * python.exe and python3.exe in the PATH folders (not only the first), then the per-user folders a fresh
+ * `winget install Python.Python.3.1x` uses (the extension host's PATH doesn't change until VS Code
+ * restarts), then the all-users folders in %ProgramFiles%; newest first in each. Elsewhere python3, then python.
  */
-export function pythonCandidates(platform: NodeJS.Platform, env: NodeJS.ProcessEnv = process.env, listDir: (d: string) => string[] = safeList): string[][] {
+export function pythonCandidates(
+  platform: NodeJS.Platform, env: NodeJS.ProcessEnv = process.env, listDir: (d: string) => string[] = safeList, isFile: (p: string) => boolean = fileExists,
+): string[][] {
   if (platform !== "win32") {
     return [["python3"], ["python"]];
   }
   const out: string[][] = [["py", "-3"], ["python"], ["python3"]];
+  const seen = new Set<string>();
+  const add = (exe: string) => {
+    if (!seen.has(exe.toLowerCase())) {
+      seen.add(exe.toLowerCase());
+      out.push([exe]);
+    }
+  };
+  const pathDirs = (env.PATH ?? env.Path ?? "").split(";").map((d) => d.trim().replace(/^"(.*)"$/, "$1")).filter((d) => WIN_ABS.test(d));
+  for (const name of ["python.exe", "python3.exe"]) {
+    for (const d of pathDirs) {
+      const exe = path.win32.join(d, name);
+      if (isFile(exe)) {
+        add(exe);
+      }
+    }
+  }
   const roots = [env.LOCALAPPDATA && path.win32.join(env.LOCALAPPDATA, "Programs", "Python"), env.ProgramFiles];
   for (const root of roots) {
     if (root) {
-      const dirs = listDir(root).filter((d) => /^Python3\d{1,2}$/i.test(d)).sort((a, b) => Number(b.slice(7)) - Number(a.slice(7)));
-      out.push(...dirs.map((d) => [path.win32.join(root, d, "python.exe")]));
+      pythonFolders(listDir(root)).forEach((d) => add(path.win32.join(root, d, "python.exe")));
     }
   }
   return out;
@@ -233,70 +272,97 @@ export function isStorePython(exe: string): boolean {
   return STORE_PYTHON.test(exe);
 }
 
+export type RepairResult = "ok" | "repaired" | "store-only" | "none";
+
 /** What the search found: a Python the CLI can use, only the Store build, or none at all. */
 export type PythonSearch = { kind: "found"; exe: string } | { kind: "store-only"; exe: string } | { kind: "none" };
 
+/** The probe's answer: [sys.executable, what it is built on…], from its last line; undefined when there is none. */
+export function parseProbe(stdout: string): { exe: string; base: string[] } | undefined {
+  const line = stdout.trim().split(/\r?\n/).pop()?.trim() ?? "";
+  let v: unknown;
+  try {
+    v = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(v) || typeof v[0] !== "string") {
+    return undefined;
+  }
+  return { exe: v[0].trim(), base: v.slice(1).filter((b): b is string => typeof b === "string") };
+}
+
 /**
  * The first Python 3.10+ that answers the probe and isn't the Store build: its sys.executable (an absolute
- * path, so the launcher doesn't depend on PATH). The Store's install stub fails the probe; a full Store
- * install answers it and is skipped by its path, and the search goes on.
+ * path, so the launcher doesn't depend on PATH; on Windows with a drive or a UNC share). The Store's install
+ * stub fails the probe; a full Store install, or a venv built on it, answers it and is skipped by its paths,
+ * and the search goes on.
  */
-export async function searchPython(run: Runner, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, listDir?: (d: string) => string[]): Promise<PythonSearch> {
+export async function searchPython(
+  run: Runner, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, listDir?: (d: string) => string[], isFile?: (p: string) => boolean,
+): Promise<PythonSearch> {
   let store: string | undefined;
-  for (const [cmd, ...rest] of pythonCandidates(platform, env, listDir)) {
+  for (const [cmd, ...rest] of pythonCandidates(platform, env, listDir, isFile)) {
     let r: { code: number | null; stdout: string };
     try {
       r = await run(cmd, [...rest, "-c", PYTHON_PROBE], 15_000);
     } catch {
       continue;
     }
-    const exe = r.stdout.trim().split(/\r?\n/).pop()?.trim() ?? "";
-    const isAbs = platform === "win32" ? path.win32.isAbsolute(exe) : path.posix.isAbsolute(exe);
-    if (r.code === 0 && exe && isAbs && !CONTROL.test(exe)) {
-      if (!isStorePython(exe)) {
-        return { kind: "found", exe };
+    const probe = r.code === 0 ? parseProbe(r.stdout) : undefined;
+    if (probe && usablePythonPath(probe.exe, platform)) {
+      if (![probe.exe, ...probe.base].some(isStorePython)) {
+        return { kind: "found", exe: probe.exe };
       }
-      store ??= exe;
+      store ??= probe.exe;
     }
   }
   return store ? { kind: "store-only", exe: store } : { kind: "none" };
 }
 
 /** searchPython's Python, or undefined (none, or only the Store build). */
-export async function findPython(run: Runner, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, listDir?: (d: string) => string[]): Promise<string | undefined> {
-  const r = await searchPython(run, platform, env, listDir);
+export async function findPython(
+  run: Runner, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, listDir?: (d: string) => string[], isFile?: (p: string) => boolean,
+): Promise<string | undefined> {
+  const r = await searchPython(run, platform, env, listDir, isFile);
   return r.kind === "found" ? r.exe : undefined;
 }
 
 /**
- * True when the extension's own launcher in `dir` runs a Store Python (written by 0.5.0 or older). Cheap:
- * it reads the launcher's few bytes, nothing is run.
+ * True when the extension's own Windows launcher in `dir` runs a Python the CLI can't use: the Store build
+ * (0.5.0 could write it), or a path without a drive or UNC share (an MSYS/Cygwin `/usr/bin/python3`, which
+ * cmd.exe can't start). Cheap: it reads the launcher's few bytes, nothing is run. A launcher that isn't in
+ * the form launcherText writes is left alone.
  */
-export function launcherUsesStorePython(dir: string | undefined, platform: NodeJS.Platform = process.platform): boolean {
-  const launcher = installedLauncher(dir, platform);
+export function launcherNeedsRepair(dir: string | undefined, platform: NodeJS.Platform = process.platform): boolean {
+  const launcher = platform === "win32" ? installedLauncher(dir, platform) : undefined;
   if (!launcher) {
     return false;
   }
+  let text: string;
   try {
-    return isStorePython(fs.readFileSync(launcher, "utf8"));
+    text = fs.readFileSync(launcher, "utf8");
   } catch {
     return false;
   }
+  const m = /^"([^"\r\n]*)" "[^"\r\n]*" %\*\r?$/m.exec(text);
+  return !!m && (isStorePython(m[1]) || !usablePythonPath(m[1], platform));
 }
 
 /**
- * Repairs the extension's own launcher when it runs a Store Python: rewrites it with the Python the search
- * finds. "ok": nothing to repair (no launcher, or a good one); "repaired"; else why it can't be: only the
+ * Repairs the extension's own launcher when it runs a Python the CLI can't use (launcherNeedsRepair):
+ * rewrites it with the Python the search finds. "ok": nothing to repair (no launcher, or a good one); "repaired"; else why it can't be: only the
  * Store build ("store-only") or no Python at all ("none"). Throws writeLauncher's ProvisionError when the
  * launcher can't be written; it then stays as it was.
  */
 export async function repairLauncher(
   dir: string | undefined, run: Runner, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, listDir?: (d: string) => string[],
-): Promise<"ok" | "repaired" | "store-only" | "none"> {
-  if (!dir || !launcherUsesStorePython(dir, platform)) {
+  isFile?: (p: string) => boolean,
+): Promise<RepairResult> {
+  if (!dir || !launcherNeedsRepair(dir, platform)) {
     return "ok";
   }
-  const found = await searchPython(run, platform, env, listDir);
+  const found = await searchPython(run, platform, env, listDir, isFile);
   if (found.kind !== "found") {
     return found.kind;
   }

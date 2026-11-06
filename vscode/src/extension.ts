@@ -10,10 +10,10 @@ import * as path from "path";
 import { Client, DEFAULT_SERVER, FetchLike, listingWebUrl, MESSAGES, normalizeServerUrl, PROFILE_ID, sessionWebUrl } from "./api";
 import { A4sxAuthProvider, AUTH_ID, AUTH_LABEL, LoginCancelled, LoginRequest, SECRET_KEY, vscodeLogin } from "./auth";
 import { CLAUDE_EXTENSION_ID, claudeResumeUri } from "./claudeResume";
-import { CLI_NAME, findClaude, findCli, CliLookup } from "./cli";
+import { CLI_NAME, findClaude, findCli, CliLookup, LookupEnv } from "./cli";
 import { cellsListDir } from "./cells";
 import {
-  CellCommandDeps, copyCellLaunch, dailyUpdate, forgetCell, installCli, newCell, openCellOnWeb, ownCliUsable, renameCell, repairOwnCli, setDefaultCell, startCell, stopCell,
+  CellCommandDeps, copyCellLaunch, dailyUpdate, forgetCell, installCli, newCell, openCellOnWeb, ownCliCheck, ownCliUsable, renameCell, repairOwnCli, setDefaultCell, startCell, stopCell,
   updateCliInTerminal,
 } from "./cellCommands";
 import {
@@ -118,12 +118,12 @@ async function lookupUsableCli(lookup: (configured: string | undefined) => CliLo
  * findCli, then the extension's own copy: a4sx.cliPath when set (and nothing else), else `a4sx` on PATH
  * and in the installer's folders, else the copy Install a4sx CLI put into the extension's storage.
  */
-export function findCliOrOwn(configured: string | undefined): CliLookup {
-  const r = findCli(configured);
+export function findCliOrOwn(configured: string | undefined, env: LookupEnv = {}, ownDir: string | undefined = ownCliDir): CliLookup {
+  const r = findCli(configured, env);
   if (r.found || r.reason !== "not-on-path") {
     return r;
   }
-  const own = installedLauncher(ownCliDir);
+  const own = installedLauncher(ownDir, env.platform);
   return own ? { found: true, path: own } : r;
 }
 
@@ -350,10 +350,7 @@ export async function resumeSession(
   if (await stopIfLocalInRemoteWindow()) {
     return undefined;
   }
-  const result = await lookupUsableCli(lookup);
-  if (!result) {
-    return undefined;
-  }
+  const result = lookupCli(lookup);
   if (!result.found) {
     if (result.reason === "configured-path-invalid") {
       await reportMissingCli(result);   // the user pointed a4sx.cliPath somewhere: say so
@@ -362,6 +359,14 @@ export async function resumeSession(
     return resumeWithClaude(item, claudeLookup);
   }
   if (await stopIfInMeshSession()) {
+    return undefined;
+  }
+  // The own copy without a Python it can run: as without a CLI when the user turns down the Python offer.
+  const own = ownCliDeps ? await ownCliCheck(ownCliDeps, result.path) : "ok";
+  if (own === "declined") {
+    return resumeWithClaude(item, claudeLookup);
+  }
+  if (own === "stop") {
     return undefined;
   }
   const profile = await choose();
@@ -945,6 +950,7 @@ export function activate(context: vscode.ExtensionContext): void {
     fetch: (url, init) => runtime.download(url, init),
     python: runPython,
     terminals: cellTerminals,
+    onRepaired: () => profiles.refresh(),
   };
   ownCliDeps = cellDeps;
   const cellsView = vscode.window.createTreeView(VIEW_CELLS, { treeDataProvider: cells });
@@ -1082,8 +1088,8 @@ export function activate(context: vscode.ExtensionContext): void {
   sidebar = { auth, sessions, profiles, market, meshes, meshPoller, cells, cellDeps };
   // Silently: the own copy's launcher gets a Python the CLI accepts (0.5.0 could write a Store Python into
   // it); then, once a day, `a4sx update` for the extension's own copy of the CLI.
+  // A repair reads the views again itself (repairOnce).
   void repairOwnCli(cellDeps)
-    .then((repaired) => { if (repaired) { refreshAll(); } })
     .then(() => dailyUpdate(cellDeps))
     .then((ran) => { if (ran) { refreshCells(); } });
   // The probe (GET /meshes only) decides whether the view shows; the cells are read when it is shown,
