@@ -66,16 +66,21 @@ export type CliResolution = { kind: "found"; path: string } | { kind: "no-cli" }
 
 /** `a4sx --version` once per CLI path until cleared (Refresh, an update, a settings change). Never rejects. */
 export class CliVersions {
-  private readonly seen = new Map<string, Promise<CliGate>>();
+  private readonly seen = new Map<string, Promise<string | undefined>>();
   constructor(private readonly run: CliRunner) {}
 
-  gate(cli: string): Promise<CliGate> {
-    let g = this.seen.get(cli);
-    if (!g) {
-      g = this.run(cli, VERSION_ARGS, 15_000).then((out) => cliGate(parseCliVersion(out.stdout)), () => "unknown" as const);
-      this.seen.set(cli, g);
+  /** The CLI's version ("0.26.5"), or undefined when it can't be read. */
+  version(cli: string): Promise<string | undefined> {
+    let v = this.seen.get(cli);
+    if (!v) {
+      v = this.run(cli, VERSION_ARGS, 15_000).then((out) => parseCliVersion(out.stdout), () => undefined);
+      this.seen.set(cli, v);
     }
-    return g;
+    return v;
+  }
+
+  gate(cli: string): Promise<CliGate> {
+    return this.version(cli).then(cliGate);
   }
 
   clear(): void {

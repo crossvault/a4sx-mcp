@@ -2,9 +2,9 @@
 
 ## 0.5.2
 
-- **Run as cell in terminal**: a new cell, or a cell with no launch profile, now runs on your Claude Code sign-in on this computer. You don't need a launch profile or the a4sx router. The options pick says so in one line: "Uses your Claude Code sign-in on this machine; run /login inside the cell if you have none." With no Claude Code sign-in on this computer, the cell still starts, and `/login` inside it signs Claude Code in on this computer. The next start of the cell uses that sign-in. This needs a4sx CLI 0.26.5 or newer. Older CLIs refuse the start and name `--local-login`.
+- **Run as cell in terminal**: a new cell, or a cell with no launch profile, now runs on your Claude Code sign-in on this computer. You don't need a launch profile or the a4sx router. When that is sure (the CLI is 0.26.5 or newer, it reported the cell's launch profile as none, and **Keep my sign-in** is on), one message says so as the terminal opens: "Uses your Claude Code sign-in on this machine; run /login inside the cell if you have none." With no Claude Code sign-in on this computer, the cell still starts, and `/login` inside it signs Claude Code in on this computer. The next start of the cell uses that sign-in. Older CLIs refuse the start and name `--local-login`.
 - **New cell…** no longer says that you pick a launch profile in the browser. You pick the mesh there.
-- The reduced-isolation dialog now also says that the agent can read this computer's Claude Code sign-in.
+- **Keep my sign-in** and the reduced-isolation dialog now also say that the agent can read this computer's Claude Code sign-in.
 
 ## 0.5.1
 

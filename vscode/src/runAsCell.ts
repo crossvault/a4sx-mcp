@@ -4,16 +4,16 @@
 // one), set two toggles, and a terminal in the session's folder runs
 //   a4sx launch --cell <cell> [--mesh-reduced-isolation] [--auto-allow-ipc-messages] -- --resume <session id>
 // for a session that is on this computer, or `… --a4sx-session=<id>` for one that is only in the library.
-// "New cell…" runs `a4sx launch --new-cell [flags] …`: the browser approval then picks the mesh and profile.
+// "New cell…" runs `a4sx launch --new-cell [flags] …`: the browser approval then picks the mesh.
 // 0.5.2: no flag picks a router or a launch profile. A cell with neither runs on this computer's Claude Code sign-in
-// (the CLI's default since 0.26.5), and the options pick says so in one line.
+// (the CLI's default since 0.26.5); when that is sure, one line says so as the terminal opens (claudeSignInHint).
 // Every piece is an argv element, quoted for the user's shell (PowerShell, bash, …) by openCommandTerminal.
 import * as vscode from "vscode";
 import { CLI_NAME } from "./cli";
 import { LaunchOptions, LocalCell, newCellRunArgs, ResumeTarget, runAsCellArgs, startableCell } from "./cells";
 import { CELL_CMD_TEXTS, CellCommandDeps, cellTerminalEnv, consentReducedIsolation, ensureCli } from "./cellCommands";
 import { CELL_TEXTS, CliRunner, CMD_UPDATE_CLI } from "./cellsView";
-import { CONFIG_SHOW_ARGS, configAutoAllow } from "./cliJson";
+import { CONFIG_SHOW_ARGS, configAutoAllow, versionAtLeast } from "./cliJson";
 import { LocalSession } from "./localSession";
 import { openCommandTerminal } from "./resume";
 
@@ -28,7 +28,7 @@ export const RUN_AS_CELL_TEXTS = {
   optionsPlaceholder: "Choose the options for this start, then press Enter",
   claudeSignIn: "Uses your Claude Code sign-in on this machine; run /login inside the cell if you have none.",
   keepSignIn: "Keep my sign-in (reduced isolation)",
-  keepSignInDetail: "The cell runs as your user and can use the a4sx sign-ins and keys saved on this computer.",
+  keepSignInDetail: "The cell runs as your user and can use the a4sx sign-ins and keys and the Claude Code sign-in saved on this computer.",
   autoAllow: "Deliver messages from mesh peers without asking",
   autoAllowDetail: "Off: you approve each message another session in the mesh sends to this one, unless ipc.auto_allow_messages is on in your a4sx config.",
   autoAllowFromConfig: "On in your a4sx config (ipc.auto_allow_messages): turning it off here doesn't change that. `a4sx config set ipc.auto_allow_messages false` does.",
@@ -79,16 +79,24 @@ export async function readConfigAutoAllow(run: CliRunner, cli: string): Promise<
   }
 }
 
-/** A cell with no launch profile (or a new one) runs on this computer's Claude Code sign-in. */
-export function usesClaudeSignIn(choice: CellChoice): boolean {
-  return choice.kind === "new" || !choice.cell.launchProfile;
+/** The first a4sx CLI that runs a cell with no router and no launch profile on the Claude Code sign-in. */
+export const MIN_CLAUDE_SIGNIN_CLI = "0.26.5";
+
+/**
+ * Whether the cell surely runs on this computer's Claude Code sign-in, so the hint may say so: a new cell, or one
+ * whose launch profile the CLI reported (its rows carry profiles: not `legacy`) as none; a CLI with that default
+ * (0.26.5+); and "Keep my sign-in" on (without it the CLI refuses the start in reduced isolation).
+ */
+export function claudeSignInHint(choice: CellChoice, legacy: boolean, cliVersion: string | undefined, o: LaunchOptions): boolean {
+  const noProfile = choice.kind === "new" || (!legacy && !choice.cell.launchProfile);
+  return noProfile && o.reduced && cliVersion !== undefined && versionAtLeast(cliVersion, MIN_CLAUDE_SIGNIN_CLI);
 }
 
 /**
  * The two toggles; "Keep my sign-in" starts on, "Deliver … without asking" off (on, and saying so, when the
- * CLI's config already turns it on). `claudeSignIn`: the pick's line says which sign-in the cell uses. undefined: Esc.
+ * CLI's config already turns it on). undefined: Esc.
  */
-export async function pickLaunchOptions(configAutoAllowOn = false, claudeSignIn = false): Promise<LaunchOptions | undefined> {
+export async function pickLaunchOptions(configAutoAllowOn = false): Promise<LaunchOptions | undefined> {
   const t = RUN_AS_CELL_TEXTS;
   const items = [
     { label: t.keepSignIn, description: "--mesh-reduced-isolation", detail: t.keepSignInDetail, picked: true, key: "reduced" as const },
@@ -97,9 +105,7 @@ export async function pickLaunchOptions(configAutoAllowOn = false, claudeSignIn 
       picked: configAutoAllowOn, key: "autoAllow" as const,
     },
   ];
-  const picked = await vscode.window.showQuickPick(items, {
-    title: t.optionsTitle, placeHolder: claudeSignIn ? t.claudeSignIn : t.optionsPlaceholder, canPickMany: true, ignoreFocusOut: true,
-  });
+  const picked = await vscode.window.showQuickPick(items, { title: t.optionsTitle, placeHolder: t.optionsPlaceholder, canPickMany: true, ignoreFocusOut: true });
   if (!picked) {
     return undefined;
   }
@@ -140,7 +146,7 @@ export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession
   if (!picked) {
     return undefined;
   }
-  const options = await pickLaunchOptions(await readConfigAutoAllow(deps.run, cli), usesClaudeSignIn(picked.choice));
+  const options = await pickLaunchOptions(await readConfigAutoAllow(deps.run, cli));
   if (!options) {
     return undefined;
   }
@@ -169,5 +175,8 @@ export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession
   const name = picked.choice.kind === "cell" ? CELL_CMD_TEXTS.cellTerminal(picked.choice.cell.name) : CELL_CMD_TEXTS.newCellTerminal;
   const terminal = openCommandTerminal(name, cli, CLI_NAME, args, cwd, cellTerminalEnv(deps.platform));
   deps.terminals.add(terminal);
+  if (claudeSignInHint(picked.choice, load.legacy === true, await deps.provider.versions.version(cli), options)) {
+    void vscode.window.showInformationMessage(t.claudeSignIn);   // not awaited: it never blocks the start
+  }
   return terminal;
 }

@@ -219,7 +219,7 @@ export function runAsCellArgs(cell: LocalCell, all: readonly LocalCell[], o: Lau
   return ["launch", "--cell", cell.name, ...(nameShared(cell, all) ? ["--mesh", cell.meshId!] : []), ...launchFlags(o), ...tail];
 }
 
-/** `launch --new-cell [flags] [--a4sx-session=ID | -- --resume ID]`: the browser approval picks the mesh and profile. */
+/** `launch --new-cell [flags] [--a4sx-session=ID | -- --resume ID]`: the browser approval picks the mesh. */
 export function newCellRunArgs(o: LaunchOptions, target?: ResumeTarget): string[] | undefined {
   const tail = resumeTail(target);
   return tail && ["launch", "--new-cell", ...launchFlags(o), ...tail];

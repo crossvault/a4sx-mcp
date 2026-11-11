@@ -11,7 +11,7 @@ import * as path from "path";
 import { calls, fakeMemento, resetCalls } from "../fakeVscode";
 import * as ext from "../../extension";
 import {
-  cellLaunchArgs, cellRenameArgs, cellStopArgs, LocalCell, NEW_CELL_ARGS, newCellRunArgs, resumeTail, runAsCellArgs,
+  cellLaunchArgs, cellRenameArgs, cellStopArgs, LocalCell, NEW_CELL_ARGS, newCellRunArgs, parseLocalCell, resumeTail, runAsCellArgs,
 } from "../../cells";
 import {
   CELL_CMD_TEXTS, CellCommandDeps, CONSENT_KEY, copyCellLaunch, ensureCli, machineKey, renameCell, stopCell, typedCommand, validateNewCellName,
@@ -31,7 +31,7 @@ import {
 import { CLI_PROFILE_TEXTS, CliProfileItem, CliProfilesLoad, loadCliProfiles, ProfileDetailItem, profileDetails, ProfilesProvider } from "../../profilesView";
 
 const profileDetailsFlags = (p: Parameters<typeof profileDetails>[0]) => profileDetails(p).find(([k]) => k === "Flags")![1];
-import { cellChoices, runAsCell, RUN_AS_CELL_TEXTS, RunAsCellSession } from "../../runAsCell";
+import { cellChoices, claudeSignInHint, runAsCell, RUN_AS_CELL_TEXTS, RunAsCellSession } from "../../runAsCell";
 import { shownFlags } from "../../profilesView";
 import { SessionItem } from "../../sessionsView";
 import { commandLine } from "../../terminalCommand";
@@ -605,23 +605,34 @@ describe("Run as cell in terminal", () => {
     assert.deepStrictEqual([...NEW_CELL_ARGS], ["launch", "--new-cell", "--mesh-reduced-isolation"]);
   });
 
-  it("0.5.2: the options pick says which sign-in the cell uses: a new cell or one with no launch profile, the Claude Code sign-in", async () => {
+  it("0.5.2: the Claude Code sign-in hint shows only when it is sure: no profile (or New cell…), CLI 0.26.5+, Keep my sign-in on", async () => {
     assert.strictEqual(RUN_AS_CELL_TEXTS.claudeSignIn, "Uses your Claude Code sign-in on this machine; run /login inside the cell if you have none.");
     assert.strictEqual(RUN_AS_CELL_TEXTS.newCellDetail, "Approve it in your browser, where you pick its mesh.");
-    const h = harness();
-    calls.pickQueue.push(1, [0]);   // docs: no launch profile
-    await runAsCell(h.deps, local());
-    calls.pickQueue.push(3, [0]);   // New cell…
-    await runAsCell(h.deps, local());
-    calls.pickQueue.push(0, [0]);   // build: launch profile work
-    await runAsCell(h.deps, local());
-    assert.deepStrictEqual([1, 3, 5].map((i) => calls.quickPicks[i].options.placeHolder),
-      [RUN_AS_CELL_TEXTS.claudeSignIn, RUN_AS_CELL_TEXTS.claudeSignIn, RUN_AS_CELL_TEXTS.optionsPlaceholder]);
-    assert.deepStrictEqual(calls.terminals.map((x) => x.sent[0]), [
-      `'${CLI}' 'launch' '--cell' 'docs' '--mesh-reduced-isolation' '--' '--resume' '${SID}'\n`,
-      `'${CLI}' 'launch' '--new-cell' '--mesh-reduced-isolation' '--' '--resume' '${SID}'\n`,
-      `'${CLI}' 'launch' '--cell' 'build' '--mesh-reduced-isolation' '--' '--resume' '${SID}'\n`,
-    ]);
+    assert.match(RUN_AS_CELL_TEXTS.keepSignInDetail, /the Claude Code sign-in saved on this computer/);
+    const v = (ver: string) => ({ "--version": out(`a4sx ${ver}  (server 0.726.0)`) });
+    const runs: [Record<string, CliOutput>, number, number[], boolean][] = [
+      [v("0.26.5"), 1, [0], true],      // docs: no launch profile
+      [v("0.26.5"), 3, [0], true],      // New cell…
+      [v("0.27.0"), 1, [0], true],
+      [v("0.26.5"), 0, [0], false],     // build: launch profile work
+      [v("0.26.5"), 1, [], false],      // Keep my sign-in off
+      [v("0.26.4"), 1, [0], false],     // a CLI without the default
+      [{}, 1, [0], false],              // 0.25.0
+      [{ "--version": out("not a version") }, 3, [0], false],
+    ];
+    for (const [answers, cell, opts, shown] of runs) {
+      resetCalls();
+      const h = harness(answers);
+      calls.pickQueue.push(cell, opts);
+      assert.ok(await runAsCell(h.deps, local()));
+      assert.deepStrictEqual(calls.infos, shown ? [RUN_AS_CELL_TEXTS.claudeSignIn] : [], JSON.stringify([answers, cell, opts]));
+      assert.strictEqual(calls.quickPicks[1].options.placeHolder, RUN_AS_CELL_TEXTS.optionsPlaceholder);
+    }
+    // legacy rows (no profile field): a cell's profile is unknown, so no hint; New cell… still gets it
+    const legacy = { name: "docs", instance_id: "ins_D4", mesh_id: MESH, mesh_name: "Team mesh" };
+    assert.strictEqual(claudeSignInHint({ kind: "cell", cell: parseLocalCell(legacy)! }, true, "0.26.5", { reduced: true, autoAllow: false }), false);
+    assert.strictEqual(claudeSignInHint({ kind: "cell", cell: parseLocalCell(legacy)! }, false, "0.26.5", { reduced: true, autoAllow: false }), true);
+    assert.strictEqual(claudeSignInHint({ kind: "new" }, true, "0.26.5", { reduced: true, autoAllow: false }), true);
     assert.match(CELL_CMD_TEXTS.consentDetail, /keys saved on this computer, and its Claude Code sign-in\./);
   });
 
