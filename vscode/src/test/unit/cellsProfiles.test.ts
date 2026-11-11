@@ -11,7 +11,7 @@ import * as path from "path";
 import { calls, fakeMemento, resetCalls } from "../fakeVscode";
 import * as ext from "../../extension";
 import {
-  cellLaunchArgs, cellRenameArgs, cellStopArgs, LocalCell, newCellRunArgs, resumeTail, runAsCellArgs,
+  cellLaunchArgs, cellRenameArgs, cellStopArgs, LocalCell, NEW_CELL_ARGS, newCellRunArgs, resumeTail, runAsCellArgs,
 } from "../../cells";
 import {
   CELL_CMD_TEXTS, CellCommandDeps, CONSENT_KEY, copyCellLaunch, ensureCli, machineKey, renameCell, stopCell, typedCommand, validateNewCellName,
@@ -586,6 +586,43 @@ describe("Run as cell in terminal", () => {
     assert.strictEqual(await runAsCell(h.deps, library), undefined);
     assert.deepStrictEqual(calls.errors.map((e) => [e.message, e.items]), [[CELL_TEXTS.tooOld, [CELL_TEXTS.updateCli]]]);
     assert.deepStrictEqual(calls.executed.map((e) => e.id), ["a4sx.updateCli"]);
+  });
+
+  it("0.5.2: no command line it builds picks a router, a launch profile or an upstream (a new cell runs on the Claude Code sign-in)", () => {
+    const cells = parseCellsAnswer(JSON.stringify(V1_CELLS))!.cells.filter((c) => c.meshId !== undefined);
+    assert.ok(cells.length >= 2);
+    const forcing = /^--(profile|agent-mdx-router|a4sx-router|upstream|reasoning-proxy|ipc-proxy|local-login)(=|$)/;
+    const lines: (readonly string[] | undefined)[] = [NEW_CELL_ARGS, ...cells.map((c) => cellLaunchArgs(c, cells))];
+    for (const o of [{ reduced: true, autoAllow: false }, { reduced: false, autoAllow: true }]) {
+      for (const t of [undefined, { kind: "local", sessionId: SID } as const, { kind: "library", id: LIB_ID } as const]) {
+        lines.push(newCellRunArgs(o, t), ...cells.map((c) => runAsCellArgs(c, cells, o, t)));
+      }
+    }
+    for (const args of lines) {
+      assert.ok(args && !args.some((a) => forcing.test(a)), JSON.stringify(args));
+    }
+    assert.deepStrictEqual(newCellRunArgs({ reduced: true, autoAllow: false }), ["launch", "--new-cell", "--mesh-reduced-isolation"]);
+    assert.deepStrictEqual([...NEW_CELL_ARGS], ["launch", "--new-cell", "--mesh-reduced-isolation"]);
+  });
+
+  it("0.5.2: the options pick says which sign-in the cell uses: a new cell or one with no launch profile, the Claude Code sign-in", async () => {
+    assert.strictEqual(RUN_AS_CELL_TEXTS.claudeSignIn, "Uses your Claude Code sign-in on this machine; run /login inside the cell if you have none.");
+    assert.strictEqual(RUN_AS_CELL_TEXTS.newCellDetail, "Approve it in your browser, where you pick its mesh.");
+    const h = harness();
+    calls.pickQueue.push(1, [0]);   // docs: no launch profile
+    await runAsCell(h.deps, local());
+    calls.pickQueue.push(3, [0]);   // New cell…
+    await runAsCell(h.deps, local());
+    calls.pickQueue.push(0, [0]);   // build: launch profile work
+    await runAsCell(h.deps, local());
+    assert.deepStrictEqual([1, 3, 5].map((i) => calls.quickPicks[i].options.placeHolder),
+      [RUN_AS_CELL_TEXTS.claudeSignIn, RUN_AS_CELL_TEXTS.claudeSignIn, RUN_AS_CELL_TEXTS.optionsPlaceholder]);
+    assert.deepStrictEqual(calls.terminals.map((x) => x.sent[0]), [
+      `'${CLI}' 'launch' '--cell' 'docs' '--mesh-reduced-isolation' '--' '--resume' '${SID}'\n`,
+      `'${CLI}' 'launch' '--new-cell' '--mesh-reduced-isolation' '--' '--resume' '${SID}'\n`,
+      `'${CLI}' 'launch' '--cell' 'build' '--mesh-reduced-isolation' '--' '--resume' '${SID}'\n`,
+    ]);
+    assert.match(CELL_CMD_TEXTS.consentDetail, /keys saved on this computer, and its Claude Code sign-in\./);
   });
 
   it("the menu item on My sessions, hidden from the palette", () => {

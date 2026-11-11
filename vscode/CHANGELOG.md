@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2
+
+- **Run as cell in terminal**: a new cell, or a cell with no launch profile, now runs on your Claude Code sign-in on this computer. You don't need a launch profile or the a4sx router. The options pick says so in one line: "Uses your Claude Code sign-in on this machine; run /login inside the cell if you have none." With no Claude Code sign-in on this computer, the cell still starts, and `/login` inside it signs Claude Code in on this computer. The next start of the cell uses that sign-in. This needs a4sx CLI 0.26.5 or newer. Older CLIs refuse the start and name `--local-login`.
+- **New cell…** no longer says that you pick a launch profile in the browser. You pick the mesh there.
+- The reduced-isolation dialog now also says that the agent can read this computer's Claude Code sign-in.
+
 ## 0.5.1
 
 - On Windows, **Install a4sx CLI** no longer sets up the CLI with the Microsoft Store Python. The a4sx CLI refuses that Python (Claude Code can't see the files it writes), so in 0.5.0 a cell could stop with "this Python is the Microsoft Store build … Nothing was started." The extension now skips it and also looks in `%ProgramFiles%\Python3*`. If the Store Python is the only one, it says so and offers `winget install Python.Python.3.12`.

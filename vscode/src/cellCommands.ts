@@ -35,7 +35,7 @@ export const CELL_CMD_TEXTS = {
   consentDetail:
     "Where this computer can't sandbox your agent, a cell runs as your own user (\"reduced isolation\"). Then your agent " +
     "could act as this cell in its mesh and skip the cell's outgoing checks, and it can read and use the a4sx sign-ins " +
-    "and keys saved on this computer. Every other session still checks everything it receives. Continue only if you " +
+    "and keys saved on this computer, and its Claude Code sign-in. Every other session still checks everything it receives. Continue only if you " +
     "trust the agent on this computer.\n\nWhere the sandbox works, the cell runs in it and none of this applies. " +
     "You're asked once on this computer.",
   consentAccept: "Accept and start",
