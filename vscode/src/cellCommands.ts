@@ -9,10 +9,10 @@ import { createHash } from "crypto";
 import * as os from "os";
 import { CLI_NAME } from "./cli";
 import {
-  CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellRenameArgs, cellStopArgs, NEW_CELL_ARGS, showText,
+  CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellProfileArgs, cellRenameArgs, cellStopArgs, NEW_CELL_ARGS, showText,
 } from "./cells";
-import { CellsProvider, CliOutput, CliResolution, CliRunner, LocalCellItem, MeshGroupItem } from "./cellsView";
-import { IN_SESSION_MESSAGE, parseCliError } from "./cliJson";
+import { CellsProvider, CliOutput, CliResolution, CliRunner, LocalCellItem, looksTooOld, MeshGroupItem } from "./cellsView";
+import { IN_SESSION_MESSAGE, parseCliError, parseProfilesAnswer, PROFILES_ARGS } from "./cliJson";
 import {
   bundledClaude, downloadCli, Fetch, installedLauncher, launcherNeedsRepair, ProvisionError, repairLauncher, RepairResult, Runner, searchPython, updateArgs, updateDue,
   WINGET_PYTHON_ARGS, writeLauncher,
@@ -77,6 +77,16 @@ export const CELL_CMD_TEXTS = {
   renameTaken: "Another cell in this mesh on this computer already has this name.",
   renamed: (from: string, to: string) => `Renamed the cell «${from}» to «${to}».`,
   copiedLaunch: "Copied the launch command.",
+  profileTitle: (name: string) => `Launch profile of the cell «${name}»`,
+  profilePlaceholder: "It starts with this profile from its next start, every time",
+  profileCurrent: "current",
+  profileDefaultMark: "your default",
+  profileFollowDefault: "Follow my default profile",
+  profileFollowDefaultDetail: "The cell starts with whatever your default launch profile is at that time",
+  profileNone: "You have no launch profiles yet. Create one in the Launch profiles view first.",
+  profileSet: (name: string, profile: string) => `The cell «${name}» starts with the launch profile «${profile}» from its next start.`,
+  profileCleared: (name: string) => `The cell «${name}» follows your default launch profile from its next start.`,
+  profileTooOld: "This a4sx CLI can't set a cell's launch profile yet. Update it to 0.27.0 or newer, then try again.",
 };
 
 export interface CellCommandDeps {
@@ -385,6 +395,58 @@ export function validateNewCellName(raw: string, cell: { name: string; meshId?: 
     return CELL_CMD_TEXTS.renameInvalid;
   }
   return v !== cell.name && all.some((c) => c.name === v && c.meshId === cell.meshId) ? CELL_CMD_TEXTS.renameTaken : undefined;
+}
+
+/**
+ * Set launch profile… (CLI 0.27.0): pick one of your launch profiles (from `profiles --json`), or "Follow my
+ * default profile", then `mesh cell profile NAME PROFILE|--clear`. The change applies at the cell's next start.
+ */
+export async function setCellProfile(deps: CellCommandDeps, item: LocalCellItem | undefined): Promise<boolean> {
+  if (!(item instanceof LocalCellItem)) {
+    return false;
+  }
+  const cell = item.cell;
+  const cli = await ensureCli(deps);
+  if (!cli) {
+    return false;
+  }
+  const listed = await deps.run(cli, PROFILES_ARGS, 30_000);
+  const answer = listed.code === 0 ? parseProfilesAnswer(listed.stdout) : undefined;
+  if (!answer) {
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.cliFailed("read your launch profiles", cliErrorText(listed)));
+    return false;
+  }
+  if (!answer.profiles.length) {
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.profileNone);
+    return false;
+  }
+  const t = CELL_CMD_TEXTS;
+  const items = [
+    ...answer.profiles.map((p) => ({
+      label: p.id, id: p.id as string | undefined,
+      description: [p.id === cell.launchProfile && cell.profileSource === "assigned" ? t.profileCurrent : undefined, p.id === answer.default ? t.profileDefaultMark : undefined]
+        .filter(Boolean).join(" · ") || undefined,
+      detail: [p.operator ? `X-Fleet-Operator: ${p.operator}` : undefined, p.model].filter(Boolean).join(" · ") || undefined,
+    })),
+    { label: t.profileFollowDefault, id: undefined, description: cell.profileSource === "default" ? t.profileCurrent : undefined, detail: t.profileFollowDefaultDetail },
+  ];
+  const picked = await vscode.window.showQuickPick(items, { title: t.profileTitle(cell.name), placeHolder: t.profilePlaceholder, ignoreFocusOut: true });
+  if (!picked) {
+    return false;
+  }
+  const args = cellProfileArgs(cell, item.all, picked.id);
+  if (!args) {
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.badCell);
+    return false;
+  }
+  const out = await deps.run(cli, args, 60_000);
+  await deps.provider.refresh();
+  if (out.code !== 0) {
+    await vscode.window.showErrorMessage(looksTooOld(out) ? t.profileTooOld : t.cliFailed("set the cell's launch profile", cliErrorText(out)));
+    return false;
+  }
+  void vscode.window.showInformationMessage(picked.id ? t.profileSet(cell.name, picked.id) : t.profileCleared(cell.name));
+  return true;
 }
 
 /** Rename (a cell in a mesh): an input box, then `mesh cell rename OLD NEW`. */

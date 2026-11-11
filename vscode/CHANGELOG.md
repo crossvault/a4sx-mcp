@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.0
+
+- **Cells** shows each cell's launch profile by name and what its route serves, e.g. "profile High effort → claude-fable-5-2 (high)". The tooltip says where the profile comes from (set for this cell, your default profile, or your default because the cell's own profile was deleted) and its X-Fleet-Operator. This needs a4sx CLI 0.27.0 or newer; with an older CLI the view shows the profile id as before.
+- New action **Set launch profile…** on a cell: pick one of your launch profiles, or **Follow my default profile**. It runs `a4sx mesh cell profile <name> <profile>` (or `--clear`). The cell starts with it from its next start, every time. An older CLI is told to update.
+
 ## 0.5.2
 
 - **Run as cell in terminal**: a new cell, or a cell with no launch profile, with no launch profile on your account either, now runs on your Claude Code sign-in on this computer. You don't need a launch profile or the a4sx router. When that applies (the CLI is 0.26.5 or newer, it read the cell from the server as active or reserved and reported its launch profile as none, and **Keep my sign-in** is on), one message says so as the terminal opens: "Without a launch profile, this cell uses your Claude Code sign-in on this machine; run /login inside the cell if you have none." With no Claude Code sign-in on this computer, the cell still starts, and `/login` inside it signs Claude Code in on this computer. The next start of the cell uses that sign-in. Older CLIs refuse the start and name `--local-login`.

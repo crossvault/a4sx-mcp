@@ -47,7 +47,30 @@ export interface LocalCell {
   meshPolicy?: MeshPolicy | null;
   /** CLI 0.25.0+: the cell's tags (not shown yet). */
   tags?: string[];
+  /** CLI 0.27.0+: the launch profile's name, where it comes from, its X-Fleet-Operator and what its route serves. */
+  profileName?: string;
+  profileSource?: ProfileSource;
+  operator?: string;
+  routeModel?: string;
+  routeEffort?: string;
 }
+
+/** CLI 0.27.0: where the cell's launch profile comes from. */
+export const PROFILE_SOURCES = ["assigned", "default", "fallback"] as const;
+export type ProfileSource = (typeof PROFILE_SOURCES)[number];
+/** A model id as the CLI passes it to Claude Code (its _CELL_ID_RE). */
+export const ROUTE_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,63}$/;
+export const ROUTE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+/** An X-Fleet-Operator value as the CLI shows it (its _CELL_HEADER_VALUE_RE). */
+export const ROUTE_OPERATOR = /^[A-Za-z0-9._:/-]{1,64}$/;
+
+export const CELL_PROFILE_TEXTS = {
+  sources: { assigned: "set for this cell", default: "your default profile", fallback: "your default: its own profile was deleted" } as Record<ProfileSource, string>,
+  profileLine: (name: string, source?: ProfileSource) => `Launch profile: ${name}${source ? ` (${CELL_PROFILE_TEXTS.sources[source]})` : ""}`,
+  operatorLine: (op: string) => `X-Fleet-Operator: ${op}`,
+  routeLine: (model: string, effort?: string) => `Route: serves ${model}${effort ? ` at ${effort} effort` : ""}`,
+  description: (name: string, model?: string, effort?: string) => `profile ${name}${model ? ` → ${model}${effort ? ` (${effort})` : ""}` : ""}`,
+};
 
 // eslint-disable-next-line no-control-regex
 const HIDDEN = /[\x00-\x1f\x7f-\x9f​-‏‪-‮⁦-⁩﻿]/g;
@@ -172,6 +195,15 @@ export function cellDefaultArgs(cell: LocalCell, all: readonly LocalCell[]): str
   return p && ["mesh", "cell", "default", ...p];
 }
 
+/** CLI 0.27.0: `mesh cell profile NAME PROFILE [--mesh ID|standalone]`, or with `--clear` for undefined. */
+export function cellProfileArgs(cell: LocalCell, all: readonly LocalCell[], profile: string | undefined): string[] | undefined {
+  const p = pickArgs(cell, all);
+  if (!p || (profile !== undefined && !PROFILE.test(profile))) {
+    return undefined;
+  }
+  return ["mesh", "cell", "profile", p[0], ...(profile === undefined ? ["--clear"] : [profile]), ...p.slice(1)];
+}
+
 /** `mesh cell forget NAME [--mesh ID|standalone]`. */
 export function cellForgetArgs(cell: LocalCell, all: readonly LocalCell[]): string[] | undefined {
   const p = pickArgs(cell, all);
@@ -250,7 +282,7 @@ export function localCellDescription(cell: LocalCell, defaultServer: string, gro
     cell.isDefault ? "default" : undefined,
     grouped ? undefined : cell.meshId ? cell.meshName ?? cell.meshId : "standalone",
     host,
-    cell.launchProfile ? `profile ${cell.launchProfile}` : undefined,
+    cell.launchProfile ? CELL_PROFILE_TEXTS.description(cell.profileName ?? cell.launchProfile, cell.routeModel, cell.routeEffort) : undefined,
     cell.localState,
     cell.registryState ? `registry ${cell.registryState}` : undefined,
     cell.path ? `path ${cell.path}` : undefined,
@@ -264,7 +296,9 @@ export function localCellTooltip(cell: LocalCell, defaultServer: string): string
     `Cell: ${cell.name}${cell.isDefault ? " (default)" : ""}`,
     cell.meshId ? `Mesh: ${cell.meshName ? `${cell.meshName} (${cell.meshId})` : cell.meshId}` : "Standalone: add it to a mesh in the browser to start it.",
     `Server: ${(cell.server ?? defaultServer).replace(/^https:\/\//, "")}`,
-    ...(cell.launchProfile ? [`Launch profile: ${cell.launchProfile}`] : []),
+    ...(cell.launchProfile ? [CELL_PROFILE_TEXTS.profileLine(cell.profileName ?? cell.launchProfile, cell.profileSource)] : []),
+    ...(cell.operator ? [CELL_PROFILE_TEXTS.operatorLine(cell.operator)] : []),
+    ...(cell.routeModel ? [CELL_PROFILE_TEXTS.routeLine(cell.routeModel, cell.routeEffort)] : []),
     ...(cell.localState ? [`On this computer: ${cell.localState}${cell.pid ? ` (pid ${cell.pid})` : ""}`] : []),
     ...(cell.registryState ? [`Registry: ${cell.registryState}`] : []),
     ...(cell.localState ? [`Path: ${cell.path ?? "none"}`] : []),

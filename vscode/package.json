@@ -2,7 +2,7 @@
   "name": "a4sx",
   "displayName": "a4sx",
   "description": "Use a4sx from VS Code: sign in, browse and resume your saved sessions or run them as mesh cells, sort them into folders, manage your launch profiles, start and manage the mesh cells on this computer, see your meshes, search the marketplace, and add the a4sx MCP servers for agent mode.",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "publisher": "crossvaultGmbH",
   "license": "Apache-2.0",
   "homepage": "https://session-exchange.com",
@@ -269,6 +269,11 @@
       {
         "command": "a4sx.renameCell",
         "title": "Rename…",
+        "category": "a4sx"
+      },
+      {
+        "command": "a4sx.setCellProfile",
+        "title": "Set launch profile…",
         "category": "a4sx"
       },
       {
@@ -612,6 +617,11 @@
           "group": "1_cell@4"
         },
         {
+          "command": "a4sx.setCellProfile",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.standalone)?(\\.default)?(\\.running)?$/",
+          "group": "1_cell@4"
+        },
+        {
           "command": "a4sx.openCellOnWeb",
           "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell/",
           "group": "1_cell@5"
@@ -750,6 +760,10 @@
         },
         {
           "command": "a4sx.renameCell",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.setCellProfile",
           "when": "false"
         },
         {
