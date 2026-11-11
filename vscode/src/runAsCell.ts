@@ -84,11 +84,13 @@ export const MIN_CLAUDE_SIGNIN_CLI = "0.26.5";
 
 /**
  * Whether the cell surely runs on this computer's Claude Code sign-in, so the hint may say so: a new cell, or one
- * whose launch profile the CLI reported (its rows carry profiles: not `legacy`) as none; a CLI with that default
- * (0.26.5+); and "Keep my sign-in" on (without it the CLI refuses the start in reduced isolation).
+ * whose launch profile the CLI reported (its rows carry profiles: not `legacy`) as none after reading the server
+ * (its registry state is known: `profile: null` with state "unknown" can mean the server part couldn't be read); a
+ * CLI with that default (0.26.5+); and "Keep my sign-in" on (without it the CLI refuses the start in reduced isolation).
  */
 export function claudeSignInHint(choice: CellChoice, legacy: boolean, cliVersion: string | undefined, o: LaunchOptions): boolean {
-  const noProfile = choice.kind === "new" || (!legacy && !choice.cell.launchProfile);
+  const read = (c: LocalCell) => !legacy && c.registryState !== undefined && c.registryState !== "unknown";
+  const noProfile = choice.kind === "new" || (read(choice.cell) && !choice.cell.launchProfile);
   return noProfile && o.reduced && cliVersion !== undefined && versionAtLeast(cliVersion, MIN_CLAUDE_SIGNIN_CLI);
 }
 

@@ -628,11 +628,21 @@ describe("Run as cell in terminal", () => {
       assert.deepStrictEqual(calls.infos, shown ? [RUN_AS_CELL_TEXTS.claudeSignIn] : [], JSON.stringify([answers, cell, opts]));
       assert.strictEqual(calls.quickPicks[1].options.placeHolder, RUN_AS_CELL_TEXTS.optionsPlaceholder);
     }
-    // legacy rows (no profile field): a cell's profile is unknown, so no hint; New cell… still gets it
+    // legacy rows (no profile field), or a v1 row whose server part couldn't be read (registry state "unknown", so
+    // `profile: null` proves nothing): no hint; New cell… still gets it
+    const on = { reduced: true, autoAllow: false };
     const legacy = { name: "docs", instance_id: "ins_D4", mesh_id: MESH, mesh_name: "Team mesh" };
-    assert.strictEqual(claudeSignInHint({ kind: "cell", cell: parseLocalCell(legacy)! }, true, "0.26.5", { reduced: true, autoAllow: false }), false);
-    assert.strictEqual(claudeSignInHint({ kind: "cell", cell: parseLocalCell(legacy)! }, false, "0.26.5", { reduced: true, autoAllow: false }), true);
-    assert.strictEqual(claudeSignInHint({ kind: "new" }, true, "0.26.5", { reduced: true, autoAllow: false }), true);
+    const cellWith = (state?: "active" | "unknown") => ({ kind: "cell" as const, cell: { ...parseLocalCell(legacy)!, ...(state ? { registryState: state } : {}) } });
+    assert.strictEqual(claudeSignInHint(cellWith("active"), true, "0.26.5", on), false);
+    assert.strictEqual(claudeSignInHint(cellWith("active"), false, "0.26.5", on), true);
+    assert.strictEqual(claudeSignInHint(cellWith("unknown"), false, "0.26.5", on), false);
+    assert.strictEqual(claudeSignInHint(cellWith(), false, "0.26.5", on), false);
+    assert.strictEqual(claudeSignInHint({ kind: "new" }, true, "0.26.5", on), true);
+    const unknownRow = harness({ ...v("0.26.5"), "mesh cells --json": out({ ...V1_CELLS, cells: [row({ name: "docs", registry: { state: "unknown" } })] }) });
+    resetCalls();
+    calls.pickQueue.push(0, [0]);
+    assert.ok(await runAsCell(unknownRow.deps, local()));
+    assert.deepStrictEqual(calls.infos, []);
     assert.match(CELL_CMD_TEXTS.consentDetail, /keys saved on this computer, and its Claude Code sign-in\./);
   });
 
