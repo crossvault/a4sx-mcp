@@ -83,10 +83,11 @@ export async function readConfigAutoAllow(run: CliRunner, cli: string): Promise<
 export const MIN_CLAUDE_SIGNIN_CLI = "0.26.5";
 
 /**
- * Whether the cell surely runs on this computer's Claude Code sign-in, so the hint may say so: a new cell, or one
+ * Whether the hint ("Without a launch profile, this cell uses your Claude Code sign-in …") applies: a new cell, or one
  * whose launch profile the CLI reported (its rows carry profiles: not `legacy`) as none after reading the server
- * (its registry state is known: `profile: null` with state "unknown" can mean the server part couldn't be read); a
- * CLI with that default (0.26.5+); and "Keep my sign-in" on (without it the CLI refuses the start in reduced isolation).
+ * (state active or reserved: `profile: null` with state "unknown" can mean the server part couldn't be read, and a
+ * revoked cell can't start); a CLI with that default (0.26.5+); and "Keep my sign-in" on (without it the CLI refuses
+ * the start in reduced isolation).
  */
 export function claudeSignInHint(choice: CellChoice, legacy: boolean, cliVersion: string | undefined, o: LaunchOptions): boolean {
   // read from the server, and a cell that can start (a revoked one can't)
