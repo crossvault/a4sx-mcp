@@ -11,7 +11,7 @@ import * as path from "path";
 import { calls, fakeMemento, resetCalls } from "../fakeVscode";
 import * as ext from "../../extension";
 import {
-  cellLaunchArgs, cellRenameArgs, cellStopArgs, LocalCell, newCellRunArgs, resumeTail, runAsCellArgs,
+  cellLaunchArgs, cellRenameArgs, cellStopArgs, LocalCell, NEW_CELL_ARGS, newCellRunArgs, parseLocalCell, resumeTail, runAsCellArgs,
 } from "../../cells";
 import {
   CELL_CMD_TEXTS, CellCommandDeps, CONSENT_KEY, copyCellLaunch, ensureCli, machineKey, renameCell, stopCell, typedCommand, validateNewCellName,
@@ -31,7 +31,7 @@ import {
 import { CLI_PROFILE_TEXTS, CliProfileItem, CliProfilesLoad, loadCliProfiles, ProfileDetailItem, profileDetails, ProfilesProvider } from "../../profilesView";
 
 const profileDetailsFlags = (p: Parameters<typeof profileDetails>[0]) => profileDetails(p).find(([k]) => k === "Flags")![1];
-import { cellChoices, runAsCell, RUN_AS_CELL_TEXTS, RunAsCellSession } from "../../runAsCell";
+import { cellChoices, claudeSignInHint, runAsCell, RUN_AS_CELL_TEXTS, RunAsCellSession } from "../../runAsCell";
 import { shownFlags } from "../../profilesView";
 import { SessionItem } from "../../sessionsView";
 import { commandLine } from "../../terminalCommand";
@@ -586,6 +586,66 @@ describe("Run as cell in terminal", () => {
     assert.strictEqual(await runAsCell(h.deps, library), undefined);
     assert.deepStrictEqual(calls.errors.map((e) => [e.message, e.items]), [[CELL_TEXTS.tooOld, [CELL_TEXTS.updateCli]]]);
     assert.deepStrictEqual(calls.executed.map((e) => e.id), ["a4sx.updateCli"]);
+  });
+
+  it("0.5.2: no command line it builds picks a router, a launch profile or an upstream (a new cell runs on the Claude Code sign-in)", () => {
+    const cells = parseCellsAnswer(JSON.stringify(V1_CELLS))!.cells.filter((c) => c.meshId !== undefined);
+    assert.ok(cells.length >= 2);
+    const forcing = /^--(profile|agent-mdx-router|a4sx-router|upstream|reasoning-proxy|ipc-proxy|local-login)(=|$)/;
+    const lines: (readonly string[] | undefined)[] = [NEW_CELL_ARGS, ...cells.map((c) => cellLaunchArgs(c, cells))];
+    for (const o of [{ reduced: true, autoAllow: false }, { reduced: false, autoAllow: true }]) {
+      for (const t of [undefined, { kind: "local", sessionId: SID } as const, { kind: "library", id: LIB_ID } as const]) {
+        lines.push(newCellRunArgs(o, t), ...cells.map((c) => runAsCellArgs(c, cells, o, t)));
+      }
+    }
+    for (const args of lines) {
+      assert.ok(args && !args.some((a) => forcing.test(a)), JSON.stringify(args));
+    }
+    assert.deepStrictEqual(newCellRunArgs({ reduced: true, autoAllow: false }), ["launch", "--new-cell", "--mesh-reduced-isolation"]);
+    assert.deepStrictEqual([...NEW_CELL_ARGS], ["launch", "--new-cell", "--mesh-reduced-isolation"]);
+  });
+
+  it("0.5.2: the Claude Code sign-in hint shows only when it is sure: no profile (or New cell…), CLI 0.26.5+, Keep my sign-in on", async () => {
+    assert.strictEqual(RUN_AS_CELL_TEXTS.claudeSignIn, "Without a launch profile, this cell uses your Claude Code sign-in on this machine; run /login inside the cell if you have none.");
+    assert.strictEqual(RUN_AS_CELL_TEXTS.newCellDetail, "Approve it in your browser, where you pick its mesh.");
+    assert.match(RUN_AS_CELL_TEXTS.keepSignInDetail, /the Claude Code sign-in saved on this computer/);
+    const v = (ver: string) => ({ "--version": out(`a4sx ${ver}  (server 0.726.0)`) });
+    const runs: [Record<string, CliOutput>, number, number[], boolean][] = [
+      [v("0.26.5"), 1, [0], true],      // docs: no launch profile
+      [v("0.26.5"), 3, [0], true],      // New cell…
+      [v("0.27.0"), 1, [0], true],
+      [v("0.26.5"), 0, [0], false],     // build: launch profile work
+      [v("0.26.5"), 1, [], false],      // Keep my sign-in off
+      [v("0.26.4"), 1, [0], false],     // a CLI without the default
+      [{}, 1, [0], false],              // 0.25.0
+      [{ "--version": out("not a version") }, 3, [0], false],
+    ];
+    for (const [answers, cell, opts, shown] of runs) {
+      resetCalls();
+      const h = harness(answers);
+      calls.pickQueue.push(cell, opts);
+      assert.ok(await runAsCell(h.deps, local()));
+      assert.deepStrictEqual(calls.infos, shown ? [RUN_AS_CELL_TEXTS.claudeSignIn] : [], JSON.stringify([answers, cell, opts]));
+      assert.strictEqual(calls.quickPicks[1].options.placeHolder, RUN_AS_CELL_TEXTS.optionsPlaceholder);
+    }
+    // legacy rows (no profile field), or a v1 row whose server part couldn't be read (registry state "unknown", so
+    // `profile: null` proves nothing): no hint; New cell… still gets it
+    const on = { reduced: true, autoAllow: false };
+    const legacy = { name: "docs", instance_id: "ins_D4", mesh_id: MESH, mesh_name: "Team mesh" };
+    const cellWith = (state?: "active" | "reserved" | "revoked" | "unknown") => ({ kind: "cell" as const, cell: { ...parseLocalCell(legacy)!, ...(state ? { registryState: state } : {}) } });
+    assert.strictEqual(claudeSignInHint(cellWith("active"), true, "0.26.5", on), false);
+    assert.strictEqual(claudeSignInHint(cellWith("active"), false, "0.26.5", on), true);
+    assert.strictEqual(claudeSignInHint(cellWith("reserved"), false, "0.26.5", on), true);
+    assert.strictEqual(claudeSignInHint(cellWith("unknown"), false, "0.26.5", on), false);
+    assert.strictEqual(claudeSignInHint(cellWith("revoked"), false, "0.26.5", on), false);
+    assert.strictEqual(claudeSignInHint(cellWith(), false, "0.26.5", on), false);
+    assert.strictEqual(claudeSignInHint({ kind: "new" }, true, "0.26.5", on), true);
+    const unknownRow = harness({ ...v("0.26.5"), "mesh cells --json": out({ ...V1_CELLS, cells: [row({ name: "docs", registry: { state: "unknown" } })] }) });
+    resetCalls();
+    calls.pickQueue.push(0, [0]);
+    assert.ok(await runAsCell(unknownRow.deps, local()));
+    assert.deepStrictEqual(calls.infos, []);
+    assert.match(CELL_CMD_TEXTS.consentDetail, /keys saved on this computer, and its Claude Code sign-in\./);
   });
 
   it("the menu item on My sessions, hidden from the palette", () => {

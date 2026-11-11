@@ -2,7 +2,7 @@
   "name": "a4sx",
   "displayName": "a4sx",
   "description": "Use a4sx from VS Code: sign in, browse and resume your saved sessions or run them as mesh cells, sort them into folders, manage your launch profiles, start and manage the mesh cells on this computer, see your meshes, search the marketplace, and add the a4sx MCP servers for agent mode.",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "publisher": "crossvaultGmbH",
   "license": "Apache-2.0",
   "homepage": "https://session-exchange.com",

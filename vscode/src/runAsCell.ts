@@ -4,14 +4,16 @@
 // one), set two toggles, and a terminal in the session's folder runs
 //   a4sx launch --cell <cell> [--mesh-reduced-isolation] [--auto-allow-ipc-messages] -- --resume <session id>
 // for a session that is on this computer, or `… --a4sx-session=<id>` for one that is only in the library.
-// "New cell…" runs `a4sx launch --new-cell [flags] …`: the browser approval then picks the mesh and profile.
+// "New cell…" runs `a4sx launch --new-cell [flags] …`: the browser approval then picks the mesh.
+// 0.5.2: no flag picks a router or a launch profile. A cell with neither runs on this computer's Claude Code sign-in
+// (the CLI's default since 0.26.5); when that is sure, one line says so as the terminal opens (claudeSignInHint).
 // Every piece is an argv element, quoted for the user's shell (PowerShell, bash, …) by openCommandTerminal.
 import * as vscode from "vscode";
 import { CLI_NAME } from "./cli";
 import { LaunchOptions, LocalCell, newCellRunArgs, ResumeTarget, runAsCellArgs, startableCell } from "./cells";
 import { CELL_CMD_TEXTS, CellCommandDeps, cellTerminalEnv, consentReducedIsolation, ensureCli } from "./cellCommands";
 import { CELL_TEXTS, CliRunner, CMD_UPDATE_CLI } from "./cellsView";
-import { CONFIG_SHOW_ARGS, configAutoAllow } from "./cliJson";
+import { CONFIG_SHOW_ARGS, configAutoAllow, versionAtLeast } from "./cliJson";
 import { LocalSession } from "./localSession";
 import { openCommandTerminal } from "./resume";
 
@@ -19,13 +21,14 @@ export const RUN_AS_CELL_TEXTS = {
   pickTitle: "Run as cell in terminal",
   pickPlaceholder: "Choose the cell to run this session in",
   newCell: "$(add) New cell…",
-  newCellDetail: "Approve it in your browser, where you pick its mesh and launch profile.",
+  newCellDetail: "Approve it in your browser, where you pick its mesh.",
   defaultMark: "default",
   noProfile: "no launch profile",
   optionsTitle: "Run as cell: options",
   optionsPlaceholder: "Choose the options for this start, then press Enter",
+  claudeSignIn: "Without a launch profile, this cell uses your Claude Code sign-in on this machine; run /login inside the cell if you have none.",
   keepSignIn: "Keep my sign-in (reduced isolation)",
-  keepSignInDetail: "The cell runs as your user and can use the a4sx sign-ins and keys saved on this computer.",
+  keepSignInDetail: "The cell runs as your user and can use the a4sx sign-ins and keys and the Claude Code sign-in saved on this computer.",
   autoAllow: "Deliver messages from mesh peers without asking",
   autoAllowDetail: "Off: you approve each message another session in the mesh sends to this one, unless ipc.auto_allow_messages is on in your a4sx config.",
   autoAllowFromConfig: "On in your a4sx config (ipc.auto_allow_messages): turning it off here doesn't change that. `a4sx config set ipc.auto_allow_messages false` does.",
@@ -74,6 +77,23 @@ export async function readConfigAutoAllow(run: CliRunner, cli: string): Promise<
   } catch {
     return false;
   }
+}
+
+/** The first a4sx CLI that runs a cell with no router and no launch profile on the Claude Code sign-in. */
+export const MIN_CLAUDE_SIGNIN_CLI = "0.26.5";
+
+/**
+ * Whether the hint ("Without a launch profile, this cell uses your Claude Code sign-in …") applies: a new cell, or one
+ * whose launch profile the CLI reported (its rows carry profiles: not `legacy`) as none after reading the server
+ * (state active or reserved: `profile: null` with state "unknown" can mean the server part couldn't be read, and a
+ * revoked cell can't start); a CLI with that default (0.26.5+); and "Keep my sign-in" on (without it the CLI refuses
+ * the start in reduced isolation).
+ */
+export function claudeSignInHint(choice: CellChoice, legacy: boolean, cliVersion: string | undefined, o: LaunchOptions): boolean {
+  // read from the server, and a cell that can start (a revoked one can't)
+  const read = (c: LocalCell) => !legacy && (c.registryState === "active" || c.registryState === "reserved");
+  const noProfile = choice.kind === "new" || (read(choice.cell) && !choice.cell.launchProfile);
+  return noProfile && o.reduced && cliVersion !== undefined && versionAtLeast(cliVersion, MIN_CLAUDE_SIGNIN_CLI);
 }
 
 /**
@@ -159,5 +179,8 @@ export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession
   const name = picked.choice.kind === "cell" ? CELL_CMD_TEXTS.cellTerminal(picked.choice.cell.name) : CELL_CMD_TEXTS.newCellTerminal;
   const terminal = openCommandTerminal(name, cli, CLI_NAME, args, cwd, cellTerminalEnv(deps.platform));
   deps.terminals.add(terminal);
+  if (claudeSignInHint(picked.choice, load.legacy === true, await deps.provider.versions.version(cli), options)) {
+    void vscode.window.showInformationMessage(t.claudeSignIn);   // not awaited: it never blocks the start
+  }
   return terminal;
 }

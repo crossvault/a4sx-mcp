@@ -510,7 +510,7 @@ describe("manifest", () => {
   it("activates at startup (to finish a pending resume) and shows Launch profiles expanded", () => {
     assert.deepStrictEqual(pkg.activationEvents, ["onStartupFinished"]);
     assert.strictEqual(pkg.contributes.views.a4sx.find((v: any) => v.id === "a4sx.profiles").visibility, "visible");
-    assert.strictEqual(pkg.version, "0.5.1");
+    assert.strictEqual(pkg.version, "0.5.2");
   });
 
   it("the registered command, without an item (palette), does nothing", async () => {
