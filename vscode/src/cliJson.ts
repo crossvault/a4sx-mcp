@@ -246,6 +246,8 @@ const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
 export interface CliProfile {
   id: string;
+  /** CLI 0.27.0+: the profile's display name (absent: show the id). */
+  name?: string;
   harness?: string;
   model?: string;
   base_url?: string;
@@ -291,6 +293,10 @@ export function parseProfilesAnswer(stdout: string): ProfilesAnswer | undefined 
     }
     if (typeof p.operator === "string" && OPERATOR.test(p.operator)) {
       prof.operator = p.operator;
+    }
+    const name = showText(p.name);
+    if (name) {
+      prof.name = name;
     }
     profiles.push(prof);
   }

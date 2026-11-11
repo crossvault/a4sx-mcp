@@ -26,8 +26,8 @@ const CELLS = { v: 1, default: "build", cells: [row({}), row({ name: "docs", ins
 const PROFILES = {
   v: 1, default: "work",
   profiles: [
-    { id: "work", harness: "claude-code", model: "opus", base_url: null, operator: null, header_names: [], flags: [], env_keys: [], used_by_cells: 1 },
-    { id: "high", harness: "claude-code", model: null, base_url: null, operator: "high-effort-cell", header_names: ["X-Fleet-Operator"], flags: [], env_keys: [], used_by_cells: 1 },
+    { id: "work", name: "Work", harness: "claude-code", model: "opus", base_url: null, operator: null, header_names: [], flags: [], env_keys: [], used_by_cells: 1 },
+    { id: "high", name: "High effort", harness: "claude-code", model: null, base_url: null, operator: "high-effort-cell", header_names: ["X-Fleet-Operator"], flags: [], env_keys: [], used_by_cells: 1 },
   ],
 };
 const out = (stdout: unknown, code = 0, stderr = ""): CliOutput => ({ code, stdout: typeof stdout === "string" ? stdout : JSON.stringify(stdout), stderr });
@@ -95,18 +95,31 @@ describe("Cells view: profile and route (CLI 0.27.0)", () => {
     const pick = calls.quickPicks[0];
     assert.strictEqual(pick.options.title, CELL_CMD_TEXTS.profileTitle("build"));
     assert.deepStrictEqual(pick.items.map((i: any) => [i.label, i.description, i.detail]), [
-      ["work", "your default", "opus"],
-      ["high", "current", "X-Fleet-Operator: high-effort-cell"],
+      ["Work", "your default", "work · opus"],
+      ["High effort", "current", "high · X-Fleet-Operator: high-effort-cell"],
       [CELL_CMD_TEXTS.profileFollowDefault, undefined, CELL_CMD_TEXTS.profileFollowDefaultDetail],
     ]);
     calls.nextPick = 2;                                         // follow the default
     assert.ok(await setCellProfile(h.deps, docs));
     assert.strictEqual(calls.quickPicks[1].items[2].description, "current");
     assert.deepStrictEqual(h.runs.filter((r) => r.startsWith("mesh cell ")), ["mesh cell profile build work", "mesh cell profile docs --clear"]);
-    assert.deepStrictEqual(calls.infos, [CELL_CMD_TEXTS.profileSet("build", "work"), CELL_CMD_TEXTS.profileCleared("docs")]);
+    assert.deepStrictEqual(calls.infos, [CELL_CMD_TEXTS.profileSet("build", "Work"), CELL_CMD_TEXTS.profileCleared("docs")]);
+    assert.strictEqual(calls.infos[0], "The cell «build» starts with the launch profile «Work» from its next start.");
     calls.nextPick = undefined;                                 // Esc: nothing runs
     assert.ok(!(await setCellProfile(h.deps, build)));
     assert.strictEqual(h.runs.filter((r) => r.startsWith("mesh cell ")).length, 2);
+  });
+
+  it("a running cell keeps the CLI's note; a cell whose own profile was deleted marks the default as current", async () => {
+    const running = row({ local: { state: "running", pid: 4242 }, profile_source: "fallback" });
+    const h = harness({ "mesh cells --json": out({ v: 1, default: "build", cells: [running] }) });
+    const [build] = await items(h);
+    calls.nextPick = 1;
+    assert.ok(await setCellProfile(h.deps, build));
+    assert.strictEqual(calls.quickPicks[0].items[2].description, "current");
+    assert.strictEqual(calls.quickPicks[0].items[1].description, undefined, "its own profile is gone: not current");
+    assert.deepStrictEqual(calls.infos, ["The cell «build» starts with the launch profile «High effort» from its next start. "
+      + "It runs on this computer now and keeps its current profile until you start it again."]);
   });
 
   it("an older CLI is told to update; a refusal shows the CLI's text", async () => {
@@ -114,6 +127,11 @@ describe("Cells view: profile and route (CLI 0.27.0)", () => {
     calls.nextPick = 0;
     assert.ok(!(await setCellProfile(h.deps, (await items(h))[0])));
     assert.deepStrictEqual(calls.errors.map((e) => e.message), [CELL_CMD_TEXTS.profileTooOld]);
+    resetCalls();
+    h = harness({ "mesh cell profile build work": out("", 2, "a4sx: error: unrecognized arguments: --clear") });
+    calls.nextPick = 0;
+    assert.ok(!(await setCellProfile(h.deps, (await items(h))[0])));
+    assert.notStrictEqual(calls.errors[0].message, CELL_CMD_TEXTS.profileTooOld, "only a missing `profile` subcommand is 'too old'");
     resetCalls();
     h = harness({ "mesh cell profile build work": out("", 1, "a4sx: too many changes in the last minute, so nothing was changed. Wait a minute and run the command again.") });
     calls.nextPick = 0;

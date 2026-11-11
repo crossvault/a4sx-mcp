@@ -11,7 +11,7 @@ import { CLI_NAME } from "./cli";
 import {
   CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellProfileArgs, cellRenameArgs, cellStopArgs, NEW_CELL_ARGS, showText,
 } from "./cells";
-import { CellsProvider, CliOutput, CliResolution, CliRunner, LocalCellItem, looksTooOld, MeshGroupItem } from "./cellsView";
+import { CellsProvider, CliOutput, CliResolution, CliRunner, lacksCellProfile, LocalCellItem, MeshGroupItem } from "./cellsView";
 import { IN_SESSION_MESSAGE, parseCliError, parseProfilesAnswer, PROFILES_ARGS } from "./cliJson";
 import {
   bundledClaude, downloadCli, Fetch, installedLauncher, launcherNeedsRepair, ProvisionError, repairLauncher, RepairResult, Runner, searchPython, updateArgs, updateDue,
@@ -86,6 +86,7 @@ export const CELL_CMD_TEXTS = {
   profileNone: "You have no launch profiles yet. Create one in the Launch profiles view first.",
   profileSet: (name: string, profile: string) => `The cell «${name}» starts with the launch profile «${profile}» from its next start.`,
   profileCleared: (name: string) => `The cell «${name}» follows your default launch profile from its next start.`,
+  profileRunning: "It runs on this computer now and keeps its current profile until you start it again.",
   profileTooOld: "This a4sx CLI can't set a cell's launch profile yet. Update it to 0.27.0 or newer, then try again.",
 };
 
@@ -423,12 +424,16 @@ export async function setCellProfile(deps: CellCommandDeps, item: LocalCellItem 
   const t = CELL_CMD_TEXTS;
   const items = [
     ...answer.profiles.map((p) => ({
-      label: p.id, id: p.id as string | undefined,
+      label: p.name ?? p.id, id: p.id as string | undefined, shown: p.name ?? p.id,
       description: [p.id === cell.launchProfile && cell.profileSource === "assigned" ? t.profileCurrent : undefined, p.id === answer.default ? t.profileDefaultMark : undefined]
         .filter(Boolean).join(" · ") || undefined,
-      detail: [p.operator ? `X-Fleet-Operator: ${p.operator}` : undefined, p.model].filter(Boolean).join(" · ") || undefined,
+      detail: [p.name && p.name !== p.id ? p.id : undefined, p.operator ? `X-Fleet-Operator: ${p.operator}` : undefined, p.model].filter(Boolean).join(" · ") || undefined,
     })),
-    { label: t.profileFollowDefault, id: undefined, description: cell.profileSource === "default" ? t.profileCurrent : undefined, detail: t.profileFollowDefaultDetail },
+    {
+      label: t.profileFollowDefault, id: undefined, shown: t.profileFollowDefault,
+      // the cell follows the default now: by choice ("default"), or because its own profile was deleted ("fallback")
+      description: cell.profileSource === "default" || cell.profileSource === "fallback" ? t.profileCurrent : undefined, detail: t.profileFollowDefaultDetail,
+    },
   ];
   const picked = await vscode.window.showQuickPick(items, { title: t.profileTitle(cell.name), placeHolder: t.profilePlaceholder, ignoreFocusOut: true });
   if (!picked) {
@@ -442,10 +447,11 @@ export async function setCellProfile(deps: CellCommandDeps, item: LocalCellItem 
   const out = await deps.run(cli, args, 60_000);
   await deps.provider.refresh();
   if (out.code !== 0) {
-    await vscode.window.showErrorMessage(looksTooOld(out) ? t.profileTooOld : t.cliFailed("set the cell's launch profile", cliErrorText(out)));
+    await vscode.window.showErrorMessage(lacksCellProfile(out) ? t.profileTooOld : t.cliFailed("set the cell's launch profile", cliErrorText(out)));
     return false;
   }
-  void vscode.window.showInformationMessage(picked.id ? t.profileSet(cell.name, picked.id) : t.profileCleared(cell.name));
+  const done = picked.id ? t.profileSet(cell.name, picked.shown) : t.profileCleared(cell.name);
+  void vscode.window.showInformationMessage(cell.localState === "running" ? `${done} ${t.profileRunning}` : done);
   return true;
 }
 

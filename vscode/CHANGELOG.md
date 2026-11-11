@@ -3,7 +3,7 @@
 ## 0.6.0
 
 - **Cells** shows each cell's launch profile by name and what its route serves, e.g. "profile High effort → claude-fable-5-2 (high)". The tooltip says where the profile comes from (set for this cell, your default profile, or your default because the cell's own profile was deleted) and its X-Fleet-Operator. This needs a4sx CLI 0.27.0 or newer; with an older CLI the view shows the profile id as before.
-- New action **Set launch profile…** on a cell: pick one of your launch profiles, or **Follow my default profile**. It runs `a4sx mesh cell profile <name> <profile>` (or `--clear`). The cell starts with it from its next start, every time. An older CLI is told to update.
+- New action **Set launch profile…** on a cell: pick one of your launch profiles (by name, with a4sx CLI 0.27.0 or newer), or **Follow my default profile**. It runs `a4sx mesh cell profile <name> <profile>` (or `--clear`). The cell starts with it from its next start, every time; a cell running on this computer keeps its current profile until you start it again. An older CLI is told to update.
 
 ## 0.5.2
 

@@ -148,6 +148,11 @@ export class RemoteCellItem extends vscode.TreeItem {
   }
 }
 
+/** True when argparse says the CLI has no `mesh cell profile` (an "invalid choice" for the cell subcommand). */
+export function lacksCellProfile(out: CliOutput): boolean {
+  return out.code !== 0 && /argument cell_cmd: invalid choice: '?profile'?/.test(out.stderr);
+}
+
 /** True when stderr says the CLI has no `mesh cells` (an argparse "invalid choice"). */
 export function looksTooOld(out: CliOutput): boolean {
   return out.code !== 0 && /invalid choice|unrecognized arguments/.test(out.stderr);
