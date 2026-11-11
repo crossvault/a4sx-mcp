@@ -606,7 +606,7 @@ describe("Run as cell in terminal", () => {
   });
 
   it("0.5.2: the Claude Code sign-in hint shows only when it is sure: no profile (or New cell…), CLI 0.26.5+, Keep my sign-in on", async () => {
-    assert.strictEqual(RUN_AS_CELL_TEXTS.claudeSignIn, "Uses your Claude Code sign-in on this machine; run /login inside the cell if you have none.");
+    assert.strictEqual(RUN_AS_CELL_TEXTS.claudeSignIn, "Without a launch profile, this cell uses your Claude Code sign-in on this machine; run /login inside the cell if you have none.");
     assert.strictEqual(RUN_AS_CELL_TEXTS.newCellDetail, "Approve it in your browser, where you pick its mesh.");
     assert.match(RUN_AS_CELL_TEXTS.keepSignInDetail, /the Claude Code sign-in saved on this computer/);
     const v = (ver: string) => ({ "--version": out(`a4sx ${ver}  (server 0.726.0)`) });
@@ -632,10 +632,12 @@ describe("Run as cell in terminal", () => {
     // `profile: null` proves nothing): no hint; New cell… still gets it
     const on = { reduced: true, autoAllow: false };
     const legacy = { name: "docs", instance_id: "ins_D4", mesh_id: MESH, mesh_name: "Team mesh" };
-    const cellWith = (state?: "active" | "unknown") => ({ kind: "cell" as const, cell: { ...parseLocalCell(legacy)!, ...(state ? { registryState: state } : {}) } });
+    const cellWith = (state?: "active" | "reserved" | "revoked" | "unknown") => ({ kind: "cell" as const, cell: { ...parseLocalCell(legacy)!, ...(state ? { registryState: state } : {}) } });
     assert.strictEqual(claudeSignInHint(cellWith("active"), true, "0.26.5", on), false);
     assert.strictEqual(claudeSignInHint(cellWith("active"), false, "0.26.5", on), true);
+    assert.strictEqual(claudeSignInHint(cellWith("reserved"), false, "0.26.5", on), true);
     assert.strictEqual(claudeSignInHint(cellWith("unknown"), false, "0.26.5", on), false);
+    assert.strictEqual(claudeSignInHint(cellWith("revoked"), false, "0.26.5", on), false);
     assert.strictEqual(claudeSignInHint(cellWith(), false, "0.26.5", on), false);
     assert.strictEqual(claudeSignInHint({ kind: "new" }, true, "0.26.5", on), true);
     const unknownRow = harness({ ...v("0.26.5"), "mesh cells --json": out({ ...V1_CELLS, cells: [row({ name: "docs", registry: { state: "unknown" } })] }) });

@@ -26,7 +26,7 @@ export const RUN_AS_CELL_TEXTS = {
   noProfile: "no launch profile",
   optionsTitle: "Run as cell: options",
   optionsPlaceholder: "Choose the options for this start, then press Enter",
-  claudeSignIn: "Uses your Claude Code sign-in on this machine; run /login inside the cell if you have none.",
+  claudeSignIn: "Without a launch profile, this cell uses your Claude Code sign-in on this machine; run /login inside the cell if you have none.",
   keepSignIn: "Keep my sign-in (reduced isolation)",
   keepSignInDetail: "The cell runs as your user and can use the a4sx sign-ins and keys and the Claude Code sign-in saved on this computer.",
   autoAllow: "Deliver messages from mesh peers without asking",
@@ -89,7 +89,8 @@ export const MIN_CLAUDE_SIGNIN_CLI = "0.26.5";
  * CLI with that default (0.26.5+); and "Keep my sign-in" on (without it the CLI refuses the start in reduced isolation).
  */
 export function claudeSignInHint(choice: CellChoice, legacy: boolean, cliVersion: string | undefined, o: LaunchOptions): boolean {
-  const read = (c: LocalCell) => !legacy && c.registryState !== undefined && c.registryState !== "unknown";
+  // read from the server, and a cell that can start (a revoked one can't)
+  const read = (c: LocalCell) => !legacy && (c.registryState === "active" || c.registryState === "reserved");
   const noProfile = choice.kind === "new" || (read(choice.cell) && !choice.cell.launchProfile);
   return noProfile && o.reduced && cliVersion !== undefined && versionAtLeast(cliVersion, MIN_CLAUDE_SIGNIN_CLI);
 }
