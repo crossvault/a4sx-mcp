@@ -63,6 +63,7 @@ A cell is an agent session that joins one of your meshes from this computer. The
 - **Start in terminal** opens a new terminal in your workspace folder and runs `a4sx launch --cell <name> --mesh-reduced-isolation` there. If two stored cells share a name, `--mesh <mesh id>` picks the right one. Signing in, and anything else the CLI asks, happens in that terminal. If more than one folder is open, VS Code asks which one.
 - **Stop** (on a cell running on this computer) runs `a4sx mesh cell stop <name>`, after you confirm.
 - **Rename…** (on a cell in a mesh) runs `a4sx mesh cell rename <name> <new name>`.
+- **Set launch profile…** lists your launch profiles and **Follow my default profile**, and runs `a4sx mesh cell profile <name> <profile>` (or `--clear`). The cell starts with that profile from its next start, every time. With a4sx CLI 0.27.0 or newer, each cell also shows what its profile's route serves ("profile High effort → claude-fable-5-2 (high)").
 - **Copy launch command** copies the `a4sx launch --cell …` command, quoted for your default shell.
 - **New cell** (in the view's title bar) runs `a4sx launch --new-cell --mesh-reduced-isolation` in a new terminal. The CLI opens your browser, where you approve the new cell, and then starts it in the terminal. The list updates when the cell is stored.
 - **Set as default** runs `a4sx mesh cell default <name>`. A bare `a4sx launch --cell` starts the default cell.

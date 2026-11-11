@@ -21,6 +21,7 @@ export const CMD_OPEN_CELL = "a4sx.openCellOnWeb";
 export const CMD_STOP_CELL = "a4sx.stopCell";
 export const CMD_RENAME_CELL = "a4sx.renameCell";
 export const CMD_COPY_CELL_LAUNCH = "a4sx.copyCellLaunch";
+export const CMD_SET_CELL_PROFILE = "a4sx.setCellProfile";
 export const CMD_INSTALL_CLI = "a4sx.installCli";
 export const CMD_UPDATE_CLI = "a4sx.updateCli";
 /** Context keys the view's welcome texts read. */
@@ -145,6 +146,11 @@ export class RemoteCellItem extends vscode.TreeItem {
     this.contextValue = REMOTE_CELL_CONTEXT;
     this.iconPath = new vscode.ThemeIcon(peer.own ? "vm-active" : "vm");
   }
+}
+
+/** True when argparse says the CLI has no `mesh cell profile` (an "invalid choice" for the cell subcommand). */
+export function lacksCellProfile(out: CliOutput): boolean {
+  return out.code !== 0 && /argument cell_cmd: invalid choice: '?profile'?/.test(out.stderr);
 }
 
 /** True when stderr says the CLI has no `mesh cells` (an argparse "invalid choice"). */

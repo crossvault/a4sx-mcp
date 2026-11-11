@@ -4,7 +4,7 @@
 // for older CLIs, and the in-session guard. Pure Node, no vscode import, so it is unit-testable.
 // Every value from the CLI is checked before it can reach a command line or the UI; a profile's header
 // values never arrive here (the CLI sends header NAMES and env KEYS only), except the router operator.
-import { CELL_NAME, CLI_MESH_ID, INSTANCE_ID, LocalCell, parseLocalCell, showText } from "./cells";
+import { CELL_NAME, CLI_MESH_ID, INSTANCE_ID, LocalCell, parseLocalCell, PROFILE_SOURCES, ROUTE_EFFORTS, ROUTE_MODEL, ROUTE_OPERATOR, showText } from "./cells";
 
 // --- the in-session guard ---------------------------------------------------------------------------
 
@@ -149,6 +149,25 @@ export function parseCellsAnswer(stdout: string): CellsAnswer | undefined {
     }
     cell.meshPolicy = oneOf(MESH_POLICIES, row.mesh_policy) ?? null;
     cell.tags = parseTags(row.tags);
+    // CLI 0.27.0 (additive): the profile's name and source, its X-Fleet-Operator and what the route serves
+    const pname = showText(row.launch_profile);
+    if (pname && cell.launchProfile) {
+      cell.profileName = pname;
+    }
+    const src = oneOf(PROFILE_SOURCES, row.profile_source);
+    if (src) {
+      cell.profileSource = src;
+    }
+    if (typeof row.operator === "string" && ROUTE_OPERATOR.test(row.operator)) {
+      cell.operator = row.operator;
+    }
+    if (typeof row.route_model === "string" && ROUTE_MODEL.test(row.route_model)) {
+      cell.routeModel = row.route_model;
+      const eff = oneOf(ROUTE_EFFORTS, row.route_effort);
+      if (eff) {
+        cell.routeEffort = eff;
+      }
+    }
     cells.push(cell);
   }
   // The default: the row's own flag, else the answer's name (only when one stored cell has it).
@@ -227,6 +246,8 @@ const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
 export interface CliProfile {
   id: string;
+  /** CLI 0.27.0+: the profile's display name (absent: show the id). */
+  name?: string;
   harness?: string;
   model?: string;
   base_url?: string;
@@ -272,6 +293,10 @@ export function parseProfilesAnswer(stdout: string): ProfilesAnswer | undefined 
     }
     if (typeof p.operator === "string" && OPERATOR.test(p.operator)) {
       prof.operator = p.operator;
+    }
+    const name = showText(p.name);
+    if (name) {
+      prof.name = name;
     }
     profiles.push(prof);
   }
