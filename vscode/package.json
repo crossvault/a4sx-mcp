@@ -2,7 +2,7 @@
   "name": "a4sx",
   "displayName": "a4sx",
   "description": "Use a4sx from VS Code: sign in, browse and resume your saved sessions or run them as mesh cells, sort them into folders, manage your launch profiles, start and manage the mesh cells on this computer, see your meshes, search the marketplace, and add the a4sx MCP servers for agent mode.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "crossvaultGmbH",
   "license": "Apache-2.0",
   "homepage": "https://session-exchange.com",
@@ -281,6 +281,12 @@
         "title": "Copy launch command",
         "category": "a4sx",
         "icon": "$(copy)"
+      },
+      {
+        "command": "a4sx.openCellPolicy",
+        "title": "Open policy in browser",
+        "category": "a4sx",
+        "icon": "$(shield)"
       },
       {
         "command": "a4sx.duplicateProfile",
@@ -573,17 +579,17 @@
         },
         {
           "command": "a4sx.startCell",
-          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?(\\.legacy)?$/",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?(\\.legacy)?(\\.policy)?$/",
           "group": "inline@1"
         },
         {
           "command": "a4sx.stopCell",
-          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?\\.running$/",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?\\.running(\\.policy)?$/",
           "group": "inline@1"
         },
         {
           "command": "a4sx.openCellOnWeb",
-          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?(\\.running)?(\\.legacy)?$/",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?(\\.running)?(\\.legacy)?(\\.policy)?$/",
           "group": "inline@2"
         },
         {
@@ -593,32 +599,32 @@
         },
         {
           "command": "a4sx.startCell",
-          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?(\\.legacy)?$/",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?(\\.legacy)?(\\.policy)?$/",
           "group": "1_cell@1"
         },
         {
           "command": "a4sx.stopCell",
-          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?\\.running$/",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?\\.running(\\.policy)?$/",
           "group": "1_cell@1"
         },
         {
           "command": "a4sx.copyCellLaunch",
-          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?(\\.running)?(\\.legacy)?$/",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?(\\.running)?(\\.legacy)?(\\.policy)?$/",
           "group": "1_cell@2"
         },
         {
           "command": "a4sx.setDefaultCell",
-          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.standalone)?(\\.running)?(\\.legacy)?$/",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.standalone)?(\\.running)?(\\.legacy)?(\\.policy)?$/",
           "group": "1_cell@3"
         },
         {
           "command": "a4sx.renameCell",
-          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?$/",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?(\\.policy)?$/",
           "group": "1_cell@4"
         },
         {
           "command": "a4sx.setCellProfile",
-          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.standalone)?(\\.default)?(\\.running)?$/",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.standalone)?(\\.default)?(\\.running)?(\\.policy)?$/",
           "group": "1_cell@4"
         },
         {
@@ -627,13 +633,18 @@
           "group": "1_cell@5"
         },
         {
+          "command": "a4sx.openCellPolicy",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.[a-z]+)*\\.policy$/",
+          "group": "1_cell@6"
+        },
+        {
           "command": "a4sx.openCellOnWeb",
           "when": "view == a4sx.cells && viewItem == a4sx.cellMesh",
           "group": "1_mesh@1"
         },
         {
           "command": "a4sx.forgetCell",
-          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.standalone)?(\\.default)?(\\.legacy)?$/",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.standalone)?(\\.default)?(\\.legacy)?(\\.policy)?$/",
           "group": "2_danger@1"
         }
       ],
@@ -776,6 +787,10 @@
         },
         {
           "command": "a4sx.setDefaultProfile",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.openCellPolicy",
           "when": "false"
         }
       ]

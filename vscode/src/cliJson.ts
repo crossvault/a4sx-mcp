@@ -4,7 +4,7 @@
 // for older CLIs, and the in-session guard. Pure Node, no vscode import, so it is unit-testable.
 // Every value from the CLI is checked before it can reach a command line or the UI; a profile's header
 // values never arrive here (the CLI sends header NAMES and env KEYS only), except the router operator.
-import { CELL_NAME, CLI_MESH_ID, INSTANCE_ID, LocalCell, parseLocalCell, PROFILE_SOURCES, ROUTE_EFFORTS, ROUTE_MODEL, ROUTE_OPERATOR, showText } from "./cells";
+import { CELL_NAME, CLI_MESH_ID, INSTANCE_ID, LocalCell, parseCellPolicy, parseLocalCell, PROFILE_SOURCES, ROUTE_EFFORTS, ROUTE_MODEL, ROUTE_OPERATOR, showText } from "./cells";
 
 // --- the in-session guard ---------------------------------------------------------------------------
 
@@ -102,7 +102,7 @@ function oneOf<T extends string>(list: readonly T[], v: unknown): T | undefined 
   return typeof v === "string" && (list as readonly string[]).includes(v) ? (v as T) : undefined;
 }
 
-/** Tags as shown later (not yet in the UI): short one-line strings; anything else is dropped. */
+/** Tags as read: short one-line strings; anything else is dropped. The Cells view shows only well-formed ones (cells.shownTags). */
 export function parseTags(v: unknown): string[] {
   return Array.isArray(v) ? v.map((t) => showText(t, 40)).filter((t): t is string => !!t).slice(0, 32) : [];
 }
@@ -149,6 +149,11 @@ export function parseCellsAnswer(stdout: string): CellsAnswer | undefined {
     }
     cell.meshPolicy = oneOf(MESH_POLICIES, row.mesh_policy) ?? null;
     cell.tags = parseTags(row.tags);
+    // a4sx #1861 (CLI 0.28.0, additive): the effective policy's counts and the Policy tab's URL. A CLI that doesn't
+    // send the key leaves it undefined, and the view shows nothing extra.
+    if ("policy" in row) {
+      cell.policy = parseCellPolicy(row.policy, cell);
+    }
     // CLI 0.27.0 (additive): the profile's name and source, its X-Fleet-Operator and what the route serves
     const pname = showText(row.launch_profile);
     if (pname && cell.launchProfile) {
