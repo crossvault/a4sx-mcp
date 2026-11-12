@@ -45,14 +45,30 @@ export interface LocalCell {
   path?: CellPath;
   /** CLI 0.25.0+: the mesh's join policy (null: the CLI doesn't know it). */
   meshPolicy?: MeshPolicy | null;
-  /** CLI 0.25.0+: the cell's tags (not shown yet). */
+  /** CLI 0.25.0+: the cell's tags (shown since 0.7.0, only the well-formed `tag:<name>` ones: see shownTags). */
   tags?: string[];
+  /**
+   * a4sx #1861 (CLI 0.28.0): the cell's effective policy. undefined: the CLI doesn't send it (older CLI);
+   * null: none (a standalone cell, a cell of another server, or signed out).
+   */
+  policy?: CellPolicy | null;
   /** CLI 0.27.0+: the launch profile's name, where it comes from, its X-Fleet-Operator and what its route serves. */
   profileName?: string;
   profileSource?: ProfileSource;
   operator?: string;
   routeModel?: string;
   routeEffort?: string;
+}
+
+/** a4sx #1861 (CLI 0.28.0): `mesh cells --json`'s `policy` of a cell, as read (see parseCellPolicy). */
+export interface CellPolicy {
+  /** "preset" in P1; anything else is kept only when it is a short plain word. */
+  basis?: string;
+  policyRev: number | null;
+  canTalkTo: number | null;
+  reachableFrom: number | null;
+  /** The mesh's Policy tab on the website; only set when it passes policyUrl's checks. */
+  url?: string;
 }
 
 /** CLI 0.27.0: where the cell's launch profile comes from. */
@@ -71,6 +87,86 @@ export const CELL_PROFILE_TEXTS = {
   routeLine: (model: string, effort?: string) => `Route: serves ${model}${effort ? ` at ${effort} effort` : ""}`,
   description: (name: string, model?: string, effort?: string) => `profile ${name}${model ? ` → ${model}${effort ? ` (${effort})` : ""}` : ""}`,
 };
+
+/** The mesh policy's name as the summary line shows it (spec §25.11, draft for owner approval). */
+export const CELL_POLICY_TEXTS = {
+  labels: { open: "Open", own: "Own cells", closed: "Closed" } as Record<MeshPolicy, string>,
+  summary: (label: string, canTalkTo: number | null) => (canTalkTo === null ? label : `${label} · can talk to ${canTalkTo}`),
+  tagsLine: (tags: readonly string[]) => `Tags: ${tags.join(", ")}`,
+  openPolicy: "Open policy in browser",
+};
+
+/** A tag as the registry stores it (spec §25.2): `tag:` and 1–32 lowercase letters, digits and dashes. */
+export const TAG = /^tag:[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
+
+/** The tags the view shows: only well-formed `tag:<name>` values, so a tag is always plain text that looks like one. */
+export function shownTags(cell: LocalCell): string[] {
+  return (cell.tags ?? []).filter((t) => TAG.test(t));
+}
+
+/**
+ * The cell's one summary line: "Open · can talk to 3", or "Open" alone when the count is unknown. undefined when the
+ * CLI doesn't send `policy` (older CLI: nothing extra is shown) or the mesh's policy is unknown.
+ */
+export function cellPolicySummary(cell: LocalCell): string | undefined {
+  if (cell.policy === undefined || !cell.meshPolicy) {
+    return undefined;
+  }
+  return CELL_POLICY_TEXTS.summary(CELL_POLICY_TEXTS.labels[cell.meshPolicy], cell.policy?.canTalkTo ?? null);
+}
+
+function count(v: unknown): number | null {
+  return typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : null;
+}
+
+/**
+ * The website's Policy tab for this cell's mesh, or undefined when `v` isn't exactly that: an https URL (http only
+ * on localhost or 127.0.0.1, for development) without a user, password or fragment, whose path ends in
+ * `/meshes/m/<the cell's mesh id>` and whose query is exactly `?tab=policy`; on the cell's own server when the CLI
+ * says which (spec §25.8: the CLI builds it from that server).
+ */
+export function policyUrl(v: unknown, cell: Pick<LocalCell, "meshId" | "server">): string | undefined {
+  // eslint-disable-next-line no-control-regex
+  if (typeof v !== "string" || v.length > 2048 || !cell.meshId || !v.endsWith("?tab=policy") || /[\s\x00-\x1f\x7f\\]/.test(v)) {
+    return undefined;
+  }
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    return undefined;
+  }
+  const local = u.protocol === "http:" && (u.hostname === "localhost" || u.hostname === "127.0.0.1");
+  if ((u.protocol !== "https:" && !local) || u.username || u.password || u.hash || u.search !== "?tab=policy") {
+    return undefined;
+  }
+  if (!u.pathname.replace(/\/+$/, "").endsWith(`/meshes/m/${cell.meshId}`)) {
+    return undefined;
+  }
+  // On the cell's own server when the CLI says which (a bare host is stored as https://, so a local dev server
+  // may differ in the scheme only).
+  if (cell.server && u.origin !== cell.server && !(local && cell.server.replace(/^https:/, "http:") === u.origin)) {
+    return undefined;
+  }
+  return u.href;
+}
+
+/** `policy` of a `mesh cells --json` row: null for null or anything that isn't an object; the counts only when they are counts. */
+export function parseCellPolicy(v: unknown, cell: Pick<LocalCell, "meshId" | "server">): CellPolicy | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) {
+    return null;
+  }
+  const r = v as Record<string, unknown>;
+  const policy: CellPolicy = { policyRev: count(r.policy_rev), canTalkTo: count(r.can_talk_to), reachableFrom: count(r.reachable_from) };
+  if (typeof r.basis === "string" && /^[a-z]{1,16}$/.test(r.basis)) {
+    policy.basis = r.basis;
+  }
+  const url = policyUrl(r.url, cell);
+  if (url) {
+    policy.url = url;
+  }
+  return policy;
+}
 
 // eslint-disable-next-line no-control-regex
 const HIDDEN = /[\x00-\x1f\x7f-\x9f​-‏‪-‮⁦-⁩﻿]/g;
@@ -286,6 +382,8 @@ export function localCellDescription(cell: LocalCell, defaultServer: string, gro
     cell.localState,
     cell.registryState ? `registry ${cell.registryState}` : undefined,
     cell.path ? `path ${cell.path}` : undefined,
+    shownTags(cell).join(" ") || undefined,
+    cellPolicySummary(cell),
     cell.needsApproval ? "waits for an admin" : undefined,
     cell.duplicate ? "stored twice" : undefined,
   ].filter(Boolean).join(" · ");
@@ -302,6 +400,8 @@ export function localCellTooltip(cell: LocalCell, defaultServer: string): string
     ...(cell.localState ? [`On this computer: ${cell.localState}${cell.pid ? ` (pid ${cell.pid})` : ""}`] : []),
     ...(cell.registryState ? [`Registry: ${cell.registryState}`] : []),
     ...(cell.localState ? [`Path: ${cell.path ?? "none"}`] : []),
+    ...(shownTags(cell).length ? [CELL_POLICY_TEXTS.tagsLine(shownTags(cell))] : []),
+    ...(cellPolicySummary(cell) ? [cellPolicySummary(cell)!] : []),
     `ID: ${cell.instanceId}`,
     ...(cell.created ? [`Stored: ${cell.created}`] : []),
     ...(cell.needsApproval ? ["Waits for a mesh admin to approve it."] : []),

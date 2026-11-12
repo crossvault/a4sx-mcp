@@ -22,6 +22,7 @@ export const CMD_STOP_CELL = "a4sx.stopCell";
 export const CMD_RENAME_CELL = "a4sx.renameCell";
 export const CMD_COPY_CELL_LAUNCH = "a4sx.copyCellLaunch";
 export const CMD_SET_CELL_PROFILE = "a4sx.setCellProfile";
+export const CMD_OPEN_CELL_POLICY = "a4sx.openCellPolicy";
 export const CMD_INSTALL_CLI = "a4sx.installCli";
 export const CMD_UPDATE_CLI = "a4sx.updateCli";
 /** Context keys the view's welcome texts read. */
@@ -103,9 +104,12 @@ export const CELL_CONTEXT = "a4sx.localCell";
 export const MESH_GROUP_CONTEXT = "a4sx.cellMesh";
 export const REMOTE_CELL_CONTEXT = "a4sx.remoteCell";
 
-/** The item's contextValue: a4sx.localCell[.standalone][.default][.running][.legacy]. */
+/**
+ * The item's contextValue: a4sx.localCell[.standalone][.default][.running][.legacy][.policy]. `.policy` (0.7.0): the
+ * CLI gave a Policy tab URL that passed cells.policyUrl, so "Open policy in browser" is offered.
+ */
 export function cellContext(cell: LocalCell, legacy = false): string {
-  return `${CELL_CONTEXT}${startableCell(cell) ? "" : ".standalone"}${cell.isDefault ? ".default" : ""}${cell.localState === "running" ? ".running" : ""}${legacy ? ".legacy" : ""}`;
+  return `${CELL_CONTEXT}${startableCell(cell) ? "" : ".standalone"}${cell.isDefault ? ".default" : ""}${cell.localState === "running" ? ".running" : ""}${legacy ? ".legacy" : ""}${!legacy && cell.policy?.url ? ".policy" : ""}`;
 }
 
 export class LocalCellItem extends vscode.TreeItem {

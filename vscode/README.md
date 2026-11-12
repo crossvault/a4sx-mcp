@@ -68,6 +68,7 @@ A cell is an agent session that joins one of your meshes from this computer. The
 - **New cell** (in the view's title bar) runs `a4sx launch --new-cell --mesh-reduced-isolation` in a new terminal. The CLI opens your browser, where you approve the new cell, and then starts it in the terminal. The list updates when the cell is stored.
 - **Set as default** runs `a4sx mesh cell default <name>`. A bare `a4sx launch --cell` starts the default cell.
 - **Forget on this computer** runs `a4sx mesh cell forget <name>`, after you confirm. It removes the cell's key from this computer. The cell stays in your account until you remove it on the website.
+- **Open policy in browser** opens the Policy tab of the cell's mesh on the website: who can talk to whom, and the tags. With a4sx CLI 0.28.0 or newer, each cell also shows its tags and one line about its mesh's policy, "Open · can talk to 3" ("Own cells", "Closed"; the policy alone when the number isn't known). Tags and the policy are changed on the website, not here.
 - **Open mesh in browser** opens the cell's mesh on the website. A standalone cell isn't in a mesh yet, so it can't be started; add it to a mesh on the website first.
 
 With an a4sx CLI older than 0.25.0, the view lists the cells with a line that offers **Update the a4sx CLI**; running state, registry state, path, other machines' cells, **Stop** and **Rename…** need the update.

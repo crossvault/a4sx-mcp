@@ -9,7 +9,7 @@ import { createHash } from "crypto";
 import * as os from "os";
 import { CLI_NAME } from "./cli";
 import {
-  CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellProfileArgs, cellRenameArgs, cellStopArgs, NEW_CELL_ARGS, showText,
+  CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellProfileArgs, cellRenameArgs, cellStopArgs, NEW_CELL_ARGS, policyUrl, showText,
 } from "./cells";
 import { CellsProvider, CliOutput, CliResolution, CliRunner, lacksCellProfile, LocalCellItem, MeshGroupItem } from "./cellsView";
 import { IN_SESSION_MESSAGE, parseCliError, parseProfilesAnswer, PROFILES_ARGS } from "./cliJson";
@@ -360,6 +360,15 @@ export async function openCellOnWeb(deps: CellCommandDeps, item: LocalCellItem |
     return;
   }
   await vscode.env.openExternal(vscode.Uri.parse(cellPageUrl(base, cell)));
+}
+
+/** Open policy in browser (0.7.0, a4sx #1861): the mesh's Policy tab, only from a URL that passed cells.policyUrl. */
+export async function openCellPolicy(item: LocalCellItem | undefined): Promise<boolean> {
+  const url = item instanceof LocalCellItem ? policyUrl(item.cell.policy?.url, item.cell) : undefined;
+  if (!url) {
+    return false;
+  }
+  return vscode.env.openExternal(vscode.Uri.parse(url));
 }
 
 /** Stop (a cell running on this computer): asks first, then `mesh cell stop NAME`. */
