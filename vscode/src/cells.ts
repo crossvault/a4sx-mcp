@@ -106,10 +106,12 @@ export function shownTags(cell: LocalCell): string[] {
 
 /**
  * The cell's one summary line: "Open · can talk to 3", or "Open" alone when the count is unknown. undefined when the
- * CLI doesn't send `policy` (older CLI: nothing extra is shown) or the mesh's policy is unknown.
+ * CLI doesn't send `policy` (older CLI), sends `policy: null` (a server without access control, a standalone cell,
+ * another server's cell, signed out: nothing extra is shown, never a bare preset label), or the mesh's policy is
+ * unknown.
  */
 export function cellPolicySummary(cell: LocalCell): string | undefined {
-  if (cell.policy === undefined || !cell.meshPolicy) {
+  if (!cell.policy || !cell.meshPolicy) {
     return undefined;
   }
   return CELL_POLICY_TEXTS.summary(CELL_POLICY_TEXTS.labels[cell.meshPolicy], cell.policy?.canTalkTo ?? null);

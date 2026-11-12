@@ -4,7 +4,7 @@
 
 - **Cells** shows each cell's tags and one line about its mesh's policy, from `a4sx mesh cells --json` (a4sx CLI 0.28.0 or newer): "Open · can talk to 3", "Own cells · can talk to 1" or "Closed · can talk to 0", or the policy alone ("Open") when the number of cells it can talk to isn't known. The tooltip lists the tags ("Tags: tag:ci, tag:gpu"). Only tags of the form `tag:<name>` are shown, as plain text. The view stays read-only: tags and the policy are changed on the website.
 - New action **Open policy in browser** on a cell: opens the mesh's Policy tab on the website. It is offered only when the CLI gives that page's address, on the cell's own server, over https (http only for localhost).
-- With an older CLI, the view shows what it showed before.
+- With an older CLI, or a server without access control (the CLI then sends no policy for the cell), the view shows what it showed before.
 
 ## 0.6.0
 

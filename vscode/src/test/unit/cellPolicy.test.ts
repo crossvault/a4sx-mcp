@@ -86,9 +86,10 @@ describe("Cells: tags and the policy summary (0.7.0, a4sx #1861)", () => {
       cellPolicySummary(one(row28({ mesh_policy: p, policy: { can_talk_to: 0 } }))),
     ]);
     assert.deepStrictEqual(table, [
-      ["Open · can talk to 3", "Open", "Open", "Open · can talk to 0"],
-      ["Own cells · can talk to 3", "Own cells", "Own cells", "Own cells · can talk to 0"],
-      ["Closed · can talk to 3", "Closed", "Closed", "Closed · can talk to 0"],
+      // `policy: null` (a server without access control, …): no bare preset label (review nit 1)
+      ["Open · can talk to 3", "Open", undefined, "Open · can talk to 0"],
+      ["Own cells · can talk to 3", "Own cells", undefined, "Own cells · can talk to 0"],
+      ["Closed · can talk to 3", "Closed", undefined, "Closed · can talk to 0"],
       [undefined, undefined, undefined, undefined],
     ]);
     assert.strictEqual(cellPolicySummary(one(row28({ mesh_policy: "weird" }))), undefined, "an unknown policy is no policy");
@@ -105,7 +106,7 @@ describe("Cells: tags and the policy summary (0.7.0, a4sx #1861)", () => {
     }
     const c = one(row28({ policy: "open" }));
     assert.strictEqual(c.policy, null);
-    assert.strictEqual(cellPolicySummary(c), "Open");
+    assert.strictEqual(cellPolicySummary(c), undefined);
     assert.strictEqual(cellContext(c), "a4sx.localCell");
   });
 
