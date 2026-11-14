@@ -217,7 +217,11 @@ and searches the marketplace. Its command
 changed local Claude Code session to your a4sx library. To continue a saved session, use Claude Code;
 other harnesses can't resume sessions today.
 
-The extension is not on the Visual Studio Marketplace yet. To build and test it from source:
+The extension is on the Visual Studio Marketplace as
+[`crossvaultGmbH.a4sx`](https://marketplace.visualstudio.com/items?itemName=crossvaultGmbH.a4sx): search
+for a4sx in the Extensions view, or run `code --install-extension crossvaultGmbH.a4sx`. The Marketplace
+release can trail the source in this directory; [`vscode/CHANGELOG.md`](vscode/CHANGELOG.md) lists every
+version. To build and test it from source:
 
 ```sh
 cd vscode
