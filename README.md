@@ -220,8 +220,9 @@ other harnesses can't resume sessions today.
 The extension is on the Visual Studio Marketplace as
 [`crossvaultGmbH.a4sx`](https://marketplace.visualstudio.com/items?itemName=crossvaultGmbH.a4sx): search
 for a4sx in the Extensions view, or run `code --install-extension crossvaultGmbH.a4sx`. The Marketplace
-release can trail the source in this directory; [`vscode/CHANGELOG.md`](vscode/CHANGELOG.md) lists every
-version. To build and test it from source:
+version may be older than this directory; check the version on the Marketplace page. On 2026-11-14 it was
+0.5.1, so 0.5.2 to 0.7.0 in [`vscode/CHANGELOG.md`](vscode/CHANGELOG.md) were not on the Marketplace yet.
+To build and test it from source:
 
 ```sh
 cd vscode
