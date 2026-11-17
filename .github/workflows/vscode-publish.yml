@@ -1,16 +1,28 @@
 # SPDX-FileCopyrightText: 2026 crossVault GmbH
 # SPDX-License-Identifier: Apache-2.0
 #
-# Packages the VS Code extension in vscode/ and publishes it to the Visual Studio Marketplace as
-# crossvaultGmbH.a4sx. It signs in with workload identity federation (OIDC); no PAT or other secret is
-# stored anywhere. The `publish` job runs only in the `marketplace` environment, which needs the owner's
-# approval, so neither a tag nor a manual run can publish on its own.
+# Packages the VS Code extension in vscode/ and publishes it as crossvaultGmbH.a4sx to the Visual Studio
+# Marketplace and to Open VSX (open-vsx.org).
+#   - Marketplace (`publish` job): signs in with workload identity federation (OIDC); no PAT is stored.
+#   - Open VSX (`openvsx` job): signs in with Open VSX trusted publishing (OIDC, audience
+#     https://open-vsx.org); no PAT is stored either. The registry issues a short-lived token only to this
+#     workflow file running in the `marketplace` environment, as registered for crossvaultGmbH.a4sx under
+#     https://open-vsx.org/user-settings/trusted-publishers (see CONTRIBUTING.md, Open VSX).
+# Both jobs run in the `marketplace` environment, which needs the owner's approval, so neither a tag nor a
+# manual run can publish on its own. One approval of that environment releases both waiting jobs.
+# Both publish the same .vsix, built once by the `package` job.
 #
-#   workflow_dispatch, mode=verify (default): package, then `vsce verify-pat` proves the identity may
-#                                             publish for crossvaultGmbH. Nothing is published.
+#   workflow_dispatch, mode=verify (default): package, then prove each registry would let this run
+#                                             publish crossvaultGmbH.a4sx (`vsce verify-pat`; the Open VSX
+#                                             trusted-publishing token exchange). Nothing is published.
 #   workflow_dispatch, mode=publish, or a `vscode-v<version>` tag: package, then publish that exact .vsix.
+#   workflow_dispatch, target: which registries: both (default; a tag always means both), marketplace, or
+#                              openvsx. target=openvsx publishes a version that is already on the
+#                              Marketplace to Open VSX only (vsce would refuse a version it already has).
+#                              A single-target publish runs only on that version's vscode-v* tag, so the
+#                              .vsix is rebuilt from the released sources (see CONTRIBUTING.md, Open VSX).
 #
-# Every action is pinned to a full commit SHA; vsce is pinned to an exact version, installed from
+# Every action is pinned to a full commit SHA; vsce and ovsx are pinned to exact versions, installed from
 # vscode/package-lock.json and run only from there (`npx --no-install`).
 name: VS Code extension publish
 
@@ -20,10 +32,15 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "verify: check publish rights only. publish: publish to the Marketplace."
+        description: "verify: check publish rights only. publish: publish to the registries in target."
         type: choice
         options: [verify, publish]
         default: verify
+      target:
+        description: "both: VS Marketplace and Open VSX. marketplace or openvsx: only that one."
+        type: choice
+        options: [both, marketplace, openvsx]
+        default: both
 
 permissions:
   contents: read
@@ -35,9 +52,11 @@ concurrency:
 
 env:
   VSCE_VERSION: "3.9.2"
+  OVSX_VERSION: "1.3.0"
   PUBLISHER: crossvaultGmbH
-  # A tag push always publishes; a manual run does what its `mode` input says.
+  # A tag push always publishes to both registries; a manual run does what its inputs say.
   MODE: ${{ github.event_name == 'push' && 'publish' || inputs.mode }}
+  TARGET: ${{ github.event_name == 'push' && 'both' || inputs.target }}
 
 jobs:
   package:
@@ -47,6 +66,10 @@ jobs:
         working-directory: vscode
     outputs:
       vsix: ${{ steps.pack.outputs.vsix }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
+      # Validated below; the publishing jobs decide from these, not from the raw inputs.
+      marketplace: ${{ steps.target.outputs.marketplace }}
+      openvsx: ${{ steps.target.outputs.openvsx }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -60,6 +83,18 @@ jobs:
             verify|publish) echo "mode: $MODE" ;;
             *) echo "::error::mode must be exactly 'verify' or 'publish', got '$MODE'"; exit 1 ;;
           esac
+      - name: Target is both, marketplace or openvsx
+        id: target
+        run: |
+          case "$TARGET" in
+            both)        m=true;  o=true ;;
+            marketplace) m=true;  o=false ;;
+            openvsx)     m=false; o=true ;;
+            *) echo "::error::target must be exactly 'both', 'marketplace' or 'openvsx', got '$TARGET'"; exit 1 ;;
+          esac
+          echo "target: $TARGET (marketplace=$m, openvsx=$o)"
+          echo "marketplace=$m" >> "$GITHUB_OUTPUT"
+          echo "openvsx=$o" >> "$GITHUB_OUTPUT"
       - name: Publish only from main or a vscode-v* tag
         if: env.MODE == 'publish'
         env:
@@ -69,6 +104,14 @@ jobs:
             refs/heads/main|refs/tags/vscode-v*) ;;
             *) echo "::error::publish runs only from main or a vscode-v* tag, not $REF"; exit 1 ;;
           esac
+          # Publishing to one registry only is for a version already released by its tag: rebuild it from
+          # that tag, never from main, so both registries carry the same release.
+          if [ "$TARGET" != both ]; then
+            case "$REF" in
+              refs/tags/vscode-v*) ;;
+              *) echo "::error::target=$TARGET publishes to one registry only, so it must run on the version's vscode-v* tag, not $REF"; exit 1 ;;
+            esac
+          fi
       - name: Tag version matches package.json
         if: startsWith(github.ref, 'refs/tags/vscode-v')
         env:
@@ -80,8 +123,10 @@ jobs:
           fi
       - name: Install
         run: npm ci --ignore-scripts
-      - name: vsce is the pinned version
-        run: test "$(npx --no-install vsce --version)" = "$VSCE_VERSION"
+      - name: vsce and ovsx are the pinned versions
+        run: |
+          test "$(npx --no-install vsce --version)" = "$VSCE_VERSION"
+          test "$(npx --no-install ovsx --version)" = "$OVSX_VERSION"
       - name: Unit tests
         run: npm test
       - name: Package
@@ -92,6 +137,7 @@ jobs:
           npx --no-install vsce ls
           sha256sum "$vsix"
           echo "vsix=$vsix" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$vsix" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: vsix
@@ -100,6 +146,7 @@ jobs:
 
   publish:
     needs: package
+    if: needs.package.outputs.marketplace == 'true'
     runs-on: ubuntu-latest
     environment: marketplace
     permissions:
@@ -124,10 +171,11 @@ jobs:
         with:
           name: vsix
           path: ${{ runner.temp }}/vsix
-      - name: sha256 of the .vsix (must match the package job's)
+      - name: The .vsix is the one the package job built (sha256)
         env:
           VSIX: ${{ runner.temp }}/vsix/${{ needs.package.outputs.vsix }}
-        run: sha256sum "$VSIX"
+          SHA256: ${{ needs.package.outputs.sha256 }}
+        run: echo "$SHA256  $VSIX" | sha256sum -c -
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -141,3 +189,61 @@ jobs:
         env:
           VSIX: ${{ runner.temp }}/vsix/${{ needs.package.outputs.vsix }}
         run: npx --no-install vsce publish --packagePath "$VSIX" --azure-credential
+
+  openvsx:
+    needs: package
+    if: needs.package.outputs.openvsx == 'true'
+    runs-on: ubuntu-latest
+    # The same environment as `publish`: the same owner approval gates it, and the trusted publisher on
+    # open-vsx.org is registered with this environment, so a run outside it gets no Open VSX token.
+    environment: marketplace
+    # id-token: for the OIDC ID token that ovsx exchanges for a short-lived Open VSX publishing token.
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: vscode
+    steps:
+      # Checked out only for package-lock.json, so ovsx comes from the lockfile, not a fresh resolve.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.23.4"
+      - name: Install
+        run: npm ci --ignore-scripts
+      - name: ovsx is the pinned version
+        run: test "$(npx --no-install ovsx --version)" = "$OVSX_VERSION"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: vsix
+          path: ${{ runner.temp }}/vsix
+      - name: The .vsix is the one the package job built (sha256)
+        env:
+          VSIX: ${{ runner.temp }}/vsix/${{ needs.package.outputs.vsix }}
+          SHA256: ${{ needs.package.outputs.sha256 }}
+        run: echo "$SHA256  $VSIX" | sha256sum -c -
+      # Runs the pinned ovsx's own token exchange (the first half of `ovsx publish --trusted-publishing`)
+      # and discards the result: it proves the trusted publisher matches this run. The issued token is
+      # never printed and expires within minutes.
+      - name: Verify trusted publishing (publishes nothing)
+        if: env.MODE == 'verify'
+        run: |
+          node -e '
+            const { Registry } = require("ovsx/lib/registry");
+            const tp = require("ovsx/lib/trusted-publishing");
+            const { publisher, name } = require("./package.json");
+            tp.getTrustedPublishingToken(new Registry(), publisher, name, {}).then(
+              () => console.log(`Open VSX accepts this workflow as the trusted publisher of ${publisher}.${name}. Nothing was published.`),
+              (err) => { console.log(`::error::Open VSX did not issue a trusted-publishing token for ${publisher}.${name}: ${err.message.replace(/\n/g, " ")} (see CONTRIBUTING.md, Open VSX). Nothing was published.`); process.exit(1); });
+          '
+      # --trusted-publishing fails when no token is issued. A PAT would take precedence over it, so the
+      # PAT variable is forced empty here; no OVSX_PAT secret is used anywhere.
+      - name: Publish to Open VSX
+        if: env.MODE == 'publish'
+        env:
+          OVSX_PAT: ""
+          VSIX: ${{ runner.temp }}/vsix/${{ needs.package.outputs.vsix }}
+        run: npx --no-install ovsx publish --packagePath "$VSIX" --trusted-publishing
