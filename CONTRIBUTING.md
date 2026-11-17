@@ -49,9 +49,10 @@ The extension lives in `vscode/` (TypeScript, Node.js 22). Before pushing a chan
 
 The extension is published as `crossvaultGmbH.a4sx` to the Visual Studio Marketplace and to
 [Open VSX](https://open-vsx.org) by `.github/workflows/vscode-publish.yml`, only from a `vscode-v*` tag or
-a manual run, and only after the owner approves the `marketplace` environment. One approval releases both
-registries' jobs, and both publish the same `.vsix`. Branch pushes and pull requests never package or
-publish it.
+a manual run, and only after the owner approves the `marketplace` environment (repository admins can skip
+that approval unless the environment's *Allow administrators to bypass configured protection rules* is
+turned off). One approval releases both registries' jobs, and both publish the same `.vsix`. Branch
+pushes and pull requests never package or publish it.
 
 ### Open VSX
 
@@ -81,7 +82,7 @@ the namespace and only for an extension that already has a version, so the owner
    sha256sum "$HOME/a4sx-vsix/a4sx-0.8.0.vsix"
    # must print 16a01dc23608775c5252f80fd38f543e1eeca7c319a44f8c50f3201706ee6cfc
    read -rs OVSX_PAT && export OVSX_PAT     # paste the token; it is not echoed
-   npx --no-install ovsx create-namespace crossvaultGmbH
+   npx --no-install ovsx create-namespace crossvaultGmbH   # exactly this case, as in package.json
    npx --no-install ovsx publish --packagePath "$HOME/a4sx-vsix/a4sx-0.8.0.vsix"
    unset OVSX_PAT
    ```
@@ -100,16 +101,20 @@ the namespace and only for an extension that already has a version, so the owner
      otherwise; the environment adds the owner approval and the `main` / `vscode-v*` ref policy)
 8. Delete the temporary token in *Settings → Access Tokens*.
 
+Open VSX deletes the registration if its author stops being an owner of the namespace; register it again
+then.
+
 Check the setup with a manual run of *VS Code extension publish* on `main` with `mode: verify`,
 `target: openvsx`: it runs ovsx's token exchange and publishes nothing. Until step 7 is done, the Open VSX
 job fails with a message saying so; it never skips silently. Until then, release with a tag as usual and
 expect only that job to fail, or start manual runs with `target: marketplace`.
 
 A `vscode-v*` tag always publishes to both registries, from one `.vsix`. If only the Open VSX job of such a
-run fails, fix the cause and use *Re-run failed jobs* on that run: it publishes the same `.vsix` artifact.
-To publish a version that is already on the Marketplace to Open VSX only, start the workflow on that
-version's `vscode-v<version>` tag with `mode: publish`, `target: openvsx` (the Marketplace refuses a
-version it already has), so the `.vsix` is rebuilt from the released sources.
+run fails, fix the cause and use *Re-run failed jobs* on that run (possible for 30 days): it publishes the
+same `.vsix` artifact. Otherwise, to publish a version that is already on the Marketplace to Open VSX
+only, start the workflow on that version's `vscode-v<version>` tag with `mode: publish`,
+`target: openvsx` (the Marketplace refuses a version it already has). The workflow refuses a
+single-registry publish from any other ref, so the `.vsix` is always rebuilt from the released sources.
 
 ## AI-assisted contributions
 
