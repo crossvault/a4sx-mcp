@@ -6,9 +6,10 @@
 // (tabSession.ts), then a terminal runs
 //   a4sx push <transcript> [--into <library entry>]      (save)
 //   a4sx push <transcript> --dry-run                     (preview: uploads nothing, needs no sign-in)
-// `--into` is added when the library already holds this session, so the save becomes a new version of that entry;
-// when the library can't be read (signed out, offline), the plain push runs and the server files it. The CLI
-// scrubs the transcript and prints what it changed; the extension reads none of its content.
+// `--into` is added when the library already holds this session, so the save becomes a new version of that entry.
+// When the library can't be read (signed out in the sidebar, offline), nothing is saved and the user is told why:
+// a plain push could add the session a second time instead of a new version. The CLI scrubs the transcript and
+// prints what it changed; the extension reads none of its content.
 import * as vscode from "vscode";
 import { CellCommandDeps, ensureCli } from "./cellCommands";
 import { CLI_NAME } from "./cli";
@@ -27,8 +28,19 @@ export const SAVE_TAB_TEXTS = {
   pickEntryPlaceholder: "This session is in your library more than once. Choose the entry that gets the new version",
   newEntry: "$(add) Save without choosing an entry",
   newEntryDetail: "Runs a plain `a4sx push`; the server files the save.",
-  badEntry: "This library entry's id can't be passed to the a4sx CLI.",
+  badEntry: (id: string) => `The library entry that holds this session has an id the a4sx CLI doesn't take ("${id}"), so the save can't become a new version of it. Choose Save as a new entry to save the session as a separate entry in your library; otherwise nothing is saved.`,
+  saveAsNew: "Save as a new entry",
+  signedOut: "Nothing was saved: you aren't signed in to a4sx in the sidebar, so the extension can't check whether your library already holds this session. Saved now, it could become a second entry instead of a new version. Sign in (a4sx: Sign in), then run Save session to a4sx again. Preview save to a4sx (dry run) works without sign-in.",
+  libraryUnreadable: (reason: string) => `Nothing was saved: your a4sx library couldn't be read (${reason}), so the extension can't check whether it already holds this session. Saved now, it could become a second entry instead of a new version. Try again when your a4sx server is reachable. Preview save to a4sx (dry run) works meanwhile.`,
 };
+
+/** Thrown by a SavedLookup when the library can't be read; `signedOut` when there is no sign-in to read it with. */
+export class LibraryUnreadable extends Error {
+  constructor(readonly signedOut: boolean, reason?: string) {
+    super(reason ?? (signedOut ? "signed out" : "unknown error"));
+    this.name = "LibraryUnreadable";
+  }
+}
 
 /** A library entry that holds a session. */
 export interface SavedEntry {
@@ -37,7 +49,7 @@ export interface SavedEntry {
   title?: string;
 }
 
-/** The library entries that hold the session with this slug (tabSession.slugOf); [] when none or when the library can't be read. */
+/** The library entries that hold the session with this slug (tabSession.slugOf); [] when none. Rejects (LibraryUnreadable) when the library can't be read. */
 export type SavedLookup = (slug: string) => Promise<SavedEntry[]>;
 
 export interface SaveTabOptions {
@@ -47,6 +59,13 @@ export interface SaveTabOptions {
   saved?: SavedLookup;
   /** Where Claude Code keeps transcripts (tests). */
   projectsDir?: string;
+}
+
+/** An entry id for a message: control characters dropped, at most 80 characters. */
+function showId(id: string): string {
+  // eslint-disable-next-line no-control-regex
+  const clean = id.replace(/[\x00-\x1f\x7f]/g, "");
+  return clean.length > 80 ? `${clean.slice(0, 79)}…` : clean;
 }
 
 /** `push <transcript> [--into ID] [--dry-run]`; undefined for an entry id the CLI doesn't take. */
@@ -87,7 +106,14 @@ export async function saveTabSession(deps: CellCommandDeps, args: readonly unkno
   }
   let into: string | undefined;
   if (!options.preview && options.saved) {
-    const entries = await options.saved(slugOf(session.sessionId)).catch(() => []);
+    let entries: SavedEntry[];
+    try {
+      entries = await options.saved(slugOf(session.sessionId));
+    } catch (e) {
+      const signedOut = e instanceof LibraryUnreadable && e.signedOut;
+      await vscode.window.showErrorMessage(signedOut ? t.signedOut : t.libraryUnreadable(e instanceof Error && e.message ? e.message : "unknown error"));
+      return undefined;
+    }
     if (entries.length === 1) {
       into = entries[0].id;
     } else if (entries.length > 1) {
@@ -100,8 +126,11 @@ export async function saveTabSession(deps: CellCommandDeps, args: readonly unkno
   }
   const pushed = pushArgs(session.file, { ...(into === undefined ? {} : { into }), preview: options.preview === true });
   if (!pushed) {
-    await vscode.window.showErrorMessage(t.badEntry);
-    return undefined;
+    const choice = await vscode.window.showErrorMessage(t.badEntry(showId(into ?? "")), t.saveAsNew);
+    if (choice !== t.saveAsNew) {
+      return undefined;
+    }
+    return openCommandTerminal(t.terminal, cli, CLI_NAME, pushArgs(session.file)!);
   }
   return openCommandTerminal(options.preview ? t.previewTerminal : t.terminal, cli, CLI_NAME, pushed);
 }

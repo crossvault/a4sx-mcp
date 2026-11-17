@@ -11,17 +11,20 @@ import * as vscode from "vscode";
 import { CellCommandDeps } from "./cellCommands";
 import { findLocalSession } from "./localSession";
 import { runAsCell } from "./runAsCell";
-import { chooseClaudeTab, editorIndexOf, RecentSession, recentSessions, sessionsForLabel, slugOf } from "./tabSession";
+import { chooseClaudeTab, clickedKind, editorIndexOf, RecentSession, recentSessions, sessionsForLabel, slugOf } from "./tabSession";
 
 export const CONVERT_TEXTS = {
   noTab: "This works on a Claude Code tab. Open the session's tab, then run it from the tab's context menu.",
   pickTabTitle: "Convert to cell",
   pickTabPlaceholder: "Choose the Claude Code tab",
+  pickClickedTabPlaceholder: "Which tab you right-clicked can't be told for sure (with split editors VS Code doesn't say which group). Choose the Claude Code tab you clicked",
+  notClaudeTab: "The tab you right-clicked isn't a Claude Code tab, so nothing was done. Right-click the Claude Code tab of the session instead.",
+  group: (column: number) => `editor group ${column}`,
   noSessions: "No Claude Code session was found on this computer.",
   pickSessionTitle: "Convert to cell: which session is this tab?",
   pickSessionPlaceholder: (label: string) => `The tab "${label}" couldn't be matched to one session. Choose its session`,
   untitled: "(no title yet)",
-  notResumable: "This session can't be resumed on this computer: the folder it ran in no longer exists.",
+  notResumable: "This session can't be resumed on this computer, so nothing was started: `claude --resume` needs the folder the session ran in, and that folder no longer exists, or its transcript doesn't name a folder Claude Code files it under. Save it to a4sx first (Save session to a4sx in the tab's context menu), then use Run as cell in terminal on it in My sessions: the cell fetches it from your library.",
   started: "The session now continues as a cell in the terminal. Close its tab so it isn't used in two places?",
   closeTab: "Close tab",
   meshTitle: "Convert to cell in mesh",
@@ -59,20 +62,27 @@ export function sessionPickItems(sessions: readonly RecentSession[], now: number
 }
 
 /**
- * The Claude Code tab a command is about (tabSession.chooseClaudeTab); with several and no way to tell, the user
- * picks one by its label. undefined: there is none (the user was told), or Esc.
+ * The Claude Code tab a command is about (tabSession.chooseClaudeTab); when it can't be told for sure, the user
+ * picks one by its label and group. undefined: there is none, the clicked tab isn't one (the user was told), or Esc.
  */
 export async function claudeTabOf(args: readonly unknown[], pickTitle: string = CONVERT_TEXTS.pickTabTitle): Promise<vscode.Tab | undefined> {
   const groups = vscode.window.tabGroups;
-  const found = chooseClaudeTab(groups?.all ?? [], groups?.activeTabGroup, editorIndexOf(args));
+  const index = editorIndexOf(args);
+  const found = chooseClaudeTab(groups?.all ?? [], groups?.activeTabGroup, index, clickedKind(args));
   if (found.kind === "one") {
     return found.tab;
   }
-  if (found.kind === "none") {
-    await vscode.window.showErrorMessage(CONVERT_TEXTS.noTab);
+  if (found.kind === "none" || found.kind === "notClaude") {
+    await vscode.window.showErrorMessage(found.kind === "none" ? CONVERT_TEXTS.noTab : CONVERT_TEXTS.notClaudeTab);
     return undefined;
   }
-  const picked = await vscode.window.showQuickPick(found.tabs.map((tab) => ({ label: tab.label, tab })), { title: pickTitle, placeHolder: CONVERT_TEXTS.pickTabPlaceholder });
+  const items = found.tabs.map((tab) => {
+    const column = tab.group?.viewColumn;
+    return { label: tab.label, ...(typeof column === "number" ? { description: CONVERT_TEXTS.group(column) } : {}), tab };
+  });
+  const picked = await vscode.window.showQuickPick(items, {
+    title: pickTitle, placeHolder: index === undefined ? CONVERT_TEXTS.pickTabPlaceholder : CONVERT_TEXTS.pickClickedTabPlaceholder, matchOnDescription: true,
+  });
   return picked?.tab;
 }
 

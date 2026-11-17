@@ -101,13 +101,13 @@ The list is read when the view is first shown, on **Refresh cells**, after each 
 
 **Convert to cell in mesh…** first lists your active meshes and adds `--mesh <mesh id>` to the command. The browser approval still asks for the mesh; if you pick another one there, the a4sx CLI says so before it starts the cell. This action is offered when you are signed in and your a4sx server has meshes.
 
-The tab isn't turned into a cell in place: the session continues in the terminal, and the extension offers **Close tab** so that it isn't used in two places. The menu entries appear while a Claude Code tab is the active editor; if another kind of editor is active, click the Claude Code tab first.
+The tab isn't turned into a cell in place: the session continues in the terminal, and the extension offers **Close tab** so that it isn't used in two places. The menu entries appear when you right-click a Claude Code tab, whichever editor is active (in VS Code before 1.106, which doesn't tell which kind of webview a tab is, they appear on webview tabs while a Claude Code tab is the active editor). A right-click doesn't make the tab's editor group active, and VS Code tells extensions only the clicked tab's position in its group. So with split editors, when more than one group could hold the clicked tab, the extension asks which Claude Code tab you mean instead of guessing. If the clicked tab isn't a Claude Code tab, it says so and does nothing.
 
 ### Save a tab's session
 
 The same context menu has two actions that save the session of that tab to your library. The session is found as for **Convert to cell**.
 
-- **Save session to a4sx** opens a terminal that runs `a4sx push <transcript>`. If your library already holds that session, the save becomes a new version of its entry (`--into <entry>`); if it holds it more than once, you choose the entry. When the extension can't read your library (you aren't signed in in the sidebar, or you are offline), it runs the plain push and the server files the save. The CLI scrubs the transcript before it uploads it and prints what it changed.
+- **Save session to a4sx** opens a terminal that runs `a4sx push <transcript>`. If your library already holds that session, the save becomes a new version of its entry (`--into <entry>`); if it holds it more than once, you choose the entry. When the extension can't read your library (you aren't signed in in the sidebar, or you are offline), it saves nothing and says why: a plain push could add the session as a second entry instead of a new version. If the entry's id is one the a4sx CLI doesn't take, the extension says so and offers **Save as a new entry**. The CLI scrubs the transcript before it uploads it and prints what it changed.
 - **Preview save to a4sx (dry run)** runs `a4sx push <transcript> --dry-run`: the CLI lists what its scrub would change and uploads nothing. It needs no sign-in.
 
 **a4sx: Save this session** is a different command: it saves the most recently changed Claude Code session on this computer (`a4sx push --latest`), which need not be the tab you are looking at.

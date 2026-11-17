@@ -22,6 +22,8 @@ const UUID_FILE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 export interface TabLike {
   label: string;
   input?: unknown;
+  /** The tab's group; only its column is read, to tell tabs apart in a pick. */
+  group?: { viewColumn?: number };
 }
 
 /** The part of a tab group this module reads (a `vscode.TabGroup`). */
@@ -36,6 +38,12 @@ export function isClaudeTab(tab: TabLike | undefined): boolean {
   return typeof viewType === "string" && (viewType === CLAUDE_PANEL || viewType.endsWith(`-${CLAUDE_PANEL}`));
 }
 
+/** True for any webview tab (its input has a view type and no file). */
+function isWebviewTab(tab: TabLike | undefined): boolean {
+  const input = tab?.input as { viewType?: unknown; uri?: unknown } | undefined;
+  return typeof input?.viewType === "string" && input.uri === undefined;
+}
+
 /** The `editorIndex` VS Code passes to a command run from a tab's context menu, or undefined. */
 export function editorIndexOf(args: readonly unknown[]): number | undefined {
   for (const a of args) {
@@ -47,29 +55,68 @@ export function editorIndexOf(args: readonly unknown[]): number | undefined {
   return undefined;
 }
 
-export type TabChoice<T extends TabLike> = { kind: "one"; tab: T } | { kind: "many"; tabs: T[] } | { kind: "none" };
+/**
+ * What the resource VS Code passes first to a command run from a tab's context menu says about the clicked tab.
+ * A webview tab's resource is `webview-panel:/webview-panel/webview-<view type>-<uuid>` since VS Code 1.106
+ * (`webview-<uuid>` before, which names no view type). Webview tabs expose no resource to extensions, so this
+ * tells only the kind of the clicked tab, not which one it is:
+ * - "claude": a Claude Code tab;
+ * - "webview": a webview of unknown view type (VS Code before 1.106);
+ * - "other": not a Claude Code tab (a file, or another extension's webview);
+ * - undefined: no resource was passed (the Command Palette).
+ */
+export function clickedKind(args: readonly unknown[]): "claude" | "webview" | "other" | undefined {
+  const uri = args[0] as { scheme?: unknown; path?: unknown } | null | undefined;
+  if (!uri || typeof uri !== "object" || typeof uri.scheme !== "string") {
+    return undefined;
+  }
+  if (uri.scheme !== "webview-panel") {
+    return "other";
+  }
+  const name = typeof uri.path === "string" ? uri.path.slice(uri.path.lastIndexOf("/") + 1) : "";
+  if (name.startsWith(`webview-${CLAUDE_PANEL}-`)) {
+    return "claude";
+  }
+  return /^webview-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name) ? "webview" : "other";
+}
 
 /**
- * The Claude Code tab a command is about. From a tab's context menu VS Code passes the tab's index in its group
- * (not the group in a form extensions can look up): the tab at that index in the active group when it is a Claude
- * Code tab, else the only group with one there. Without an index (the Command Palette): the active tab. Else the
- * only Claude Code tab; with several, the caller asks.
+ * one: the tab; ask: the clicked tab can't be told for sure, the user chooses among these; notClaude: the clicked
+ * tab isn't a Claude Code tab; none: there is no Claude Code tab.
  */
-export function chooseClaudeTab<T extends TabLike>(groups: readonly TabGroupLike<T>[], active: TabGroupLike<T> | undefined, editorIndex: number | undefined): TabChoice<T> {
+export type TabChoice<T extends TabLike> = { kind: "one"; tab: T } | { kind: "ask"; tabs: T[] } | { kind: "notClaude" } | { kind: "none" };
+
+/**
+ * The Claude Code tab a command is about. Never a guess: a right-click doesn't make the tab's group active, and VS
+ * Code passes the clicked tab's index in its group but not the group in a form extensions can look up. So from a
+ * context menu, the candidates are the tabs at that index in every group, narrowed by what the passed resource
+ * says (clickedKind). One candidate: that tab (notClaude when it isn't a Claude Code tab). Several: the user
+ * chooses among the Claude Code ones. Without an index (the Command Palette): the active tab when it is a Claude
+ * Code tab, else the only Claude Code tab; with several, the user chooses.
+ */
+export function chooseClaudeTab<T extends TabLike>(groups: readonly TabGroupLike<T>[], active: TabGroupLike<T> | undefined, editorIndex: number | undefined, clicked?: "claude" | "webview" | "other"): TabChoice<T> {
+  const all = groups.flatMap((g) => g.tabs.filter((t) => isClaudeTab(t)));
+  const anyOf = (tabs: T[]): TabChoice<T> => (tabs.length ? { kind: "ask", tabs } : { kind: "none" });
+  if (clicked === "other") {
+    return { kind: "notClaude" };
+  }
   if (editorIndex !== undefined) {
-    const inActive = active?.tabs[editorIndex];
-    if (inActive && isClaudeTab(inActive)) {
-      return { kind: "one", tab: inActive };
+    const at = groups.map((g) => g.tabs[editorIndex]).filter((t): t is T => !!t);
+    const fits = at.filter((t) => (clicked === "claude" ? isClaudeTab(t) : clicked === "webview" ? isWebviewTab(t) : true));
+    if (fits.length === 1) {
+      return isClaudeTab(fits[0]) ? { kind: "one", tab: fits[0] } : { kind: "notClaude" };
     }
-    const hits = groups.map((g) => g.tabs[editorIndex]).filter((t): t is T => !!t && isClaudeTab(t));
-    if (hits.length === 1) {
-      return { kind: "one", tab: hits[0] };
+    if (fits.length === 0) {
+      // The index names no such tab (the tabs moved meanwhile): every Claude Code tab is offered.
+      return anyOf(all);
     }
-  } else if (active?.activeTab && isClaudeTab(active.activeTab)) {
+    const claude = fits.filter((t) => isClaudeTab(t));
+    return claude.length ? { kind: "ask", tabs: claude } : { kind: "notClaude" };
+  }
+  if (active?.activeTab && isClaudeTab(active.activeTab)) {
     return { kind: "one", tab: active.activeTab };
   }
-  const all = groups.flatMap((g) => g.tabs.filter((t) => isClaudeTab(t)));
-  return all.length === 1 ? { kind: "one", tab: all[0] } : all.length ? { kind: "many", tabs: all } : { kind: "none" };
+  return all.length === 1 ? { kind: "one", tab: all[0] } : anyOf(all);
 }
 
 function clean(s: string): string {

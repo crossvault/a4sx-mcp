@@ -25,7 +25,7 @@ import { IN_SESSION_MESSAGE, insideMeshSession } from "./cliJson";
 import { CONVERT_TEXTS, convertTabToCell, meshPickItems } from "./convertTab";
 import { findLocalSession, librarySlug } from "./localSession";
 import { runAsCell, RunAsCellSession } from "./runAsCell";
-import { SavedLookup, saveTabSession } from "./saveTab";
+import { LibraryUnreadable, SavedLookup, saveTabSession } from "./saveTab";
 import { execSpec, Fetch, installedLauncher, Runner } from "./provision";
 import { clearFilter, filterSessions, moveToFolder, removeFromFolder } from "./folderCommands";
 import { CMD_OPEN_LISTING, ListingItem, MarketplaceProvider } from "./marketplaceView";
@@ -865,20 +865,22 @@ export async function pickMeshForCell(auth: { token(): Promise<string | undefine
 
 /**
  * "Save session to a4sx" on a tab: the library entries that already hold a session, read from the server like My
- * sessions. Signed out, or the library can't be read: none, and the save runs as a plain `a4sx push`.
+ * sessions. Signed out, or the library can't be read: rejects with LibraryUnreadable, and nothing is saved (a plain
+ * push could add the session a second time instead of a new version).
  */
 export function savedEntries(auth: { token(): Promise<string | undefined> }): SavedLookup {
   return async (slug) => {
     const token = await auth.token();
     if (!token) {
-      return [];
+      throw new LibraryUnreadable(true);
     }
+    let rows: Awaited<ReturnType<typeof listSessions>>;
     try {
-      return (await listSessions(client(), token)).filter((r) => librarySlug(r) === slug)
-        .map((r) => ({ id: r.id, label: showText(r.label), title: showText(r.title, 120) }));
-    } catch {
-      return [];
+      rows = await listSessions(client(), token);
+    } catch (e) {
+      throw new LibraryUnreadable(false, errorText(e));
     }
+    return rows.filter((r) => librarySlug(r) === slug).map((r) => ({ id: r.id, label: showText(r.label), title: showText(r.title, 120) }));
   };
 }
 

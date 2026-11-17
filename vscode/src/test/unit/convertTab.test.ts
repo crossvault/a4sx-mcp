@@ -16,9 +16,9 @@ import { IN_SESSION_MESSAGE } from "../../cliJson";
 import { CONVERT_TEXTS, convertTabToCell, meshPickItems, sessionPickItems } from "../../convertTab";
 import { projectDirName } from "../../nativeSeed";
 import { RUN_AS_CELL_TEXTS } from "../../runAsCell";
-import { entryPickItems, pushArgs, SAVE_TAB_TEXTS, saveTabSession } from "../../saveTab";
+import { entryPickItems, LibraryUnreadable, pushArgs, SAVE_TAB_TEXTS, saveTabSession } from "../../saveTab";
 import {
-  chooseClaudeTab, CLAUDE_PANEL, editorIndexOf, isClaudeTab, labelMatches, recentSessions, sessionsForLabel, slugOf, TAIL_BYTES, transcriptTitle,
+  chooseClaudeTab, CLAUDE_PANEL, clickedKind, editorIndexOf, isClaudeTab, labelMatches, recentSessions, sessionsForLabel, slugOf, TAIL_BYTES, transcriptTitle,
 } from "../../tabSession";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -103,18 +103,58 @@ describe("Convert to cell: which tab", () => {
     assert.strictEqual(editorIndexOf([undefined, null, "x", { editorIndex: "1" }, { editorIndex: -1 }, { editorIndex: 1.5 }]), undefined);
   });
 
-  it("from a context menu: the tab at that index in the active group, else in the only group with a Claude tab there", () => {
+  it("the resource VS Code passes for the clicked tab tells whether it is a Claude Code tab", () => {
+    const uuid = "3f2a1b0c-9d8e-4f7a-8b6c-5d4e3f2a1b0c";
+    const wv = (name: string) => ({ scheme: "webview-panel", path: `/webview-panel/${name}` });
+    assert.strictEqual(clickedKind([wv(`webview-${CLAUDE_PANEL}-${uuid}`), { editorIndex: 0 }]), "claude");
+    assert.strictEqual(clickedKind([wv(`webview-${uuid}`)]), "webview", "VS Code before 1.106 names no view type");
+    assert.strictEqual(clickedKind([wv(`webview-markdown.preview-${uuid}`)]), "other");
+    assert.strictEqual(clickedKind([wv(`webview-${CLAUDE_PANEL}Other-${uuid}`)]), "other");
+    assert.strictEqual(clickedKind([{ scheme: "file", path: "/w/a.ts" }]), "other");
+    assert.strictEqual(clickedKind([undefined, { editorIndex: 0 }]), undefined);
+    assert.strictEqual(clickedKind([]), undefined);
+    assert.strictEqual(clickedKind(["webview-panel"]), undefined);
+  });
+
+  it("from a context menu with one group: the tab at that index; a non-Claude tab there is refused", () => {
+    const a = claudeTab("A");
+    const g = { tabs: [fileTab("x.ts"), a], activeTab: a };
+    assert.deepStrictEqual(chooseClaudeTab([g], g, 1), { kind: "one", tab: a });
+    assert.deepStrictEqual(chooseClaudeTab([g], g, 0), { kind: "notClaude" }, "the file tab was clicked while the Claude tab is active");
+    // The index names no tab (the tabs moved meanwhile): every Claude tab is offered.
+    assert.deepStrictEqual(chooseClaudeTab([g], g, 7), { kind: "ask", tabs: [a] });
+  });
+
+  it("split editors: a Claude tab clicked in the inactive group is never taken for the active group's tab at that index", () => {
     const a = claudeTab("A");
     const b = claudeTab("B");
-    const g1 = { tabs: [fileTab("x.ts"), a], activeTab: a };
-    const g2 = { tabs: [b, fileTab("y.ts")], activeTab: b };
-    assert.deepStrictEqual(chooseClaudeTab([g1, g2], g1, 1), { kind: "one", tab: a });
-    assert.deepStrictEqual(chooseClaudeTab([g1, g2], g1, 0), { kind: "one", tab: b }, "index 0 is a Claude tab only in the other group");
-    // Claude tabs at the same index in both groups: the active group's.
-    const g3 = { tabs: [fileTab("z.ts"), b], activeTab: b };
-    assert.deepStrictEqual(chooseClaudeTab([g1, g3], g3, 1), { kind: "one", tab: b });
-    // The index names no Claude tab anywhere: every Claude tab is offered.
-    assert.deepStrictEqual(chooseClaudeTab([g1, g2], g1, 7), { kind: "many", tabs: [a, b] });
+    const active = { tabs: [fileTab("x.ts"), a], activeTab: a };
+    const other = { tabs: [fileTab("y.ts"), b], activeTab: b };
+    // Without a resource (or VS Code before 1.106): both groups have a Claude tab at index 1, so the user chooses.
+    assert.deepStrictEqual(chooseClaudeTab([active, other], active, 1), { kind: "ask", tabs: [a, b] });
+    assert.deepStrictEqual(chooseClaudeTab([active, other], active, 1, "webview"), { kind: "ask", tabs: [a, b] });
+    assert.deepStrictEqual(chooseClaudeTab([active, other], active, 1, "claude"), { kind: "ask", tabs: [a, b] });
+    // Only the inactive group has a Claude tab at the index, and the resource says a Claude tab was clicked: that one.
+    const active2 = { tabs: [a, fileTab("x.ts")], activeTab: a };
+    assert.deepStrictEqual(chooseClaudeTab([active2, other], active2, 1, "claude"), { kind: "one", tab: b });
+    // The same without a resource: the clicked tab could be the active group's file tab, so the user confirms.
+    assert.deepStrictEqual(chooseClaudeTab([active2, other], active2, 1), { kind: "ask", tabs: [b] });
+  });
+
+  it("split editors: a non-Claude tab clicked while a Claude tab is active acts on no Claude tab", () => {
+    const a = claudeTab("A");
+    const b = claudeTab("B");
+    const active = { tabs: [a, fileTab("x.ts")], activeTab: a };
+    const other = { tabs: [b, fileTab("y.ts")], activeTab: b };
+    // The file tab at index 1 of either group, by its resource.
+    assert.deepStrictEqual(chooseClaudeTab([active, other], active, 1, "other"), { kind: "notClaude" });
+    assert.deepStrictEqual(chooseClaudeTab([active, other], active, undefined, "other"), { kind: "notClaude" });
+    // Without a resource the index names only file tabs: refused, not "the only Claude tab".
+    assert.deepStrictEqual(chooseClaudeTab([active, other], active, 1), { kind: "notClaude" });
+    // Another extension's webview, VS Code before 1.106: only webview tabs fit, and the one at index 1 isn't Claude's.
+    const preview = { label: "Preview", input: { viewType: "mainThreadWebview-markdown.preview" } };
+    const g = { tabs: [a, preview], activeTab: a };
+    assert.deepStrictEqual(chooseClaudeTab([g, other], g, 1, "webview"), { kind: "notClaude" });
   });
 
   it("from the Command Palette: the active tab; else the only Claude tab; several are offered; none is none", () => {
@@ -123,7 +163,7 @@ describe("Convert to cell: which tab", () => {
     const f = fileTab("x.ts");
     assert.deepStrictEqual(chooseClaudeTab([{ tabs: [f, a, b], activeTab: b }], { tabs: [f, a, b], activeTab: b }, undefined), { kind: "one", tab: b });
     assert.deepStrictEqual(chooseClaudeTab([{ tabs: [f, a], activeTab: f }], { tabs: [f, a], activeTab: f }, undefined), { kind: "one", tab: a });
-    assert.deepStrictEqual(chooseClaudeTab([{ tabs: [f, a, b], activeTab: f }], { tabs: [f, a, b], activeTab: f }, undefined), { kind: "many", tabs: [a, b] });
+    assert.deepStrictEqual(chooseClaudeTab([{ tabs: [f, a, b], activeTab: f }], { tabs: [f, a, b], activeTab: f }, undefined), { kind: "ask", tabs: [a, b] });
     assert.deepStrictEqual(chooseClaudeTab([{ tabs: [f], activeTab: f }], undefined, undefined), { kind: "none" });
     assert.deepStrictEqual(chooseClaudeTab([], undefined, 0), { kind: "none" });
   });
@@ -322,6 +362,10 @@ describe("Convert to cell: the command", () => {
     fs.rmSync(gone, { recursive: true, force: true });
     assert.strictEqual(await convertTabToCell(h.deps, [], { projectsDir: p.dir }), undefined);
     assert.deepStrictEqual(calls.errors.map((e) => e.message), [CONVERT_TEXTS.noTab, CONVERT_TEXTS.noSessions, CONVERT_TEXTS.notResumable]);
+    // The refusal names the cause, the consequence and the next step.
+    assert.match(CONVERT_TEXTS.notResumable, /nothing was started/);
+    assert.match(CONVERT_TEXTS.notResumable, /no longer exists, or its transcript doesn't name a folder/);
+    assert.match(CONVERT_TEXTS.notResumable, /Save it to a4sx first .*then use Run as cell in terminal on it in My sessions/);
     assert.strictEqual(calls.terminals.length, 0);
     assert.deepStrictEqual(h.runs, [], "the CLI is not run before the session is known");
   });
@@ -402,15 +446,66 @@ describe("Save session to a4sx, from a tab", () => {
     assert.deepStrictEqual(calls.terminals[1].sent, [`'${CLI}' 'push' '${file}'\n`]);
   });
 
-  it("the library can't be read, or names an id the CLI doesn't take: a plain push, or a refusal", async () => {
+  it("the library can't be read, or the sidebar is signed out: nothing is saved, and the user is told why and what to do", async () => {
     const h = harness();
-    await saveTabSession(h.deps, [], { projectsDir: p.dir, saved: async () => { throw new Error("offline"); } });
+    assert.strictEqual(await saveTabSession(h.deps, [], { projectsDir: p.dir, saved: async () => { throw new LibraryUnreadable(false, "offline"); } }), undefined);
+    assert.strictEqual(await saveTabSession(h.deps, [], { projectsDir: p.dir, saved: async () => { throw new Error("boom"); } }), undefined);
+    assert.strictEqual(await saveTabSession(h.deps, [], { projectsDir: p.dir, saved: async () => { throw new LibraryUnreadable(true); } }), undefined);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [SAVE_TAB_TEXTS.libraryUnreadable("offline"), SAVE_TAB_TEXTS.libraryUnreadable("boom"), SAVE_TAB_TEXTS.signedOut]);
+    assert.strictEqual(calls.terminals.length, 0, "no plain push that could add a second entry");
+    for (const m of calls.errors.map((e) => e.message)) {
+      assert.match(m, /^Nothing was saved: /, "what happened");
+      assert.match(m, /second entry instead of a new version/, "the consequence a save would have had");
+      assert.match(m, /Preview save to a4sx \(dry run\) works/, "what still works");
+    }
+    assert.match(SAVE_TAB_TEXTS.signedOut, /Sign in \(a4sx: Sign in\), then run Save session to a4sx again/);
+    assert.match(SAVE_TAB_TEXTS.libraryUnreadable("x"), /Try again when your a4sx server is reachable/);
+    // No lookup at all: the plain push.
+    await saveTabSession(h.deps, [], { projectsDir: p.dir });
     assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}'\n`]);
-    await saveTabSession(h.deps, [], { projectsDir: p.dir });   // no lookup at all
-    assert.deepStrictEqual(calls.terminals[1].sent, [`'${CLI}' 'push' '${file}'\n`]);
-    assert.strictEqual(await saveTabSession(h.deps, [], { projectsDir: p.dir, saved: async () => [{ id: "bad id" }] }), undefined);
-    assert.deepStrictEqual(calls.errors.map((e) => e.message), [SAVE_TAB_TEXTS.badEntry]);
-    assert.strictEqual(calls.terminals.length, 2);
+  });
+
+  it("an entry id the CLI doesn't take: says so and offers to save as a new entry; dismissed saves nothing", async () => {
+    const h = harness();
+    const saved = async () => [{ id: "bad id\u0007" }];
+    assert.strictEqual(await saveTabSession(h.deps, [], { projectsDir: p.dir, saved }), undefined);
+    assert.deepStrictEqual(calls.errors, [{ message: SAVE_TAB_TEXTS.badEntry("bad id"), items: [SAVE_TAB_TEXTS.saveAsNew] }]);
+    assert.match(calls.errors[0].message, /Choose Save as a new entry to save the session as a separate entry in your library; otherwise nothing is saved\.$/);
+    assert.strictEqual(calls.terminals.length, 0);
+    calls.nextErrorChoice = SAVE_TAB_TEXTS.saveAsNew;
+    assert.ok(await saveTabSession(h.deps, [], { projectsDir: p.dir, saved }));
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}'\n`]);
+  });
+
+  it("split editors: the Claude tab clicked in the inactive group is asked for, never taken from the active group", async () => {
+    const uuid = "3f2a1b0c-9d8e-4f7a-8b6c-5d4e3f2a1b0c";
+    const clicked = { scheme: "webview-panel", path: `/webview-panel/webview-${CLAUDE_PANEL}-${uuid}` };
+    const beta = { ...claudeTab("Beta work"), group: { viewColumn: 2 } };
+    const alpha = { ...claudeTab("Alpha work"), group: { viewColumn: 1 } };
+    calls.tabGroups = [{ tabs: [fileTab("a.ts"), alpha], activeTab: alpha }, { tabs: [fileTab("b.ts"), beta], activeTab: beta }];
+    const h = harness();
+    // Esc: nothing is saved.
+    assert.strictEqual(await saveTabSession(h.deps, [clicked, { groupId: 7, editorIndex: 1 }], { projectsDir: p.dir }), undefined);
+    assert.strictEqual(calls.quickPicks[0].options.title, SAVE_TAB_TEXTS.title);
+    assert.strictEqual(calls.quickPicks[0].options.placeHolder, CONVERT_TEXTS.pickClickedTabPlaceholder);
+    assert.deepStrictEqual(calls.quickPicks[0].items.map((i: any) => [i.label, i.description]), [["Alpha work", "editor group 1"], ["Beta work", "editor group 2"]]);
+    assert.strictEqual(calls.terminals.length, 0);
+    // The inactive group's tab chosen: its own session is saved.
+    calls.pickQueue.push(1);
+    assert.ok(await saveTabSession(h.deps, [clicked, { groupId: 7, editorIndex: 1 }], { projectsDir: p.dir }));
+    assert.match(calls.terminals[0].sent[0], new RegExp(`'push' '[^']*${SID2}\\.jsonl'\\n$`));
+  });
+
+  it("split editors: a non-Claude tab right-clicked while a Claude tab is active saves nothing", async () => {
+    const alpha = claudeTab("Alpha work");
+    calls.tabGroups = [{ tabs: [alpha, fileTab("a.ts")], activeTab: alpha }, { tabs: [claudeTab("Beta work"), fileTab("b.ts")] }];
+    const h = harness();
+    assert.strictEqual(await saveTabSession(h.deps, [{ scheme: "file", path: "/w/b.ts" }, { groupId: 2, editorIndex: 1 }], { projectsDir: p.dir }), undefined);
+    assert.strictEqual(await convertTabToCell(h.deps, [undefined, { groupId: 2, editorIndex: 1 }], { projectsDir: p.dir }), undefined);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [CONVERT_TEXTS.notClaudeTab, CONVERT_TEXTS.notClaudeTab]);
+    assert.strictEqual(calls.quickPicks.length, 0);
+    assert.strictEqual(calls.terminals.length, 0);
+    assert.deepStrictEqual(h.runs, []);
   });
 
   it("the preview: --dry-run, in its own terminal, and the library isn't asked", async () => {
@@ -438,7 +533,7 @@ describe("Save session to a4sx, from a tab", () => {
     assert.strictEqual(calls.terminals.length, 1);
   });
 
-  it("the library lookup: the entries that hold this session, by its slug; signed out or a failing server gives none", async () => {
+  it("the library lookup: the entries that hold this session, by its slug; signed out or a failing server rejects", async () => {
     const rows = { sessions: [
       { id: ENTRY, title: "Alpha work", sessions: ["lib-0f1e2d3c4b5a"] },
       { id: "my-base", label: "my-base", sessions: ["lib-0f1e2d3c4b5a"] },
@@ -450,11 +545,11 @@ describe("Save session to a4sx, from a tab", () => {
       const lookup = ext.savedEntries({ token: async () => "tok" });
       assert.deepStrictEqual(await lookup("0f1e2d3c4b5a"), [{ id: ENTRY, label: undefined, title: "Alpha work" }, { id: "my-base", label: "my-base", title: undefined }]);
       assert.deepStrictEqual(await lookup("aaaaaaaaaaaa"), []);
-      assert.deepStrictEqual(await ext.savedEntries({ token: async () => undefined })("0f1e2d3c4b5a"), []);
+      await assert.rejects(ext.savedEntries({ token: async () => undefined })("0f1e2d3c4b5a"), (e: unknown) => e instanceof LibraryUnreadable && e.signedOut);
       ext.runtime.fetch = async () => ({ status: 500, json: async () => ({}), headers: { get: () => null } }) as any;
-      assert.deepStrictEqual(await lookup("0f1e2d3c4b5a"), []);
+      await assert.rejects(lookup("0f1e2d3c4b5a"), (e: unknown) => e instanceof LibraryUnreadable && !e.signedOut && e.message.length > 0);
       ext.runtime.fetch = async () => { throw new Error("offline"); };
-      assert.deepStrictEqual(await lookup("0f1e2d3c4b5a"), []);
+      await assert.rejects(lookup("0f1e2d3c4b5a"), (e: unknown) => e instanceof LibraryUnreadable && !e.signedOut && /Can't reach a4sx/.test(e.message));
     } finally {
       ext.runtime.fetch = saved;
     }
@@ -504,12 +599,21 @@ describe("Convert to cell: the mesh pick, manifest and wiring", () => {
     assert.strictEqual(calls.quickPicks.length, 0);
   });
 
-  it("the tab commands are in a tab's context menu and the Command Palette, only while a Claude Code tab is active", () => {
+  it("the tab commands are in a Claude Code tab's context menu (by the clicked tab), and in the Command Palette while one is active", () => {
     const claude = `activeWebviewPanelId == '${CLAUDE_PANEL}'`;
-    const inMesh = `${claude} && a4sx.signedIn && a4sx.meshesAvailable`;
-    const expected = [[ext.CMD_CONVERT_TAB, claude], [ext.CMD_CONVERT_TAB_IN_MESH, inMesh], [ext.CMD_SAVE_TAB, claude], [ext.CMD_PREVIEW_TAB_SAVE, claude]];
-    assert.deepStrictEqual(pkg.contributes.menus["editor/title/context"].map((m: any) => [m.command, m.when]), expected);
+    const tab = `resourceScheme == 'webview-panel' && (resourceFilename =~ /^webview-${CLAUDE_PANEL}-/ || ${claude} && resourceFilename =~ /^webview-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)`;
+    const mesh = " && a4sx.signedIn && a4sx.meshesAvailable";
+    const menu = [[ext.CMD_CONVERT_TAB, tab], [ext.CMD_CONVERT_TAB_IN_MESH, tab + mesh], [ext.CMD_SAVE_TAB, tab], [ext.CMD_PREVIEW_TAB_SAVE, tab]];
+    assert.deepStrictEqual(pkg.contributes.menus["editor/title/context"].map((m: any) => [m.command, m.when]), menu);
     assert.deepStrictEqual(pkg.contributes.menus["editor/title/context"].map((m: any) => m.group), ["a4sx@1", "a4sx@2", "a4sx@3", "a4sx@4"]);
+    // The clause's two patterns, against the resource names VS Code gives a clicked tab (resourceFilename).
+    const [byType, noType] = [...tab.matchAll(/=~ \/(.*?)\/(?= |\))/g)].map((m) => new RegExp(m[1]));
+    const uuid = "3f2a1b0c-9d8e-4f7a-8b6c-5d4e3f2a1b0c";
+    assert.ok(byType.test(`webview-${CLAUDE_PANEL}-${uuid}`), "VS Code 1.106 and newer");
+    assert.ok(!byType.test(`webview-markdown.preview-${uuid}`) && !byType.test(`webview-${uuid}`));
+    assert.ok(noType.test(`webview-${uuid}`), "before 1.106: no view type, so the active panel decides");
+    assert.ok(!noType.test(`webview-${CLAUDE_PANEL}-${uuid}`) && !noType.test(`webview-markdown.preview-${uuid}`));
+    const expected = [[ext.CMD_CONVERT_TAB, claude], [ext.CMD_CONVERT_TAB_IN_MESH, claude + mesh], [ext.CMD_SAVE_TAB, claude], [ext.CMD_PREVIEW_TAB_SAVE, claude]];
     const palette = pkg.contributes.menus.commandPalette.filter((m: any) => expected.some(([id]) => id === m.command));
     assert.deepStrictEqual(palette.map((m: any) => [m.command, m.when]), expected);
     const titles = Object.fromEntries(pkg.contributes.commands.map((c: any) => [c.command, c.title]));
@@ -528,7 +632,8 @@ describe("Convert to cell: the mesh pick, manifest and wiring", () => {
       assert.strictEqual(await calls.commands.get(ext.CMD_CONVERT_TAB_IN_MESH)!(), undefined);
       assert.strictEqual(await calls.commands.get(ext.CMD_SAVE_TAB)!(undefined, { groupId: 0, editorIndex: 0 }), undefined);
       assert.strictEqual(await calls.commands.get(ext.CMD_PREVIEW_TAB_SAVE)!(), undefined);
-      assert.deepStrictEqual(calls.errors.map((e) => e.message), [CONVERT_TEXTS.noTab, CONVERT_TEXTS.noTab, CONVERT_TEXTS.noTab, CONVERT_TEXTS.noTab]);
+      // From the menu the clicked tab (index 0) is the file tab; from the Command Palette there is no Claude Code tab.
+      assert.deepStrictEqual(calls.errors.map((e) => e.message), [CONVERT_TEXTS.notClaudeTab, CONVERT_TEXTS.noTab, CONVERT_TEXTS.notClaudeTab, CONVERT_TEXTS.noTab]);
     } finally {
       ctx.subscriptions.forEach((d) => d.dispose());
     }
