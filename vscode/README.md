@@ -95,7 +95,7 @@ The list is read when the view is first shown, on **Refresh cells**, after each 
 
 **Convert to cell** (right-click a Claude Code tab, or the Command Palette while such a tab is active) runs the session of that tab in a new cell:
 
-1. The extension finds the tab's session on this computer. The Claude Code extension doesn't tell other extensions which session a tab shows, so the tab is matched by its title, which Claude Code writes into the session's transcript. If no session or more than one has that title, the extension lists this computer's newest sessions and you choose. From a transcript only its title records are read.
+1. The extension finds the tab's session on this computer. The Claude Code extension doesn't tell other extensions which session a tab shows, so the tab is matched by its title, which Claude Code writes into the session's transcript. When exactly one session has that title, you confirm it before anything runs: the dialog shows its title, when it last changed, its first prompt (shortened) and the start of its session id, with **Choose another…** to pick a different one. If no session or more than one has that title, nothing is matched automatically: the extension lists this computer's newest sessions with the same details and you choose. From a transcript only its title records and its first prompt are read. They are shown to you and never logged, kept or put on a command line.
 2. Choose the options, the same two as for **Run as cell in terminal**. The reduced-isolation dialog is shown as for every cell.
 3. A terminal runs `a4sx launch --new-cell [options] -- --resume <session id>` in the folder the session ran in. The CLI opens your browser, where you approve the new cell and pick its mesh.
 
@@ -107,8 +107,9 @@ The tab isn't turned into a cell in place: the session continues in the terminal
 
 The same context menu has two actions that save the session of that tab to your library. The session is found as for **Convert to cell**.
 
-- **Save session to a4sx** opens a terminal that runs `a4sx push <transcript>`. If your library already holds that session, the save becomes a new version of its entry (`--into <entry>`); if it holds it more than once, you choose the entry. When the extension can't read your library (you aren't signed in in the sidebar, or you are offline), it saves nothing and says why: a plain push could add the session as a second entry instead of a new version. If the entry's id is one the a4sx CLI doesn't take, the extension says so and offers **Save as a new entry**. The CLI scrubs the transcript before it uploads it and prints what it changed.
-- **Preview save to a4sx (dry run)** runs `a4sx push <transcript> --dry-run`: the CLI lists what its scrub would change and uploads nothing. It needs no sign-in.
+- **Save session to a4sx** opens a terminal that runs `a4sx push <transcript>`. If your library already holds that session, the save becomes a new version of its entry (`--into <entry>`); if it holds it more than once, you choose the entry. When the extension can't read your library (you aren't signed in in the sidebar, your sign-in has expired, or you are offline), it saves nothing and says why: a plain push could add the session as a second entry instead of a new version. If the entry's id is one the a4sx CLI doesn't take, the extension says so and offers **Save as a new entry**. The CLI scrubs the transcript before it uploads it and prints what it changed.
+- **Save session to a4sx** asks you to confirm the session as above (**Save this session**, **Choose another…** or Cancel). The terminal names the session it saves before the CLI's output.
+- **Preview save to a4sx (dry run)** doesn't ask for that confirm, since it uploads nothing; its terminal names the session the same way. It runs `a4sx push <transcript> --dry-run`: the CLI lists what its scrub would change and uploads nothing. It needs no sign-in.
 
 **a4sx: Save this session** is a different command: it saves the most recently changed Claude Code session on this computer (`a4sx push --latest`), which need not be the tab you are looking at.
 

@@ -13,12 +13,12 @@ import { newCellRunArgs } from "../../cells";
 import { CELL_CMD_TEXTS, CellCommandDeps, CONSENT_KEY, machineKey } from "../../cellCommands";
 import { CellsProvider, CliOutput, CliResolution } from "../../cellsView";
 import { IN_SESSION_MESSAGE } from "../../cliJson";
-import { CONVERT_TEXTS, convertTabToCell, meshPickItems, sessionPickItems } from "../../convertTab";
+import { changedText, CONVERT_TEXTS, convertTabToCell, meshPickItems, sessionDetail, sessionPickItems } from "../../convertTab";
 import { projectDirName } from "../../nativeSeed";
 import { RUN_AS_CELL_TEXTS } from "../../runAsCell";
 import { entryPickItems, LibraryUnreadable, pushArgs, SAVE_TAB_TEXTS, saveTabSession } from "../../saveTab";
 import {
-  chooseClaudeTab, CLAUDE_PANEL, clickedKind, editorIndexOf, isClaudeTab, labelMatches, recentSessions, sessionsForLabel, slugOf, TAIL_BYTES, transcriptTitle,
+  chooseClaudeTab, CLAUDE_PANEL, clickedKind, editorIndexOf, firstPrompt, isClaudeTab, labelMatches, PROMPT_MAX, recentSessions, sessionsForLabel, slugOf, TAIL_BYTES, transcriptTitle,
 } from "../../tabSession";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -30,6 +30,7 @@ const MESH = `msh_${"a".repeat(32)}`;
 const SID = "0f1e2d3c-4b5a-4978-8a6b-5c4d3e2f1a0b";
 const SID2 = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
 const SID3 = "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e";
+const SID4 = "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f";
 
 const claudeTab = (label: string) => ({ label, input: { viewType: `mainThreadWebview-${CLAUDE_PANEL}` } });
 const fileTab = (label: string) => ({ label, input: { uri: { scheme: "file", fsPath: `/w/${label}` } } });
@@ -228,18 +229,42 @@ describe("Convert to cell: which session", () => {
     }
   });
 
-  it("the session pick shows title, folder, age and the id's start; the slug is the id's first 12 letters and digits", () => {
+  it("the first prompt: the first user record the user typed, cleaned and shortened; meta, tool results and command wrappers are skipped", () => {
+    const u = (content: unknown, extra: Record<string, unknown> = {}) => line({ type: "user", message: { role: "user", content }, ...extra });
+    const head = [
+      line({ type: "summary", summary: "x" }),
+      u("ignored, meta", { isMeta: true }),
+      u("<command-name>/clear</command-name>"),
+      u([{ type: "tool_result", content: "out" }]),
+      u(""),
+      u([{ type: "text", text: "Fix the\u001b[31m login\u009b bug\n\nplease" }]),
+      u("later prompt"),
+    ].join("\n");
+    assert.strictEqual(firstPrompt(head), "Fix the [31m login bug please");
+    assert.strictEqual(firstPrompt(u("y".repeat(500))), `${"y".repeat(PROMPT_MAX - 1)}…`);
+    assert.strictEqual(Array.from(firstPrompt(u("😀".repeat(300)))!).length, PROMPT_MAX, "shortened by characters, not UTF-16 units");
+    assert.strictEqual(firstPrompt(line({ type: "assistant", message: { role: "assistant", content: "user" } })), undefined);
+    assert.strictEqual(firstPrompt(`{"type":"user","message":{"role":"user","content":"cut`), undefined);
+    assert.strictEqual(firstPrompt(""), undefined);
+  });
+
+  it("the session pick shows title, folder, last change, the id's start and the first prompt; the slug is the id's first 12 letters and digits", () => {
     const now = Date.parse("2026-11-01T12:00:00Z");
     const rows = sessionPickItems([
-      { sessionId: SID, folder: "-w-proj", file: "", mtime: now - 20_000, title: "Alpha work" },
+      { sessionId: SID, folder: "-w-proj", file: "", mtime: now - 20_000, title: "Alpha work", firstPrompt: "Fix the login bug" },
       { sessionId: SID2, folder: "-w-other", file: "", mtime: now - 5 * 60_000 },
       { sessionId: SID3, folder: "-w-old", file: "", mtime: now - 3 * 3_600_000, title: "Older" },
       { sessionId: SID3, folder: "-w-old", file: "", mtime: now - 5 * 86_400_000, title: "Oldest" },
     ], now);
-    assert.deepStrictEqual(rows.map((r) => [r.label, r.description]), [
-      ["Alpha work", "-w-proj · just now · 0f1e2d3c"], [CONVERT_TEXTS.untitled, "-w-other · 5 min ago · 1a2b3c4d"],
-      ["Older", "-w-old · 3 h ago · 2b3c4d5e"], ["Oldest", "-w-old · 5 d ago · 2b3c4d5e"],
+    const at = (ms: number) => changedText(now - ms, now);
+    assert.deepStrictEqual(rows.map((r) => [r.label, r.description, r.detail]), [
+      ["Alpha work", `-w-proj · ${at(20_000)} · 0f1e2d3c`, "\"Fix the login bug\""],
+      [CONVERT_TEXTS.untitled, `-w-other · ${at(5 * 60_000)} · 1a2b3c4d`, `First prompt: ${CONVERT_TEXTS.noPrompt}`],
+      ["Older", `-w-old · ${at(3 * 3_600_000)} · 2b3c4d5e`, `First prompt: ${CONVERT_TEXTS.noPrompt}`],
+      ["Oldest", `-w-old · ${at(5 * 86_400_000)} · 2b3c4d5e`, `First prompt: ${CONVERT_TEXTS.noPrompt}`],
     ]);
+    assert.match(at(20_000), /^\d{4}-\d\d-\d\d \d\d:\d\d, just now$/);
+    assert.match(at(5 * 86_400_000), /, 5 d ago$/);
     assert.strictEqual(slugOf(SID), "0f1e2d3c4b5a");
   });
 });
@@ -249,6 +274,8 @@ describe("Convert to cell: the command", () => {
   beforeEach(() => {
     resetCalls();
     p = projects();
+    // A session matched by its title is confirmed (the confirm itself is tested below).
+    calls.modalAnswers.set(CONVERT_TEXTS.confirm, CONVERT_TEXTS.confirmYes);
   });
   afterEach(() => p.remove());
 
@@ -282,6 +309,20 @@ describe("Convert to cell: the command", () => {
     assert.deepStrictEqual(calls.closedTabs, []);
   });
 
+  it("the session matched by title is confirmed first; Cancel starts nothing and runs no CLI", async () => {
+    p.session(p.cwd("alpha"), SID, [{ type: "ai-title", aiTitle: "Alpha work" }]);
+    const tab = claudeTab("Alpha work");
+    calls.tabGroups = [{ tabs: [tab], activeTab: tab }];
+    calls.modalAnswers.clear();
+    const h = harness();
+    assert.strictEqual(await convertTabToCell(h.deps, [], { projectsDir: p.dir }), undefined);   // Cancel
+    assert.deepStrictEqual(calls.modals.map((m) => [m.message, m.items]), [[CONVERT_TEXTS.confirm, [CONVERT_TEXTS.confirmYes, CONVERT_TEXTS.chooseAnother]]]);
+    assert.match(calls.modals[0].detail!, /^Title: Alpha work\nLast changed: .+\nFirst prompt: \(not found\)\nSession: 0f1e2d3c /);
+    assert.strictEqual(calls.quickPicks.length, 0);
+    assert.strictEqual(calls.terminals.length, 0);
+    assert.deepStrictEqual(h.runs, []);
+  });
+
   it("Close tab closes the converted tab", async () => {
     p.session(p.cwd("alpha"), SID, [{ type: "ai-title", aiTitle: "Alpha work" }]);
     const tab = claudeTab("Alpha work");
@@ -313,13 +354,14 @@ describe("Convert to cell: the command", () => {
     calls.tabGroups = [{ tabs: [tab], activeTab: tab }];
     calls.pickQueue.push([0]);
     assert.strictEqual(await convertTabToCell(harness(fakeMemento()).deps, [], { projectsDir: p.dir }), undefined);
-    assert.deepStrictEqual(calls.modals.map((m) => [m.kind, m.message, m.items]), [["warning", CELL_CMD_TEXTS.consentTitle, [CELL_CMD_TEXTS.consentAccept]]]);
+    const consent = () => calls.modals.filter((m) => m.message !== CONVERT_TEXTS.confirm);
+    assert.deepStrictEqual(consent().map((m) => [m.kind, m.message, m.items]), [["warning", CELL_CMD_TEXTS.consentTitle, [CELL_CMD_TEXTS.consentAccept]]]);
     assert.strictEqual(calls.terminals.length, 0);
     assert.deepStrictEqual(calls.infoPrompts, []);
     // Keep my sign-in off: no flag, no consent dialog.
     calls.pickQueue.push([]);
     assert.ok(await convertTabToCell(harness(fakeMemento()).deps, [], { projectsDir: p.dir }));
-    assert.strictEqual(calls.modals.length, 1);
+    assert.strictEqual(consent().length, 1);
     assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--new-cell' '--' '--resume' '${SID}'\n`]);
   });
 
@@ -335,7 +377,8 @@ describe("Convert to cell: the command", () => {
     assert.strictEqual(await convertTabToCell(h.deps, [], { projectsDir: p.dir }), undefined);   // Esc
     const pick = calls.quickPicks[0];
     assert.strictEqual(pick.options.title, CONVERT_TEXTS.pickSessionTitle);
-    assert.strictEqual(pick.options.placeHolder, CONVERT_TEXTS.pickSessionPlaceholder("Same title"));
+    assert.strictEqual(pick.options.placeHolder, CONVERT_TEXTS.pickDuplicatePlaceholder("Same title", 2));
+    assert.ok(!calls.modals.some((m) => m.message === CONVERT_TEXTS.confirm), "two sessions share the title: no auto-match, no confirm");
     assert.deepStrictEqual(pick.items.map((i: any) => [i.label, i.session.sessionId]), [["Same title", SID3], ["Same title", SID], ["Other", SID2]]);
     assert.strictEqual(calls.terminals.length, 0);
     calls.pickQueue.push(1, [0]);
@@ -396,6 +439,8 @@ describe("Save session to a4sx, from a tab", () => {
     p.session(p.cwd("beta"), SID2, [{ type: "ai-title", aiTitle: "Beta work" }]);   // newer: `push --latest` would save this one
     const tab = claudeTab("Alpha work");
     calls.tabGroups = [{ tabs: [fileTab("a.ts"), tab], activeTab: tab }];
+    // A session matched by its title is confirmed (the confirm itself is tested below).
+    calls.modalAnswers.set(SAVE_TAB_TEXTS.confirm, SAVE_TAB_TEXTS.confirmYes);
   });
   afterEach(() => p.remove());
 
@@ -508,6 +553,111 @@ describe("Save session to a4sx, from a tab", () => {
     assert.deepStrictEqual(h.runs, []);
   });
 
+  it("a session matched by title is confirmed with its title, last change, first prompt and short id before the save", async () => {
+    resetCalls();
+    p.session(p.cwd("alpha"), SID, [{ type: "user", message: { role: "user", content: "Fix the login bug" } }, { type: "ai-title", aiTitle: "Alpha work" }]);
+    file = path.join(p.dir, projectDirName(p.cwd("alpha")), `${SID}.jsonl`);
+    const tab = claudeTab("Alpha work");
+    calls.tabGroups = [{ tabs: [tab], activeTab: tab }];
+    calls.modalChoices.push(SAVE_TAB_TEXTS.confirmYes);
+    const t = await saveTabSession(harness().deps, [], { projectsDir: p.dir });
+    assert.ok(t);
+    assert.strictEqual(calls.modals.length, 1);
+    const m = calls.modals[0];
+    assert.deepStrictEqual([m.kind, m.message, m.items], ["info", SAVE_TAB_TEXTS.confirm, [SAVE_TAB_TEXTS.confirmYes, CONVERT_TEXTS.chooseAnother]]);
+    assert.match(m.detail!, /^Title: Alpha work\nLast changed: \d{4}-\d\d-\d\d \d\d:\d\d, .+\nFirst prompt: "Fix the login bug"\nSession: 0f1e2d3c \(in .+alpha\)$/);
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}'\n`]);
+    // The terminal names the session too, written to the terminal and not sent to the shell.
+    assert.strictEqual(calls.terminals[0].options.message, SAVE_TAB_TEXTS.banner(false, m.detail!));
+    assert.ok(!calls.terminals[0].sent.join("").includes("Fix the login bug"));
+  });
+
+  it("the confirm's Cancel saves nothing; Choose another… shows the session pick, and only an explicit pick saves", async () => {
+    resetCalls();
+    const tab = claudeTab("Alpha work");
+    calls.tabGroups = [{ tabs: [tab], activeTab: tab }];
+    const h = harness();
+    calls.modalChoices.push(undefined);   // Cancel
+    assert.strictEqual(await saveTabSession(h.deps, [], { projectsDir: p.dir }), undefined);
+    assert.strictEqual(calls.quickPicks.length, 0);
+    assert.strictEqual(calls.terminals.length, 0);
+    calls.modalChoices.push(CONVERT_TEXTS.chooseAnother);   // then Esc in the pick
+    assert.strictEqual(await saveTabSession(h.deps, [], { projectsDir: p.dir }), undefined);
+    assert.deepStrictEqual(calls.quickPicks[0].items.map((i: any) => i.session.sessionId), [SID, SID2], "the title's match first");
+    assert.strictEqual(calls.terminals.length, 0);
+    calls.modalChoices.push(CONVERT_TEXTS.chooseAnother);
+    calls.pickQueue.push(1);
+    assert.ok(await saveTabSession(h.deps, [], { projectsDir: p.dir }));
+    assert.match(calls.terminals[0].sent[0], new RegExp(`'push' '[^']*${SID2}\\.jsonl'\\n$`));
+  });
+
+  it("two sessions with the tab's title: no auto-match and no confirm, the pick shows both with their details", async () => {
+    resetCalls();
+    const older = p.session(p.cwd("delta"), SID3, [{ type: "user", message: { role: "user", content: "Write the docs" } }, { type: "ai-title", aiTitle: "Alpha work" }]);
+    p.session(p.cwd("gamma"), SID4, [{ type: "user", message: { role: "user", content: "Fix the login bug" } }, { type: "ai-title", aiTitle: "Alpha work" }]);
+    const tab = claudeTab("Alpha work");
+    calls.tabGroups = [{ tabs: [tab], activeTab: tab }];
+    calls.modalAnswers.clear();
+    const h = harness();
+    assert.strictEqual(await saveTabSession(h.deps, [], { projectsDir: p.dir }), undefined);   // Esc
+    assert.strictEqual(calls.modals.length, 0);
+    const pick = calls.quickPicks[0];
+    assert.strictEqual(pick.options.placeHolder, CONVERT_TEXTS.pickDuplicatePlaceholder("Alpha work", 3), "the beforeEach session has this title too");
+    assert.deepStrictEqual(pick.items.slice(0, 3).map((i: any) => [i.label, i.session.sessionId, i.detail]), [
+      ["Alpha work", SID4, "\"Fix the login bug\""], ["Alpha work", SID3, "\"Write the docs\""], ["Alpha work", SID, `First prompt: ${CONVERT_TEXTS.noPrompt}`],
+    ]);
+    assert.ok(pick.items.every((i: any) => i.description.includes(i.session.sessionId.slice(0, 8))));
+    assert.strictEqual(calls.terminals.length, 0);
+    calls.pickQueue.push(1);
+    assert.ok(await saveTabSession(h.deps, [], { projectsDir: p.dir }));
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${older}'\n`]);
+  });
+
+  it("Save never pushes without a unique title match the user confirmed, or the user's explicit pick", async () => {
+    p.session(p.cwd("d1"), SID3, [{ type: "ai-title", aiTitle: "Dup" }]);
+    p.session(p.cwd("d2"), SID4, [{ type: "ai-title", aiTitle: "Dup" }]);
+    let runs = 0;
+    for (const label of ["Alpha work", "Dup", "Claude Code"]) {
+      for (const answer of [SAVE_TAB_TEXTS.confirmYes, CONVERT_TEXTS.chooseAnother, undefined]) {
+        for (const pickAnswer of [undefined, 0]) {
+          resetCalls();
+          const tab = claudeTab(label);
+          calls.tabGroups = [{ tabs: [tab], activeTab: tab }];
+          calls.modalChoices.push(answer);
+          calls.pickQueue.push(pickAnswer);
+          const t = await saveTabSession(harness().deps, [], { projectsDir: p.dir });
+          const confirmed = calls.modals.some((m) => m.message === SAVE_TAB_TEXTS.confirm) && answer === SAVE_TAB_TEXTS.confirmYes;
+          const picked = calls.quickPicks.length === 1 && pickAnswer !== undefined;
+          const where = `${label} / ${answer} / ${pickAnswer}`;
+          assert.strictEqual(calls.terminals.length, confirmed || picked ? 1 : 0, where);
+          assert.strictEqual(!!t, confirmed || picked, where);
+          assert.ok(!(confirmed && picked), where);
+          if (label !== "Alpha work") {
+            assert.ok(!calls.modals.some((m) => m.message === SAVE_TAB_TEXTS.confirm), `${where}: no confirm without a unique match`);
+          }
+          if (confirmed) {
+            assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}'\n`], where);
+          }
+          runs += t ? 1 : 0;
+        }
+      }
+    }
+    // Alpha work: confirmed (2, whatever the unused pick), Choose another… + pick (1); Dup and no match: the pick (3 each).
+    assert.strictEqual(runs, 2 + 1 + 3 + 3);
+  });
+
+  it("the preview isn't confirmed, and its terminal names the session (title, last change, first prompt, short id)", async () => {
+    resetCalls();
+    const tab = claudeTab("Alpha work");
+    calls.tabGroups = [{ tabs: [tab], activeTab: tab }];
+    assert.ok(await saveTabSession(harness().deps, [], { projectsDir: p.dir, preview: true }));
+    assert.strictEqual(calls.modals.length, 0);
+    const msg: string = calls.terminals[0].options.message;
+    assert.ok(msg.startsWith("Preview save to a4sx (dry run) of this session:\r\n  Title: Alpha work\r\n  Last changed: "), msg);
+    assert.match(msg, /\r\n  First prompt: \(not found\)\r\n  Session: 0f1e2d3c \(in .+alpha\)\r\n$/);
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}' '--dry-run'\n`]);
+  });
+
   it("the preview: --dry-run, in its own terminal, and the library isn't asked", async () => {
     let asked = 0;
     calls.shell = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
@@ -548,6 +698,9 @@ describe("Save session to a4sx, from a tab", () => {
       await assert.rejects(ext.savedEntries({ token: async () => undefined })("0f1e2d3c4b5a"), (e: unknown) => e instanceof LibraryUnreadable && e.signedOut);
       ext.runtime.fetch = async () => ({ status: 500, json: async () => ({}), headers: { get: () => null } }) as any;
       await assert.rejects(lookup("0f1e2d3c4b5a"), (e: unknown) => e instanceof LibraryUnreadable && !e.signedOut && e.message.length > 0);
+      // An expired sign-in is told as signed out (sign in again), not as an unreachable server.
+      ext.runtime.fetch = async () => ({ status: 401, json: async () => ({ error: { code: "auth_invalid", message: "x" } }), headers: { get: () => null } }) as any;
+      await assert.rejects(lookup("0f1e2d3c4b5a"), (e: unknown) => e instanceof LibraryUnreadable && e.signedOut);
       ext.runtime.fetch = async () => { throw new Error("offline"); };
       await assert.rejects(lookup("0f1e2d3c4b5a"), (e: unknown) => e instanceof LibraryUnreadable && !e.signedOut && /Can't reach a4sx/.test(e.message));
     } finally {

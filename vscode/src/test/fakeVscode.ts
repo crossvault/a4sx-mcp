@@ -49,6 +49,8 @@ export interface Calls {
   modals: { kind: "info" | "warning" | "error"; message: string; items: string[]; detail?: string }[];
   /** What the next modals resolve to, in order (a button label, or undefined = Cancel). Empty = Cancel. */
   modalChoices: (string | undefined)[];
+  /** Standing answers to modals by message, used before modalChoices (which they don't consume). */
+  modalAnswers: Map<string, string | undefined>;
   /** What the next input boxes resolve to, in order; when empty, `nextInput` answers. */
   inputQueue: (string | undefined)[];
   /** What the next quick picks resolve to (indexes; an array of indexes for canPickMany), in order; when empty, `nextPick` answers. */
@@ -102,6 +104,7 @@ export const calls: Calls = {
   extensionKind: 1,
   modals: [],
   modalChoices: [],
+  modalAnswers: new Map(),
   inputQueue: [],
   pickQueue: [],
   treeViews: new Map(),
@@ -146,6 +149,7 @@ export function resetCalls(): void {
   calls.extensionKind = 1;
   calls.modals.length = 0;
   calls.modalChoices.length = 0;
+  calls.modalAnswers.clear();
   calls.inputQueue.length = 0;
   calls.pickQueue.length = 0;
   calls.treeViews.clear();
@@ -299,15 +303,15 @@ const fake = {
       if (isModal(rest[0])) {
         const items = rest.slice(1) as string[];
         calls.modals.push({ kind: "error", message, items, detail: (rest[0] as { detail?: string }).detail });
-        return calls.modalChoices.shift();
+        return calls.modalAnswers.has(message) ? calls.modalAnswers.get(message) : calls.modalChoices.shift();
       }
       calls.errors.push({ message, items: rest as string[] });
       return calls.nextErrorChoice;
     },
     async showInformationMessage(message: string, options?: unknown, ...items: string[]) {
       if (isModal(options)) {
-        calls.modals.push({ kind: "info", message, items });
-        return calls.modalChoices.shift();
+        calls.modals.push({ kind: "info", message, items, detail: (options as { detail?: string }).detail });
+        return calls.modalAnswers.has(message) ? calls.modalAnswers.get(message) : calls.modalChoices.shift();
       }
       calls.infos.push(message);
       const buttons = [typeof options === "string" ? options : undefined, ...items].filter((x): x is string => typeof x === "string");
@@ -322,7 +326,7 @@ const fake = {
     async showWarningMessage(message: string, options?: unknown, ...items: string[]) {
       if (isModal(options)) {
         calls.modals.push({ kind: "warning", message, items, detail: (options as { detail?: string }).detail });
-        return calls.modalChoices.shift();
+        return calls.modalAnswers.has(message) ? calls.modalAnswers.get(message) : calls.modalChoices.shift();
       }
       calls.warnings.push(message);
       return undefined;

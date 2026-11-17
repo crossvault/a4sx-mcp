@@ -3,7 +3,7 @@
 // 0.8.0: "Save session to a4sx" and "Preview save to a4sx (dry run)" in the context menu of a Claude Code tab (and
 // in the Command Palette while such a tab is active). Unlike "Save this session" (`a4sx push --latest`, the newest
 // transcript on this computer), these save the session of that tab: its transcript is found as for Convert to cell
-// (tabSession.ts), then a terminal runs
+// (tabSession.ts) and, for a save, confirmed by the user (or picked), then a terminal runs
 //   a4sx push <transcript> [--into <library entry>]      (save)
 //   a4sx push <transcript> --dry-run                     (preview: uploads nothing, needs no sign-in)
 // `--into` is added when the library already holds this session, so the save becomes a new version of that entry.
@@ -13,7 +13,7 @@
 import * as vscode from "vscode";
 import { CellCommandDeps, ensureCli } from "./cellCommands";
 import { CLI_NAME } from "./cli";
-import { claudeTabOf, tabSessionOf } from "./convertTab";
+import { claudeTabOf, sessionDetail, tabSessionOf } from "./convertTab";
 import { openCommandTerminal } from "./resume";
 import { slugOf } from "./tabSession";
 import { SESSION_ID } from "./terminalCommand";
@@ -24,13 +24,16 @@ export const SAVE_TAB_TEXTS = {
   title: "Save session to a4sx",
   previewTitle: "Preview save to a4sx",
   pickSessionTitle: (title: string) => `${title}: which session is this tab?`,
+  confirm: "Save this session to a4sx?",
+  confirmYes: "Save this session",
+  banner: (preview: boolean, detail: string) => `${preview ? "Preview save to a4sx (dry run) of this session:" : "Save session to a4sx, this session:"}\r\n${detail.split("\n").map((l) => `  ${l}`).join("\r\n")}\r\n`,
   pickEntryTitle: "Save session to a4sx: which library entry?",
   pickEntryPlaceholder: "This session is in your library more than once. Choose the entry that gets the new version",
   newEntry: "$(add) Save without choosing an entry",
   newEntryDetail: "Runs a plain `a4sx push`; the server files the save.",
   badEntry: (id: string) => `The library entry that holds this session has an id the a4sx CLI doesn't take ("${id}"), so the save can't become a new version of it. Choose Save as a new entry to save the session as a separate entry in your library; otherwise nothing is saved.`,
   saveAsNew: "Save as a new entry",
-  signedOut: "Nothing was saved: you aren't signed in to a4sx in the sidebar, so the extension can't check whether your library already holds this session. Saved now, it could become a second entry instead of a new version. Sign in (a4sx: Sign in), then run Save session to a4sx again. Preview save to a4sx (dry run) works without sign-in.",
+  signedOut: "Nothing was saved: you aren't signed in to a4sx in the sidebar, or your sign-in is no longer valid, so the extension can't check whether your library already holds this session. Saved now, it could become a second entry instead of a new version. Sign in (a4sx: Sign in), then run Save session to a4sx again. Preview save to a4sx (dry run) works without sign-in.",
   libraryUnreadable: (reason: string) => `Nothing was saved: your a4sx library couldn't be read (${reason}), so the extension can't check whether it already holds this session. Saved now, it could become a second entry instead of a new version. Try again when your a4sx server is reachable. Preview save to a4sx (dry run) works meanwhile.`,
 };
 
@@ -96,7 +99,8 @@ export async function saveTabSession(deps: CellCommandDeps, args: readonly unkno
   if (!tab) {
     return undefined;
   }
-  const session = await tabSessionOf(tab, options.projectsDir, t.pickSessionTitle(title));
+  // A save is confirmed (or the session picked); the dry run uploads nothing, so it isn't, and its terminal names the session.
+  const session = await tabSessionOf(tab, options.projectsDir, t.pickSessionTitle(title), options.preview ? undefined : { message: t.confirm, yes: t.confirmYes });
   if (!session) {
     return undefined;
   }
@@ -130,7 +134,7 @@ export async function saveTabSession(deps: CellCommandDeps, args: readonly unkno
     if (choice !== t.saveAsNew) {
       return undefined;
     }
-    return openCommandTerminal(t.terminal, cli, CLI_NAME, pushArgs(session.file)!);
+    return openCommandTerminal(t.terminal, cli, CLI_NAME, pushArgs(session.file)!, undefined, undefined, t.banner(false, sessionDetail(session)));
   }
-  return openCommandTerminal(options.preview ? t.previewTerminal : t.terminal, cli, CLI_NAME, pushed);
+  return openCommandTerminal(options.preview ? t.previewTerminal : t.terminal, cli, CLI_NAME, pushed, undefined, undefined, t.banner(options.preview === true, sessionDetail(session)));
 }

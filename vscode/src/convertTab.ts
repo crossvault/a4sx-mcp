@@ -11,7 +11,7 @@ import * as vscode from "vscode";
 import { CellCommandDeps } from "./cellCommands";
 import { findLocalSession } from "./localSession";
 import { runAsCell } from "./runAsCell";
-import { chooseClaudeTab, clickedKind, editorIndexOf, RecentSession, recentSessions, sessionsForLabel, slugOf } from "./tabSession";
+import { chooseClaudeTab, clickedKind, editorIndexOf, readFirstPrompt, RecentSession, recentSessions, sessionsForLabel, slugOf } from "./tabSession";
 
 export const CONVERT_TEXTS = {
   noTab: "This works on a Claude Code tab. Open the session's tab, then run it from the tab's context menu.",
@@ -23,7 +23,14 @@ export const CONVERT_TEXTS = {
   noSessions: "No Claude Code session was found on this computer.",
   pickSessionTitle: "Convert to cell: which session is this tab?",
   pickSessionPlaceholder: (label: string) => `The tab "${label}" couldn't be matched to one session. Choose its session`,
+  pickDuplicatePlaceholder: (label: string, n: number) => `${n} sessions on this computer are titled "${label}". Choose this tab's session`,
   untitled: "(no title yet)",
+  noPrompt: "(not found)",
+  confirm: "Convert this session to a cell?",
+  confirmYes: "Convert this session",
+  chooseAnother: "Choose another…",
+  detail: (title: string, changed: string, prompt: string, id: string, folder: string) =>
+    `Title: ${title}\nLast changed: ${changed}\nFirst prompt: ${prompt}\nSession: ${id} (in ${folder})`,
   notResumable: "This session can't be resumed on this computer, so nothing was started: `claude --resume` needs the folder the session ran in, and that folder no longer exists, or its transcript doesn't name a folder Claude Code files it under. Save it to a4sx first (Save session to a4sx in the tab's context menu), then use Run as cell in terminal on it in My sessions: the cell fetches it from your library.",
   started: "The session now continues as a cell in the terminal. Close its tab so it isn't used in two places?",
   closeTab: "Close tab",
@@ -52,13 +59,35 @@ function ago(mtime: number, now: number): string {
   return min < 1 ? "just now" : min < 60 ? `${min} min ago` : min < 48 * 60 ? `${Math.round(min / 60)} h ago` : `${Math.round(min / 1440)} d ago`;
 }
 
-/** The session pick's rows: title, then the session's folder name and when it was last written. Newest first. */
-export function sessionPickItems(sessions: readonly RecentSession[], now: number = Date.now()): { label: string; description: string; session: RecentSession }[] {
+/** When a transcript was last written: local date and time, then how long ago ("2026-11-01 13:05, 5 min ago"). */
+export function changedText(mtime: number, now: number = Date.now()): string {
+  const d = new Date(mtime);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}, ${ago(mtime, now)}`;
+}
+
+/** The lines that tell a session apart: title, last change, first prompt, short id and folder. */
+export function sessionDetail(s: RecentSession, now: number = Date.now()): string {
+  const t = CONVERT_TEXTS;
+  return t.detail(s.title ?? t.untitled, changedText(s.mtime, now), s.firstPrompt ? `"${s.firstPrompt}"` : t.noPrompt, s.sessionId.slice(0, 8),
+    // eslint-disable-next-line no-control-regex
+    s.folder.replace(/[\x00-\x1f\x7f-\x9f]/g, " "));
+}
+
+/** The session pick's rows: title; the folder, when it was last written and the short id; the first prompt. Newest first. */
+export function sessionPickItems(sessions: readonly RecentSession[], now: number = Date.now()): { label: string; description: string; detail: string; session: RecentSession }[] {
   return sessions.map((s) => ({
     label: s.title ?? CONVERT_TEXTS.untitled,
-    description: `${s.folder} · ${ago(s.mtime, now)} · ${s.sessionId.slice(0, 8)}`,
+    description: `${s.folder} · ${changedText(s.mtime, now)} · ${s.sessionId.slice(0, 8)}`,
+    detail: s.firstPrompt ? `"${s.firstPrompt}"` : `First prompt: ${CONVERT_TEXTS.noPrompt}`,
     session: s,
   }));
+}
+
+/** The session with its first prompt read from its transcript. */
+async function withPrompt(s: RecentSession): Promise<RecentSession> {
+  const firstPrompt = await readFirstPrompt(s.file);
+  return firstPrompt ? { ...s, firstPrompt } : s;
 }
 
 /**
@@ -86,12 +115,19 @@ export async function claudeTabOf(args: readonly unknown[], pickTitle: string = 
   return picked?.tab;
 }
 
+/** The confirm a matched session needs before a command acts on it. */
+export interface SessionConfirm {
+  message: string;
+  yes: string;
+}
+
 /**
- * The tab's session among this computer's transcripts: by its title when that names one session, else the user's
- * pick (the sessions with that title first, then the rest, newest first). undefined: none found (the user was
- * told), or Esc.
+ * The tab's session among this computer's transcripts. Its title names exactly one of them: with `confirm`, the
+ * user confirms it (title, last change, first prompt, short id) or chooses another; without (the dry run), it is
+ * used. Otherwise, also when several share the title, the user picks (the sessions with that title first, then
+ * the rest, newest first). undefined: none found (the user was told), Cancel or Esc.
  */
-export async function tabSessionOf(tab: vscode.Tab, projectsDir: string | undefined, pickTitle: string = CONVERT_TEXTS.pickSessionTitle): Promise<RecentSession | undefined> {
+export async function tabSessionOf(tab: vscode.Tab, projectsDir: string | undefined, pickTitle: string = CONVERT_TEXTS.pickSessionTitle, confirm?: SessionConfirm): Promise<RecentSession | undefined> {
   const t = CONVERT_TEXTS;
   const recent = await recentSessions(projectsDir);
   if (recent.length === 0) {
@@ -100,11 +136,22 @@ export async function tabSessionOf(tab: vscode.Tab, projectsDir: string | undefi
   }
   const hits = sessionsForLabel(tab.label, recent);
   if (hits.length === 1) {
-    return hits[0];
+    const s = await withPrompt(hits[0]);
+    if (!confirm) {
+      return s;
+    }
+    const choice = await vscode.window.showInformationMessage(confirm.message, { modal: true, detail: sessionDetail(s) }, confirm.yes, t.chooseAnother);
+    if (choice === confirm.yes) {
+      return s;
+    }
+    if (choice !== t.chooseAnother) {
+      return undefined;
+    }
   }
   const rest = recent.filter((s) => !hits.includes(s));
-  const picked = await vscode.window.showQuickPick(sessionPickItems([...hits, ...rest]), {
-    title: pickTitle, placeHolder: t.pickSessionPlaceholder(tab.label), matchOnDescription: true,
+  const listed = await Promise.all([...hits, ...rest].map(withPrompt));
+  const picked = await vscode.window.showQuickPick(sessionPickItems(listed), {
+    title: pickTitle, placeHolder: hits.length > 1 ? t.pickDuplicatePlaceholder(tab.label, hits.length) : t.pickSessionPlaceholder(tab.label), matchOnDescription: true, matchOnDetail: true,
   });
   return picked?.session;
 }
@@ -119,7 +166,7 @@ export async function convertTabToCell(deps: CellCommandDeps, args: readonly unk
   if (!tab) {
     return undefined;
   }
-  const session = await tabSessionOf(tab, options.projectsDir);
+  const session = await tabSessionOf(tab, options.projectsDir, CONVERT_TEXTS.pickSessionTitle, { message: CONVERT_TEXTS.confirm, yes: CONVERT_TEXTS.confirmYes });
   if (!session) {
     return undefined;
   }

@@ -7,7 +7,7 @@
 import * as vscode from "vscode";
 import { execFile } from "child_process";
 import * as path from "path";
-import { Client, DEFAULT_SERVER, FetchLike, listingWebUrl, listSessions, MESSAGES, normalizeServerUrl, PROFILE_ID, sessionWebUrl } from "./api";
+import { ApiError, Client, DEFAULT_SERVER, FetchLike, listingWebUrl, listSessions, MESSAGES, normalizeServerUrl, PROFILE_ID, sessionWebUrl } from "./api";
 import { A4sxAuthProvider, AUTH_ID, AUTH_LABEL, LoginCancelled, LoginRequest, SECRET_KEY, vscodeLogin } from "./auth";
 import { CLAUDE_EXTENSION_ID, claudeResumeUri } from "./claudeResume";
 import { CLI_NAME, findClaude, findCli, CliLookup, LookupEnv } from "./cli";
@@ -878,7 +878,8 @@ export function savedEntries(auth: { token(): Promise<string | undefined> }): Sa
     try {
       rows = await listSessions(client(), token);
     } catch (e) {
-      throw new LibraryUnreadable(false, errorText(e));
+      // An expired sign-in is told as signed out: signing in again is the fix, not waiting for the server.
+      throw new LibraryUnreadable(e instanceof ApiError && e.code === "unauthorized", errorText(e));
     }
     return rows.filter((r) => librarySlug(r) === slug).map((r) => ({ id: r.id, label: showText(r.label), title: showText(r.title, 120) }));
   };

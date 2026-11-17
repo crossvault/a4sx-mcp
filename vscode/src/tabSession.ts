@@ -3,8 +3,10 @@
 // 0.8.0: which Claude Code session does an editor tab show? The Claude Code extension gives no API for that. Its
 // tab's label is the session's title, and Claude Code writes that title into the transcript (`custom-title` and
 // `ai-title` records). So the tab is matched to the newest transcripts on this computer by title; when that names
-// no single session, the user picks one. From a transcript only its title records are read, from its last
-// TAIL_BYTES; no other content is parsed, kept or logged. Pure Node, no vscode import.
+// no single session, the user picks one. From a transcript its title records are read, from its last TAIL_BYTES;
+// to show the user which session was matched, also its first prompt, from its first PROMPT_HEAD_BYTES, shortened
+// to PROMPT_MAX characters. That is shown only to the user (a confirm, the session pick, the terminal's banner);
+// nothing is kept or logged, and it never reaches a command line. Pure Node, no vscode import.
 import * as fs from "fs";
 import * as path from "path";
 import { claudeProjectsDir } from "./nativeSeed";
@@ -13,6 +15,10 @@ import { claudeProjectsDir } from "./nativeSeed";
 export const CLAUDE_PANEL = "claudeVSCodePanel";
 /** How much of a transcript's end is read to find its title. */
 export const TAIL_BYTES = 512 * 1024;
+/** How much of a transcript's start is read to find its first prompt. */
+export const PROMPT_HEAD_BYTES = 64 * 1024;
+/** The first prompt is shown shortened to this many characters. */
+export const PROMPT_MAX = 120;
 /** How many of the newest transcripts are looked at. */
 export const RECENT_MAX = 80;
 
@@ -120,8 +126,61 @@ export function chooseClaudeTab<T extends TabLike>(groups: readonly TabGroupLike
 }
 
 function clean(s: string): string {
+  // C0 and C1 control characters (a terminal would act on them), then runs of white space
   // eslint-disable-next-line no-control-regex
-  return s.replace(/[\x00-\x1f\x7f]/g, " ").replace(/\s+/g, " ").trim();
+  return s.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** At most `max` characters (code points), with "…" when shortened. */
+export function shorten(s: string, max: number): string {
+  const cps = Array.from(s);
+  return cps.length > max ? `${cps.slice(0, max - 1).join("")}…` : s;
+}
+
+/**
+ * The session's first prompt in the start of a transcript: the text of the first `user` record that is the
+ * user's own typing (not a meta record, a tool result, or a wrapper such as `<command-name>` that Claude Code
+ * writes for slash commands), cleaned and shortened to PROMPT_MAX characters.
+ */
+export function firstPrompt(head: string): string | undefined {
+  for (const line of head.split(/\r?\n/).slice(0, 2000)) {
+    if (!line.includes("\"user\"")) {
+      continue;
+    }
+    let r: { type?: unknown; isMeta?: unknown; message?: { role?: unknown; content?: unknown } };
+    try {
+      r = JSON.parse(line);
+    } catch {
+      continue;   // a line cut at PROMPT_HEAD_BYTES, or not JSON
+    }
+    if (!r || r.type !== "user" || r.isMeta === true || r.message?.role !== "user") {
+      continue;
+    }
+    const c = r.message.content;
+    const text = typeof c === "string" ? c
+      : Array.isArray(c) ? c.find((part) => part && part.type === "text" && typeof part.text === "string")?.text : undefined;
+    const t = typeof text === "string" ? clean(text) : "";
+    if (t && !/^<[a-z][a-z-]*>/i.test(t)) {
+      return shorten(t, PROMPT_MAX);
+    }
+  }
+  return undefined;
+}
+
+/** The first prompt of a transcript file (firstPrompt), or undefined when it has none or can't be read. */
+export async function readFirstPrompt(file: string): Promise<string | undefined> {
+  try {
+    const fh = await fs.promises.open(file, "r");
+    try {
+      const buf = Buffer.alloc(PROMPT_HEAD_BYTES);
+      const { bytesRead } = await fh.read(buf, 0, PROMPT_HEAD_BYTES, 0);
+      return firstPrompt(buf.subarray(0, bytesRead).toString("utf8"));
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -140,10 +199,10 @@ export function transcriptTitle(tail: string): string | undefined {
     try {
       const r = JSON.parse(line);
       if (r && r.type === "custom-title" && typeof r.customTitle === "string" && clean(r.customTitle)) {
-        return clean(r.customTitle).slice(0, 200);
+        return Array.from(clean(r.customTitle)).slice(0, 200).join("");
       }
       if (r && r.type === "ai-title" && typeof r.aiTitle === "string" && clean(r.aiTitle) && ai === undefined) {
-        ai = clean(r.aiTitle).slice(0, 200);
+        ai = Array.from(clean(r.aiTitle)).slice(0, 200).join("");
       }
     } catch {
       // the line cut at TAIL_BYTES, or not JSON: the one before
@@ -177,6 +236,8 @@ export interface RecentSession {
   file: string;
   mtime: number;
   title?: string;
+  /** Its first prompt (firstPrompt), read only when the session is shown to the user. */
+  firstPrompt?: string;
 }
 
 async function readTail(file: string, size: number): Promise<string> {
