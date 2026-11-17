@@ -349,10 +349,17 @@ export function runAsCellArgs(cell: LocalCell, all: readonly LocalCell[], o: Lau
   return ["launch", "--cell", cell.name, ...(nameShared(cell, all) ? ["--mesh", cell.meshId!] : []), ...launchFlags(o), ...tail];
 }
 
-/** `launch --new-cell [flags] [--a4sx-session=ID | -- --resume ID]`: the browser approval picks the mesh. */
-export function newCellRunArgs(o: LaunchOptions, target?: ResumeTarget): string[] | undefined {
+/**
+ * `launch --new-cell [--mesh ID] [flags] [--a4sx-session=ID | -- --resume ID]`: the browser approval picks the
+ * mesh. With `--mesh` the CLI says so when the cell was approved for another mesh (it never preselects one).
+ * undefined for a session id or a mesh id the CLI doesn't take.
+ */
+export function newCellRunArgs(o: LaunchOptions, target?: ResumeTarget, meshId?: string): string[] | undefined {
   const tail = resumeTail(target);
-  return tail && ["launch", "--new-cell", ...launchFlags(o), ...tail];
+  if (!tail || (meshId !== undefined && !CLI_MESH_ID.test(meshId))) {
+    return undefined;
+  }
+  return ["launch", "--new-cell", ...(meshId === undefined ? [] : ["--mesh", meshId]), ...launchFlags(o), ...tail];
 }
 
 /** `mesh cell rename OLD NEW [--mesh ID]`; undefined for a standalone cell or a name the CLI doesn't take. */

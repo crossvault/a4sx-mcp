@@ -7,11 +7,11 @@
 import * as vscode from "vscode";
 import { execFile } from "child_process";
 import * as path from "path";
-import { Client, DEFAULT_SERVER, FetchLike, listingWebUrl, MESSAGES, normalizeServerUrl, PROFILE_ID, sessionWebUrl } from "./api";
+import { ApiError, Client, DEFAULT_SERVER, FetchLike, listingWebUrl, listSessions, MESSAGES, normalizeServerUrl, PROFILE_ID, sessionWebUrl } from "./api";
 import { A4sxAuthProvider, AUTH_ID, AUTH_LABEL, LoginCancelled, LoginRequest, SECRET_KEY, vscodeLogin } from "./auth";
 import { CLAUDE_EXTENSION_ID, claudeResumeUri } from "./claudeResume";
 import { CLI_NAME, findClaude, findCli, CliLookup, LookupEnv } from "./cli";
-import { cellsListDir } from "./cells";
+import { cellsListDir, showText } from "./cells";
 import {
   CellCommandDeps, copyCellLaunch, dailyUpdate, forgetCell, installCli, newCell, openCellOnWeb, openCellPolicy, ownCliCheck, ownCliUsable, renameCell, repairOwnCli, setCellProfile, setDefaultCell, startCell, stopCell,
   updateCliInTerminal,
@@ -22,8 +22,10 @@ import {
   VIEW_CELLS,
 } from "./cellsView";
 import { IN_SESSION_MESSAGE, insideMeshSession } from "./cliJson";
+import { CONVERT_TEXTS, convertTabToCell, meshPickItems } from "./convertTab";
 import { findLocalSession, librarySlug } from "./localSession";
 import { runAsCell, RunAsCellSession } from "./runAsCell";
+import { LibraryUnreadable, SavedLookup, saveTabSession } from "./saveTab";
 import { execSpec, Fetch, installedLauncher, Runner } from "./provision";
 import { clearFilter, filterSessions, moveToFolder, removeFromFolder } from "./folderCommands";
 import { CMD_OPEN_LISTING, ListingItem, MarketplaceProvider } from "./marketplaceView";
@@ -75,6 +77,10 @@ export const CMD_CHANGE_DEFAULT = "a4sx.changeDefaultElsewhere";
 export const CMD_DELETE_PROFILE = "a4sx.deleteProfile";
 export const CMD_ALLOW_SCOPE = "a4sx.allowScope";
 export const CMD_RUN_AS_CELL = "a4sx.runAsCell";
+export const CMD_CONVERT_TAB = "a4sx.convertTabToCell";
+export const CMD_CONVERT_TAB_IN_MESH = "a4sx.convertTabToCellInMesh";
+export const CMD_SAVE_TAB = "a4sx.saveTabSession";
+export const CMD_PREVIEW_TAB_SAVE = "a4sx.previewTabSessionSave";
 export const CMD_DUPLICATE_PROFILE = "a4sx.duplicateProfile";
 export const CMD_SET_DEFAULT_PROFILE = "a4sx.setDefaultProfile";
 export { CMD_OPEN_LISTING, CMD_CREATE_MESH, CMD_OPEN_MESH, CMD_OPEN_MESHES, CMD_REDEEM_INVITE, CMD_REFRESH_MESHES, CMD_START_IN_MESH };
@@ -832,6 +838,53 @@ export async function startSessionInMesh(
   return openCommandTerminal(MESH_TERMINAL_NAME, cli.path, CLI_NAME, args);
 }
 
+/**
+ * The mesh pick of "Convert to cell in mesh…": my active meshes, read from the server like the Meshes view.
+ * Resolves the chosen mesh's id, or undefined when none was chosen (the user was told why, or pressed Esc).
+ */
+export async function pickMeshForCell(auth: { token(): Promise<string | undefined> }): Promise<string | undefined> {
+  const token = await auth.token();
+  if (!token) {
+    await vscode.window.showErrorMessage(STEP_UP.signInFirst);
+    return undefined;
+  }
+  let meshes: { id: string; name?: string }[];
+  try {
+    meshes = (await listMeshes(client(), token)).items.filter((m) => startable(m) && MESH_ID.test(m.id)).map((m) => ({ id: m.id, name: showText(m.name) }));
+  } catch (e) {
+    await vscode.window.showErrorMessage(errorText(e));
+    return undefined;
+  }
+  if (meshes.length === 0) {
+    await vscode.window.showErrorMessage(CONVERT_TEXTS.noMeshes);
+    return undefined;
+  }
+  const picked = await vscode.window.showQuickPick(meshPickItems(meshes), { title: CONVERT_TEXTS.meshTitle, placeHolder: CONVERT_TEXTS.meshPlaceholder, matchOnDescription: true });
+  return picked?.id;
+}
+
+/**
+ * "Save session to a4sx" on a tab: the library entries that already hold a session, read from the server like My
+ * sessions. Signed out, or the library can't be read: rejects with LibraryUnreadable, and nothing is saved (a plain
+ * push could add the session a second time instead of a new version).
+ */
+export function savedEntries(auth: { token(): Promise<string | undefined> }): SavedLookup {
+  return async (slug) => {
+    const token = await auth.token();
+    if (!token) {
+      throw new LibraryUnreadable(true);
+    }
+    let rows: Awaited<ReturnType<typeof listSessions>>;
+    try {
+      rows = await listSessions(client(), token);
+    } catch (e) {
+      // An expired sign-in is told as signed out: signing in again is the fix, not waiting for the server.
+      throw new LibraryUnreadable(e instanceof ApiError && e.code === "unauthorized", errorText(e));
+    }
+    return rows.filter((r) => librarySlug(r) === slug).map((r) => ({ id: r.id, label: showText(r.label), title: showText(r.title, 120) }));
+  };
+}
+
 export const CELL_FOLDER_PICK = "Choose the folder to start the cell in";
 
 /** Where a cell's terminal starts: the workspace folder (a pick when several), the default without one; null = cancelled. */
@@ -1068,6 +1121,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_SET_CELL_PROFILE, (item?: LocalCellItem) => setCellProfile(cellDeps, item)),
     vscode.commands.registerCommand(CMD_OPEN_CELL_POLICY, (item?: LocalCellItem) => openCellPolicy(item)),
     vscode.commands.registerCommand(CMD_RUN_AS_CELL, (item?: SessionItem) => runAsCell(cellDeps, runAsCellSession(item))),
+    vscode.commands.registerCommand(CMD_CONVERT_TAB, (...args: unknown[]) => convertTabToCell(cellDeps, args)),
+    vscode.commands.registerCommand(CMD_CONVERT_TAB_IN_MESH, (...args: unknown[]) => convertTabToCell(cellDeps, args, { pickMesh: () => pickMeshForCell(auth) })),
+    vscode.commands.registerCommand(CMD_SAVE_TAB, (...args: unknown[]) => saveTabSession(cellDeps, args, { saved: savedEntries(auth) })),
+    vscode.commands.registerCommand(CMD_PREVIEW_TAB_SAVE, (...args: unknown[]) => saveTabSession(cellDeps, args, { preview: true })),
     vscode.commands.registerCommand(CMD_INSTALL_CLI, () => installCli(cellDeps)),
     vscode.commands.registerCommand(CMD_UPDATE_CLI, () => updateCliInTerminal(cellDeps)),
     // From the "Sign in again to allow …" item: the item names the permission, so no extra modal.

@@ -129,11 +129,13 @@ export async function seedWithProgress(client: Client, token: string, row: Sessi
  */
 export function openCommandTerminal(
   name: string, found: string, programBase: string, args: readonly string[], cwd?: string | vscode.Uri, env?: Record<string, string>,
+  /** Written to the terminal before the command's output; never sent to the shell or the process. */
+  message?: string,
 ): vscode.Terminal {
   const kind = shellKind(vscode.env.shell);
   const line = kind && commandLine(programName(found, programBase), args, kind);
   // `env` holds nothing secret (the Cells view passes only A4SX_CLAUDE, a path).
-  const extra = { ...(cwd === undefined ? {} : { cwd }), ...(env ? { env } : {}) };
+  const extra = { ...(cwd === undefined ? {} : { cwd }), ...(env ? { env } : {}), ...(message ? { message } : {}) };
   if (line) {
     const terminal = vscode.window.createTerminal({ name, ...extra });
     terminal.sendText(line, true);

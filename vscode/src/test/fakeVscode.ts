@@ -49,6 +49,8 @@ export interface Calls {
   modals: { kind: "info" | "warning" | "error"; message: string; items: string[]; detail?: string }[];
   /** What the next modals resolve to, in order (a button label, or undefined = Cancel). Empty = Cancel. */
   modalChoices: (string | undefined)[];
+  /** Standing answers to modals by message, used before modalChoices (which they don't consume). */
+  modalAnswers: Map<string, string | undefined>;
   /** What the next input boxes resolve to, in order; when empty, `nextInput` answers. */
   inputQueue: (string | undefined)[];
   /** What the next quick picks resolve to (indexes; an array of indexes for canPickMany), in order; when empty, `nextPick` answers. */
@@ -65,6 +67,10 @@ export interface Calls {
   treeViews: Map<string, { message?: string; description?: string; visible: boolean; setVisible(v: boolean): void }>;
   /** Whether views made with createTreeView start out visible. */
   viewsVisible: boolean;
+  /** vscode.window.tabGroups.all; the first group is the active one. */
+  tabGroups: { tabs: any[]; activeTab?: any }[];
+  /** Tabs closed through vscode.window.tabGroups.close. */
+  closedTabs: any[];
 }
 
 export const calls: Calls = {
@@ -98,6 +104,7 @@ export const calls: Calls = {
   extensionKind: 1,
   modals: [],
   modalChoices: [],
+  modalAnswers: new Map(),
   inputQueue: [],
   pickQueue: [],
   treeViews: new Map(),
@@ -107,6 +114,8 @@ export const calls: Calls = {
   nextInfoChoice: undefined,
   shell: "/bin/bash",
   viewsVisible: false,
+  tabGroups: [],
+  closedTabs: [],
 };
 
 export function resetCalls(): void {
@@ -140,6 +149,7 @@ export function resetCalls(): void {
   calls.extensionKind = 1;
   calls.modals.length = 0;
   calls.modalChoices.length = 0;
+  calls.modalAnswers.clear();
   calls.inputQueue.length = 0;
   calls.pickQueue.length = 0;
   calls.treeViews.clear();
@@ -149,6 +159,8 @@ export function resetCalls(): void {
   calls.nextInfoChoice = undefined;
   calls.shell = "/bin/bash";
   calls.viewsVisible = false;
+  calls.tabGroups = [];
+  calls.closedTabs.length = 0;
 }
 
 function isModal(options: unknown): boolean {
@@ -270,6 +282,18 @@ const fake = {
     },
   },
   window: {
+    tabGroups: {
+      get all() {
+        return calls.tabGroups;
+      },
+      get activeTabGroup() {
+        return calls.tabGroups[0];
+      },
+      async close(tab: unknown) {
+        calls.closedTabs.push(tab);
+        return true;
+      },
+    },
     createTerminal(options: unknown) {
       const t = { options, shown: false, sent: [] as string[], show() { this.shown = true; }, sendText(text: string, addNewLine?: boolean) { this.sent.push(addNewLine === false ? text : `${text}\n`); } };
       calls.terminals.push(t);
@@ -279,15 +303,15 @@ const fake = {
       if (isModal(rest[0])) {
         const items = rest.slice(1) as string[];
         calls.modals.push({ kind: "error", message, items, detail: (rest[0] as { detail?: string }).detail });
-        return calls.modalChoices.shift();
+        return calls.modalAnswers.has(message) ? calls.modalAnswers.get(message) : calls.modalChoices.shift();
       }
       calls.errors.push({ message, items: rest as string[] });
       return calls.nextErrorChoice;
     },
     async showInformationMessage(message: string, options?: unknown, ...items: string[]) {
       if (isModal(options)) {
-        calls.modals.push({ kind: "info", message, items });
-        return calls.modalChoices.shift();
+        calls.modals.push({ kind: "info", message, items, detail: (options as { detail?: string }).detail });
+        return calls.modalAnswers.has(message) ? calls.modalAnswers.get(message) : calls.modalChoices.shift();
       }
       calls.infos.push(message);
       const buttons = [typeof options === "string" ? options : undefined, ...items].filter((x): x is string => typeof x === "string");
@@ -302,7 +326,7 @@ const fake = {
     async showWarningMessage(message: string, options?: unknown, ...items: string[]) {
       if (isModal(options)) {
         calls.modals.push({ kind: "warning", message, items, detail: (options as { detail?: string }).detail });
-        return calls.modalChoices.shift();
+        return calls.modalAnswers.has(message) ? calls.modalAnswers.get(message) : calls.modalChoices.shift();
       }
       calls.warnings.push(message);
       return undefined;
