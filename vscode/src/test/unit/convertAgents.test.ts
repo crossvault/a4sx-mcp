@@ -205,6 +205,31 @@ describe("Convert an Agents-window session to a cell: the command", () => {
     assert.deepStrictEqual(h.runs, [], "the CLI is not run before the session is known");
   });
 
+  it("the same id in another folder: the confirmed transcript is resumed in its own folder; Esc on the cell pick starts nothing", async () => {
+    const a = p.cwd("alpha");
+    p.session(a, SID, "sdk-ts", "the one shown");
+    calls.modalAnswers.set(AGENTS_TEXTS.confirm, AGENTS_TEXTS.confirmYes);
+    calls.pickQueue.push(0);   // the session, then Esc on the cell pick
+    const h = harness();
+    assert.strictEqual(await convertAgentSessionToCell(h.deps, { projectsDir: p.dir }), undefined);
+    assert.strictEqual(calls.quickPicks[1].options.title, RUN_AS_CELL_TEXTS.pickTitle);
+    assert.strictEqual(calls.terminals.length, 0);
+    // A newer transcript with the same id under another existing folder (not an SDK session, so not listed).
+    p.session(p.cwd("beta"), SID, "cli", "another transcript with the same id");
+    resetCalls();
+    calls.modalAnswers.set(AGENTS_TEXTS.confirm, AGENTS_TEXTS.confirmYes);
+    calls.pickQueue.push(0, 1, [0]);
+    assert.ok(await convertAgentSessionToCell(h.deps, { projectsDir: p.dir }));
+    assert.strictEqual(calls.terminals[0].options.cwd, a, "resumed where the confirmed transcript is, not in the newer copy's folder");
+    assert.match(calls.terminals[0].sent[0], new RegExp(`'--resume' '${SID}'\\n$`));
+  });
+
+  it("a first record longer than 64 KB (a pasted file) still lists the session", async () => {
+    p.session(p.cwd("alpha"), SID, "sdk-ts", "x".repeat(100 * 1024));
+    const found = await agentSdkSessions(p.dir);
+    assert.deepStrictEqual(found.map((s) => s.sessionId), [SID]);
+  });
+
   it("nothing from a transcript reaches the command line: the id is the file name's, the folder is the terminal's cwd", async () => {
     const cwd = p.cwd("we'ird; $(touch x) `y`");
     p.session(cwd, SID, "sdk-ts", "'; rm -rf ~ #", [{ type: "custom-title", customTitle: "$(reboot)'\"" }]);

@@ -9,9 +9,9 @@
 // user confirms the one they mean. From a transcript only its start (entrypoint, folder, first prompt) and its title
 // records are read; nothing is kept or logged. Pure Node, no vscode import.
 import * as fs from "fs";
-import { transcriptCwd } from "./localSession";
+import { HEAD_BYTES, transcriptCwd } from "./localSession";
 import { claudeProjectsDir } from "./nativeSeed";
-import { firstPrompt, PROMPT_HEAD_BYTES, readTitle, RecentSession, listTranscripts } from "./tabSession";
+import { firstPrompt, readTitle, RecentSession, listTranscripts } from "./tabSession";
 
 /** The entrypoint the TypeScript Claude Agent SDK writes into its sessions' records (VS Code's agent host uses it). */
 export const SDK_TS_ENTRYPOINT = "sdk-ts";
@@ -46,8 +46,9 @@ export interface AgentSession extends RecentSession {
 async function readHead(file: string): Promise<string> {
   const fh = await fs.promises.open(file, "r");
   try {
-    const buf = Buffer.alloc(PROMPT_HEAD_BYTES);
-    const { bytesRead } = await fh.read(buf, 0, PROMPT_HEAD_BYTES, 0);
+    // HEAD_BYTES, not the first prompt's 64 KB: a long first record (a pasted file) would hide the entrypoint
+    const buf = Buffer.alloc(HEAD_BYTES);
+    const { bytesRead } = await fh.read(buf, 0, HEAD_BYTES, 0);
     return buf.subarray(0, bytesRead).toString("utf8");
   } finally {
     await fh.close();

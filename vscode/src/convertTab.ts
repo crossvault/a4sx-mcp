@@ -176,8 +176,9 @@ export async function convertTabToCell(deps: CellCommandDeps, args: readonly unk
     return undefined;
   }
   // `claude --resume` finds the session only in the folder it ran in, and only while that folder exists.
-  const local = await findLocalSession(slugOf(session.sessionId), options.projectsDir);
-  if (!local || local.sessionId !== session.sessionId) {
+  const local = await findLocalSession(slugOf(session.sessionId), options.projectsDir, session.folder);
+  // the same id in another folder would be another transcript: only the one the user confirmed
+  if (!local || local.sessionId !== session.sessionId || local.folder !== session.folder) {
     await vscode.window.showErrorMessage(CONVERT_TEXTS.notResumable);
     return undefined;
   }
