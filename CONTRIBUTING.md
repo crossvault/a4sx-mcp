@@ -66,10 +66,15 @@ Open VSX needs an access token. One-time setup by the owner:
 4. Create an access token in *Settings → Access Tokens* (https://open-vsx.org/user-settings/tokens):
    *Generate New Token*, describe it (for example "a4sx-mcp GitHub Actions"), *Generate Token*, and copy
    it; it is shown only once.
-5. Create the namespace once, locally, from any directory (the workflow does not create it):
+5. Create the namespace once, locally (the workflow does not create it). Run it in `vscode/` so the
+   pinned ovsx from the lockfile is used, and pass the token through the environment so it stays out of
+   the shell history and the process list:
 
    ```sh
-   npx ovsx@1.3.0 create-namespace crossvaultGmbH -p <token>
+   cd vscode && npm ci --ignore-scripts
+   read -rs OVSX_PAT && export OVSX_PAT     # paste the token; it is not echoed
+   npx --no-install ovsx create-namespace crossvaultGmbH
+   unset OVSX_PAT
    ```
 
 6. Add the token as the secret `OVSX_PAT` of the `marketplace` environment: repository *Settings →
@@ -82,9 +87,13 @@ Check the setup with a manual run of *VS Code extension publish* on `main` with 
 `target: openvsx`; it runs `ovsx verify-pat crossvaultGmbH` and publishes nothing. If `OVSX_PAT` is missing
 the Open VSX job fails and says so; it never skips silently.
 
-To publish a version that is already on the Marketplace to Open VSX only, run the workflow on `main` with
-`mode: publish`, `target: openvsx` (the Marketplace refuses a version it already has). A `vscode-v*` tag
-always publishes to both.
+A `vscode-v*` tag always publishes to both, from one `.vsix`. If only the Open VSX job of such a run
+fails (for example because `OVSX_PAT` was missing), fix the cause and use *Re-run failed jobs* on that run:
+it publishes the same `.vsix` artifact. To publish a version that is already on the Marketplace to Open
+VSX only, start the workflow with `mode: publish`, `target: openvsx` (the Marketplace refuses a version
+it already has) on that version's `vscode-v<version>` tag, so the `.vsix` is rebuilt from the released
+sources. Only for a tag older than this Open VSX job (0.8.0) run it on `main` instead, and only while
+`vscode/` on `main` still has that version's sources.
 
 ## AI-assisted contributions
 

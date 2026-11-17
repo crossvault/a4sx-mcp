@@ -18,6 +18,8 @@
 #   workflow_dispatch, target: which registries: both (default; a tag always means both), marketplace, or
 #                              openvsx. target=openvsx publishes a version that is already on the
 #                              Marketplace to Open VSX only (vsce would refuse a version it already has).
+#                              Dispatch it on that version's vscode-v* tag so the .vsix is rebuilt from
+#                              the released sources (see CONTRIBUTING.md, Open VSX).
 #
 # Every action is pinned to a full commit SHA; vsce and ovsx are pinned to exact versions, installed from
 # vscode/package-lock.json and run only from there (`npx --no-install`).
@@ -29,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "verify: check publish rights only. publish: publish to the Marketplace."
+        description: "verify: check publish rights only. publish: publish to the registries in target."
         type: choice
         options: [verify, publish]
         default: verify
