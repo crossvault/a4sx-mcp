@@ -69,8 +69,9 @@ the namespace and only for an extension that already has a version, so the owner
    Agreement*, read it and click *Agree*.
 4. Create a temporary access token in *Settings → Access Tokens* (https://open-vsx.org/user-settings/tokens):
    *Generate New Token*, describe it (for example "a4sx bootstrap"), *Generate Token*, and copy it. It is
-   needed only for steps 5 and 6, and is never added to GitHub.
-5. Create the namespace and publish the first version (0.8.0) with that token, locally. Use the exact
+   needed only for step 5, and is never added to GitHub.
+5. Create the namespace and publish the first version (0.8.0) with that token, locally. Do this soon:
+   until the namespace exists, anyone can create it. Use the exact
    `.vsix` that the `vscode-v0.8.0` run published to the Marketplace (its sha256 is in that run's log;
    the artifact is kept until 2027-02-15),
    the ovsx pinned in `vscode/package-lock.json`, and pass the token through the environment so it stays
@@ -87,11 +88,12 @@ the namespace and only for an extension that already has a version, so the owner
    unset OVSX_PAT
    ```
 
-6. Become owner of the namespace. Creating it makes you only a *contributor*. Claim ownership with a
+6. Delete the temporary token in *Settings → Access Tokens* right away; nothing below needs it.
+7. Become owner of the namespace. Creating it makes you only a *contributor*. Claim ownership with a
    public issue at https://github.com/EclipseFdn/open-vsx.org/issues/new/choose (process:
    https://github.com/eclipse/openvsx/wiki/Namespace-Access) and wait until it is granted; the namespace
    then shows as verified.
-7. Register the trusted publisher: *Settings → Trusted Publishers*
+8. Register the trusted publisher: *Settings → Trusted Publishers*
    (https://open-vsx.org/user-settings/trusted-publishers), namespace `crossvaultGmbH`, extension `a4sx`,
    provider GitHub Actions, with exactly:
    - Organization or user name: `crossvault`
@@ -99,13 +101,12 @@ the namespace and only for an extension that already has a version, so the owner
    - Workflow filename: `vscode-publish.yml`
    - Environment name: `marketplace` (required here: Open VSX trusts any ref that runs the workflow file
      otherwise; the environment adds the owner approval and the `main` / `vscode-v*` ref policy)
-8. Delete the temporary token in *Settings → Access Tokens*.
 
 Open VSX deletes the registration if its author stops being an owner of the namespace; register it again
 then.
 
 Check the setup with a manual run of *VS Code extension publish* on `main` with `mode: verify`,
-`target: openvsx`: it runs ovsx's token exchange and publishes nothing. Until step 7 is done, the Open VSX
+`target: openvsx`: it runs ovsx's token exchange and publishes nothing. Until step 8 is done, the Open VSX
 job fails with a message saying so; it never skips silently. Until then, release with a tag as usual and
 expect only that job to fail, or start manual runs with `target: marketplace`.
 
