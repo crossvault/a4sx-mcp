@@ -679,7 +679,7 @@ describe("a saved session on this computer", () => {
     const dir = path.join(projects, projectDirName(cwd));
     fs.mkdirSync(dir);
     fs.writeFileSync(path.join(dir, `${SID}.jsonl`), `{"type":"summary"}\n{"cwd":${JSON.stringify(cwd)},"sessionId":"${SID}"}\n`);
-    assert.deepStrictEqual(await findLocalSession("0f1e2d3c4b5a", projects), { sessionId: SID, cwd });
+    assert.deepStrictEqual(await findLocalSession("0f1e2d3c4b5a", projects), { sessionId: SID, cwd, folder: projectDirName(cwd) });
     assert.strictEqual(await findLocalSession("aaaaaaaaaaaa", projects), undefined);
     // Filed under another folder than its cwd: `--resume` there wouldn't find it.
     const other = path.join(projects, "-somewhere-else");
@@ -687,7 +687,7 @@ describe("a saved session on this computer", () => {
     const sid2 = "0f1e2d3c-4b5a-4000-8000-000000000000";
     fs.writeFileSync(path.join(other, `${sid2}.jsonl`), `{"cwd":${JSON.stringify(cwd)}}\n`);
     fs.utimesSync(path.join(other, `${sid2}.jsonl`), new Date(), new Date(Date.now() + 60_000));
-    assert.deepStrictEqual(await findLocalSession("0f1e2d3c4b5a", projects), { sessionId: SID, cwd }, "the mismatched one is skipped");
+    assert.deepStrictEqual(await findLocalSession("0f1e2d3c4b5a", projects), { sessionId: SID, cwd, folder: projectDirName(cwd) }, "the mismatched one is skipped");
     assert.strictEqual(await findLocalSession("0f1e2d3c4b5a", path.join(projects, "missing")), undefined);
   });
 

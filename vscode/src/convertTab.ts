@@ -7,6 +7,9 @@
 // in the folder the session ran in. The options and the reduced-isolation consent are asked as in Run as cell; the
 // browser approval picks the mesh. The tab stays open: the session now continues in the terminal, so the command
 // offers to close the tab. saveTab.ts uses the same tab and session lookup.
+// 0.9.0: "Convert into a cell…" does the same, but asks for the cell as Run as cell does: a cell you already have
+//   a4sx launch --cell <cell> [--mesh ID] [flags] -- --resume <session id>
+// or New cell…. convertAgents.ts does it for a session of VS Code's Agents window.
 import * as vscode from "vscode";
 import { CellCommandDeps } from "./cellCommands";
 import { findLocalSession } from "./localSession";
@@ -50,6 +53,8 @@ export type MeshPicker = () => Promise<string | undefined>;
 export interface ConvertOptions {
   /** Set for "Convert to cell in mesh…". */
   pickMesh?: MeshPicker;
+  /** Set for "Convert into a cell…" (0.9.0): the cell is picked as in Run as cell (one you have, or a new one). */
+  pickCell?: boolean;
   /** Where Claude Code keeps transcripts (tests). */
   projectsDir?: string;
 }
@@ -171,19 +176,21 @@ export async function convertTabToCell(deps: CellCommandDeps, args: readonly unk
     return undefined;
   }
   // `claude --resume` finds the session only in the folder it ran in, and only while that folder exists.
-  const local = await findLocalSession(slugOf(session.sessionId), options.projectsDir);
-  if (!local || local.sessionId !== session.sessionId) {
+  const local = await findLocalSession(slugOf(session.sessionId), options.projectsDir, session.folder);
+  // the same id in another folder would be another transcript: only the one the user confirmed
+  if (!local || local.sessionId !== session.sessionId || local.folder !== session.folder) {
     await vscode.window.showErrorMessage(CONVERT_TEXTS.notResumable);
     return undefined;
   }
   let meshId: string | undefined;
-  if (options.pickMesh) {
+  if (options.pickMesh && !options.pickCell) {
     meshId = await options.pickMesh();
     if (meshId === undefined) {
       return undefined;
     }
   }
-  const terminal = await runAsCell(deps, { id: "", findLocal: async () => local }, { choice: { kind: "new" }, ...(meshId === undefined ? {} : { meshId }) });
+  const terminal = await runAsCell(deps, { id: "", findLocal: async () => local },
+    options.pickCell ? undefined : { choice: { kind: "new" }, ...(meshId === undefined ? {} : { meshId }) });
   if (terminal) {
     // not awaited: it never blocks the start
     void Promise.resolve(vscode.window.showInformationMessage(CONVERT_TEXTS.started, CONVERT_TEXTS.closeTab)).then((choice) => {

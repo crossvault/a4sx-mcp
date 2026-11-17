@@ -27,6 +27,8 @@ export function slugMatches(sessionId: string, slug: string): boolean {
 
 export interface LocalSession {
   sessionId: string;
+  /** The folder under the projects dir its transcript is in (0.9.0). */
+  folder?: string;
   /** The folder the session ran in (an existing directory), where `claude --resume` finds it. */
   cwd: string;
 }
@@ -73,9 +75,10 @@ async function isDir(p: string): Promise<boolean> {
 /**
  * The newest local transcript of the saved session, when its folder still exists and is the one Claude
  * Code files it under (else `--resume` there wouldn't find it). undefined: the session isn't on this
- * computer, so the cell fetches it with --a4sx-session.
+ * computer, so the cell fetches it with --a4sx-session. With `onlyFolder` (0.9.0), only the transcript in that folder
+ * under the projects dir is looked at: the one the user confirmed, not another copy of the same id.
  */
-export async function findLocalSession(slug: string, projectsDir: string = claudeProjectsDir()): Promise<LocalSession | undefined> {
+export async function findLocalSession(slug: string, projectsDir: string = claudeProjectsDir(), onlyFolder?: string): Promise<LocalSession | undefined> {
   let folders: fs.Dirent[];
   try {
     folders = await fs.promises.readdir(projectsDir, { withFileTypes: true });
@@ -84,7 +87,7 @@ export async function findLocalSession(slug: string, projectsDir: string = claud
   }
   const hits: { file: string; folder: string; sessionId: string; mtime: number }[] = [];
   for (const d of folders) {
-    if (!d.isDirectory()) {
+    if (!d.isDirectory() || (onlyFolder !== undefined && d.name !== onlyFolder)) {
       continue;
     }
     let files: string[];
@@ -123,7 +126,7 @@ export async function findLocalSession(slug: string, projectsDir: string = claud
       // as given
     }
     if (projectDirName(cwd) === h.folder || projectDirName(real) === h.folder) {
-      return { sessionId: h.sessionId, cwd };
+      return { sessionId: h.sessionId, cwd, folder: h.folder };
     }
   }
   return undefined;

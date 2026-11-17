@@ -2,7 +2,7 @@
   "name": "a4sx",
   "displayName": "a4sx",
   "description": "Use a4sx from VS Code: sign in, browse and resume your saved sessions or run them as mesh cells, sort them into folders, manage your launch profiles, start and manage the mesh cells on this computer, see your meshes, search the marketplace, and add the a4sx MCP servers for agent mode.",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "publisher": "crossvaultGmbH",
   "license": "Apache-2.0",
   "homepage": "https://session-exchange.com",
@@ -309,6 +309,18 @@
       {
         "command": "a4sx.convertTabToCellInMesh",
         "title": "Convert to cell in mesh…",
+        "category": "a4sx",
+        "icon": "$(server-process)"
+      },
+      {
+        "command": "a4sx.convertTabIntoCell",
+        "title": "Convert into a cell…",
+        "category": "a4sx",
+        "icon": "$(server-process)"
+      },
+      {
+        "command": "a4sx.convertAgentSessionToCell",
+        "title": "Convert an Agents-window session to a cell…",
         "category": "a4sx",
         "icon": "$(server-process)"
       },
@@ -684,14 +696,19 @@
           "group": "a4sx@2"
         },
         {
-          "command": "a4sx.saveTabSession",
+          "command": "a4sx.convertTabIntoCell",
           "when": "resourceScheme == 'webview-panel' && (resourceFilename =~ /^webview-claudeVSCodePanel-/ || activeWebviewPanelId == 'claudeVSCodePanel' && resourceFilename =~ /^webview-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)",
           "group": "a4sx@3"
         },
         {
-          "command": "a4sx.previewTabSessionSave",
+          "command": "a4sx.saveTabSession",
           "when": "resourceScheme == 'webview-panel' && (resourceFilename =~ /^webview-claudeVSCodePanel-/ || activeWebviewPanelId == 'claudeVSCodePanel' && resourceFilename =~ /^webview-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)",
           "group": "a4sx@4"
+        },
+        {
+          "command": "a4sx.previewTabSessionSave",
+          "when": "resourceScheme == 'webview-panel' && (resourceFilename =~ /^webview-claudeVSCodePanel-/ || activeWebviewPanelId == 'claudeVSCodePanel' && resourceFilename =~ /^webview-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)",
+          "group": "a4sx@5"
         }
       ],
       "commandPalette": [
@@ -846,6 +863,10 @@
         {
           "command": "a4sx.convertTabToCellInMesh",
           "when": "activeWebviewPanelId == 'claudeVSCodePanel' && a4sx.signedIn && a4sx.meshesAvailable"
+        },
+        {
+          "command": "a4sx.convertTabIntoCell",
+          "when": "activeWebviewPanelId == 'claudeVSCodePanel'"
         },
         {
           "command": "a4sx.saveTabSession",

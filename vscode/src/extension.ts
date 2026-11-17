@@ -22,6 +22,7 @@ import {
   VIEW_CELLS,
 } from "./cellsView";
 import { IN_SESSION_MESSAGE, insideMeshSession } from "./cliJson";
+import { convertAgentSessionToCell } from "./convertAgents";
 import { CONVERT_TEXTS, convertTabToCell, meshPickItems } from "./convertTab";
 import { findLocalSession, librarySlug } from "./localSession";
 import { runAsCell, RunAsCellSession } from "./runAsCell";
@@ -79,6 +80,8 @@ export const CMD_ALLOW_SCOPE = "a4sx.allowScope";
 export const CMD_RUN_AS_CELL = "a4sx.runAsCell";
 export const CMD_CONVERT_TAB = "a4sx.convertTabToCell";
 export const CMD_CONVERT_TAB_IN_MESH = "a4sx.convertTabToCellInMesh";
+export const CMD_CONVERT_TAB_INTO_CELL = "a4sx.convertTabIntoCell";
+export const CMD_CONVERT_AGENT_SESSION = "a4sx.convertAgentSessionToCell";
 export const CMD_SAVE_TAB = "a4sx.saveTabSession";
 export const CMD_PREVIEW_TAB_SAVE = "a4sx.previewTabSessionSave";
 export const CMD_DUPLICATE_PROFILE = "a4sx.duplicateProfile";
@@ -1123,6 +1126,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_RUN_AS_CELL, (item?: SessionItem) => runAsCell(cellDeps, runAsCellSession(item))),
     vscode.commands.registerCommand(CMD_CONVERT_TAB, (...args: unknown[]) => convertTabToCell(cellDeps, args)),
     vscode.commands.registerCommand(CMD_CONVERT_TAB_IN_MESH, (...args: unknown[]) => convertTabToCell(cellDeps, args, { pickMesh: () => pickMeshForCell(auth) })),
+    vscode.commands.registerCommand(CMD_CONVERT_TAB_INTO_CELL, (...args: unknown[]) => convertTabToCell(cellDeps, args, { pickCell: true })),
+    vscode.commands.registerCommand(CMD_CONVERT_AGENT_SESSION, () => convertAgentSessionToCell(cellDeps)),
     vscode.commands.registerCommand(CMD_SAVE_TAB, (...args: unknown[]) => saveTabSession(cellDeps, args, { saved: savedEntries(auth) })),
     vscode.commands.registerCommand(CMD_PREVIEW_TAB_SAVE, (...args: unknown[]) => saveTabSession(cellDeps, args, { preview: true })),
     vscode.commands.registerCommand(CMD_INSTALL_CLI, () => installCli(cellDeps)),
