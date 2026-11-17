@@ -255,6 +255,7 @@ const fake = {
   ThemeIcon,
   ThemeColor,
   ProgressLocation: { Notification: 15, Window: 10 },
+  QuickPickItemKind: { Separator: -1, Default: 0 },
   ExtensionKind: { UI: 1, Workspace: 2 },
   commands: {
     registerCommand(id: string, fn: (...args: unknown[]) => unknown) {
@@ -372,7 +373,8 @@ const fake = {
       calls.openDialogs.push(options);
       return calls.nextOpenDialog;
     },
-    async showQuickPick(items: any[], options: unknown) {
+    async showQuickPick(given: any[] | PromiseLike<any[]>, options: unknown) {
+      const items = await given;
       calls.quickPicks.push({ items, options });
       const pick = calls.pickQueue.length ? calls.pickQueue.shift() : calls.nextPick;
       if (Array.isArray(pick)) {

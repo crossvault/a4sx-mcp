@@ -42,6 +42,7 @@ export const RUN_AS_CELL_TEXTS = {
     "A peer could use that to steer the agent. Turn this on only for a mesh whose members you trust.",
   autoAllowAccept: "Deliver without asking",
   badSession: "This session can't be started in a cell: its id isn't one the a4sx CLI accepts.",
+  nameTaken: (name: string) => `A cell named ${name} is already stored on this computer, so nothing was started: the a4sx CLI refuses a new cell with that name. Run this again with another name, or leave the name empty for a suggested one.`,
 };
 
 /** What a session item gives this command: its library id, and how to find it on this computer. */
@@ -129,13 +130,21 @@ export interface CellPreset {
   choice: CellChoice;
   /** For a new cell: the mesh it is meant for (`--mesh ID`; the browser approval still picks the mesh). */
   meshId?: string;
+  /** 0.9.1, for a new cell: the name it proposes (`--as NAME`); none: the server proposes one. */
+  cellName?: string;
+}
+
+/** 0.9.1: the cell pick's title and placeholder, when the caller names the session in them (Convert into an existing cell…). */
+export interface CellPickText {
+  title: string;
+  placeHolder: string;
 }
 
 /**
  * Run as cell in terminal. Resolves the terminal, or undefined when nothing was started (the user was told why).
  * With `preset` the cell isn't asked for; the options and the reduced-isolation consent are asked as always.
  */
-export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession | undefined, preset?: CellPreset): Promise<vscode.Terminal | undefined> {
+export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession | undefined, preset?: CellPreset, pickText?: CellPickText): Promise<vscode.Terminal | undefined> {
   if (!session) {
     return undefined;
   }
@@ -158,8 +167,14 @@ export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession
   const target: ResumeTarget = local ? { kind: "local", sessionId: local.sessionId } : { kind: "library", id: session.id };
   const picked: { choice: CellChoice } | undefined = preset
     ? { choice: preset.choice }
-    : await vscode.window.showQuickPick(cellChoices(load.cells), { title: t.pickTitle, placeHolder: t.pickPlaceholder });
+    : await vscode.window.showQuickPick(cellChoices(load.cells), { title: pickText?.title ?? t.pickTitle, placeHolder: pickText?.placeHolder ?? t.pickPlaceholder });
   if (!picked) {
+    return undefined;
+  }
+  // The CLI refuses a new cell's name that a cell stored here has; say so before the options are asked.
+  const wanted = preset?.cellName;
+  if (picked.choice.kind === "new" && wanted !== undefined && load.cells.some((c) => c.name === wanted)) {
+    await vscode.window.showErrorMessage(t.nameTaken(wanted));
     return undefined;
   }
   const options = await pickLaunchOptions(await readConfigAutoAllow(deps.run, cli));
@@ -175,7 +190,7 @@ export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession
     }
     options.reduced = true;
   }
-  const args = picked.choice.kind === "cell" ? runAsCellArgs(picked.choice.cell, load.cells, options, target) : newCellRunArgs(options, target, preset?.meshId);
+  const args = picked.choice.kind === "cell" ? runAsCellArgs(picked.choice.cell, load.cells, options, target) : newCellRunArgs(options, target, preset?.meshId, preset?.cellName);
   if (!args) {
     await vscode.window.showErrorMessage(picked.choice.kind === "cell" ? CELL_CMD_TEXTS.badCell : t.badSession);
     return undefined;

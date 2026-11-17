@@ -10,11 +10,20 @@
 // 0.9.0: "Convert into a cell…" does the same, but asks for the cell as Run as cell does: a cell you already have
 //   a4sx launch --cell <cell> [--mesh ID] [flags] -- --resume <session id>
 // or New cell…. convertAgents.ts does it for a session of VS Code's Agents window.
+// 0.9.1: "Convert to cell…" is one step: the tab's session is found without a question in the normal case
+// (tabSession.detectTabSession), and the mesh pick names it (title, folder, short id) instead of a separate confirm,
+// with "Choose another session…" as its last row. Then the new cell's name (empty: the server proposes two random
+// words), then the start:
+//   a4sx launch --new-cell [--as <name>] [--mesh <id>] [flags] -- --resume <session id>
+// "Convert into an existing cell…" (was "Convert into a cell…") names the session in its cell pick the same way.
 import * as vscode from "vscode";
+import { CELL_NAME } from "./cells";
 import { CellCommandDeps } from "./cellCommands";
 import { findLocalSession } from "./localSession";
 import { runAsCell } from "./runAsCell";
-import { chooseClaudeTab, clickedKind, editorIndexOf, readFirstPrompt, RecentSession, recentSessions, sessionsForLabel, slugOf } from "./tabSession";
+import {
+  chooseClaudeTab, clickedKind, DetectContext, Detection, detectTabSession, editorIndexOf, isClaudeTab, pickOrder, readFirstPrompt, RecentSession, recentSessions, shorten, slugOf, windowFolderNames,
+} from "./tabSession";
 
 export const CONVERT_TEXTS = {
   noTab: "This works on a Claude Code tab. Open the session's tab, then run it from the tab's context menu.",
@@ -37,23 +46,116 @@ export const CONVERT_TEXTS = {
   notResumable: "This session can't be resumed on this computer, so nothing was started: `claude --resume` needs the folder the session ran in, and that folder no longer exists, or its transcript doesn't name a folder Claude Code files it under. Save it to a4sx first (Save session to a4sx in the tab's context menu), then use Run as cell in terminal on it in My sessions: the cell fetches it from your library.",
   started: "The session now continues as a cell in the terminal. Close its tab so it isn't used in two places?",
   closeTab: "Close tab",
-  meshTitle: "Convert to cell in mesh",
-  meshPlaceholder: "Choose the mesh for the new cell. You pick it again in the browser approval; the a4sx CLI says so if the two differ",
-  noMeshes: "You have no active mesh of your own. Create one in the Meshes view first.",
+  pickOtherPlaceholder: "Choose the session to convert (the tab's matches first, then this window's folders)",
+  pickDefaultPlaceholder: "This tab has no title yet, so its session can't be told by it. Choose its session (this window's folders first)",
+  meshTitle: (title: string, id: string) => `Convert to cell: ${title} (session ${id})`,
+  meshPlaceholder: (line: string) => `${line}. Choose the mesh for the new cell`,
+  meshSignedOut: "Sign in to a4sx to list your meshes here",
+  meshNone: "You have no active mesh of your own yet",
+  meshRow: (role: string | undefined, members: string | undefined) => [role, members ? `${members} members` : undefined].filter(Boolean).join(" · "),
+  meshInBrowser: "$(globe) Choose the mesh in the browser",
+  meshInBrowserDetail: "The browser approval of the new cell asks for its mesh.",
+  meshConfirmDetail: "You confirm the mesh in the browser approval; the a4sx CLI says so if the two differ.",
+  chooseAnotherSession: "$(arrow-swap) Not this session? Choose another…",
+  sessionLine: (id: string, folder: string, changed: string) => `Session ${id} in ${folder}, changed ${changed}`,
+  nameTitle: (mesh: string | undefined) => (mesh ? `Name of the new cell in ${mesh}` : "Name of the new cell"),
+  namePrompt: "Every member of the mesh sees this name. Leave it empty for a suggested name (two random words). a-z, 0-9 and '-', at most 48 characters; you can still change it in the browser approval.",
+  namePlaceholder: "Leave empty for a suggested name",
+  nameRule: "Use a-z, 0-9 and '-' (not at the start or end), at most 48 characters; or leave it empty for a suggested name.",
+  nameTaken: (name: string) => `A cell named ${name} is already on this computer. Choose another name, or leave it empty for a suggested one.`,
+  intoCellTitle: (title: string, id: string) => `Convert into an existing cell: ${title} (session ${id})`,
+  intoCellPlaceholder: (line: string) => `${line}. Choose the cell to continue it in`,
 };
 
-/** The mesh pick's rows: each mesh by name (its id when it has none). */
-export function meshPickItems(meshes: readonly { id: string; name?: string }[]): { label: string; description?: string; id: string }[] {
-  return meshes.map((m) => (m.name ? { label: m.name, description: m.id, id: m.id } : { label: m.id, id: m.id }));
+/** A mesh the new cell can join, as the mesh pick shows it. */
+export interface MeshRow {
+  id: string;
+  name?: string;
+  /** My role in it: owner, admin or member. */
+  role?: string;
+  /** How many members it has, as the server says it ("3", "2-5", "50+"). */
+  members?: string;
 }
 
-/** Asks for the mesh of "Convert to cell in mesh…": its id, or undefined when nothing was chosen (the user was told why). */
-export type MeshPicker = () => Promise<string | undefined>;
+/** The meshes a new cell can join (my active ones), or why there are none to list. */
+export type MeshListing = { kind: "ok"; meshes: MeshRow[] } | { kind: "signedOut" } | { kind: "error"; message: string };
+
+/** Lists the meshes for the mesh pick; it never asks the user anything. */
+export type MeshLister = () => Promise<MeshListing>;
+
+type MeshPick = { label: string; description?: string; detail?: string; kind?: vscode.QuickPickItemKind; pick?: { kind: "mesh"; id: string; name: string } | { kind: "browser" } | { kind: "another" } };
+
+/**
+ * The mesh pick's rows: each mesh by name (its id when it has none), with my role and its member count; then
+ * "Choose the mesh in the browser" (no --mesh) and "Not this session? Choose another…". When no mesh can be listed,
+ * a separator says why.
+ */
+export function meshPickItems(listing: MeshListing): MeshPick[] {
+  const t = CONVERT_TEXTS;
+  const rows: MeshPick[] = [];
+  if (listing.kind === "ok" && listing.meshes.length) {
+    for (const m of listing.meshes) {
+      const description = t.meshRow(m.role, m.members);
+      rows.push({ label: `$(type-hierarchy) ${m.name ?? m.id}`, ...(description ? { description } : {}), detail: t.meshConfirmDetail, pick: { kind: "mesh", id: m.id, name: m.name ?? m.id } });
+    }
+  } else {
+    const why = listing.kind === "signedOut" ? t.meshSignedOut : listing.kind === "error" ? listing.message : t.meshNone;
+    rows.push({ label: shorten(why.replace(/\s+/g, " "), 200), kind: vscode.QuickPickItemKind.Separator });
+  }
+  rows.push({ label: t.meshInBrowser, detail: t.meshInBrowserDetail, pick: { kind: "browser" } });
+  rows.push({ label: t.chooseAnotherSession, pick: { kind: "another" } });
+  return rows;
+}
+
+/** A session as one line: short id, folder and last change ("Session 0f1e2d3c in -w-proj, changed …"). */
+export function sessionLine(s: RecentSession, now: number = Date.now()): string {
+  // eslint-disable-next-line no-control-regex
+  return CONVERT_TEXTS.sessionLine(s.sessionId.slice(0, 8), s.folder.replace(/[\x00-\x1f\x7f-\x9f]/g, " "), changedText(s.mtime, now));
+}
+
+/**
+ * The name the name box suggests: the session title's first words in the CLI's cell-name form (a-z, 0-9, '-', at
+ * most 48 characters; at most 4 words and 32 characters here), with "-2", "-3", … when a cell on this computer has
+ * it. "" when the title gives no such name: then the server proposes one.
+ */
+export function suggestedCellName(title: string | undefined, taken: ReadonlySet<string>): string {
+  const words = (title ?? "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  let base = "";
+  for (const w of words.slice(0, 4)) {
+    const next = base ? `${base}-${w}` : w;
+    if (next.length > 32) {
+      break;
+    }
+    base = next;
+  }
+  if (!base || !CELL_NAME.test(base)) {
+    return "";
+  }
+  for (let i = 1; i < 100; i++) {
+    const name = i === 1 ? base : `${base}-${i}`;
+    if (!taken.has(name) && CELL_NAME.test(name)) {
+      return name;
+    }
+  }
+  return "";
+}
+
+/** The name box's check: empty (the server proposes one), or a cell name the CLI takes and no cell here has. */
+export function cellNameProblem(raw: string, taken: ReadonlySet<string>): string | undefined {
+  const v = raw.trim();
+  if (!v) {
+    return undefined;
+  }
+  if (!CELL_NAME.test(v)) {
+    return CONVERT_TEXTS.nameRule;
+  }
+  return taken.has(v) ? CONVERT_TEXTS.nameTaken(v) : undefined;
+}
 
 export interface ConvertOptions {
-  /** Set for "Convert to cell in mesh…". */
-  pickMesh?: MeshPicker;
-  /** Set for "Convert into a cell…" (0.9.0): the cell is picked as in Run as cell (one you have, or a new one). */
+  /** Lists the meshes of the mesh pick (0.9.1); without it, the pick offers only the browser approval. */
+  listMeshes?: MeshLister;
+  /** Set for "Convert into an existing cell…" (0.9.0): the cell is picked as in Run as cell (one you have, or a new one). */
   pickCell?: boolean;
   /** Where Claude Code keeps transcripts (tests). */
   projectsDir?: string;
@@ -126,75 +228,149 @@ export interface SessionConfirm {
   yes: string;
 }
 
-/**
- * The tab's session among this computer's transcripts. Its title names exactly one of them: with `confirm`, the
- * user confirms it (title, last change, first prompt, short id) or chooses another; without (the dry run), it is
- * used. Otherwise, also when several share the title, the user picks (the sessions with that title first, then
- * the rest, newest first). undefined: none found (the user was told), Cancel or Esc.
- */
-export async function tabSessionOf(tab: vscode.Tab, projectsDir: string | undefined, pickTitle: string = CONVERT_TEXTS.pickSessionTitle, confirm?: SessionConfirm): Promise<RecentSession | undefined> {
-  const t = CONVERT_TEXTS;
-  const recent = await recentSessions(projectsDir);
-  if (recent.length === 0) {
-    await vscode.window.showErrorMessage(t.noSessions);
+/** What tells this window's Claude Code tabs apart (tabSession.DetectContext): its folders, and the other tabs' labels. */
+export function windowContext(tab: vscode.Tab): DetectContext {
+  const folders = (vscode.workspace.workspaceFolders ?? []).filter((f) => f.uri.scheme === "file").map((f) => f.uri.fsPath);
+  const others = (vscode.window.tabGroups?.all ?? []).flatMap((g) => g.tabs).filter((t) => t !== tab && isClaudeTab(t)).map((t) => t.label);
+  return { ...(folders.length ? { window: windowFolderNames(folders) } : {}), otherLabels: others };
+}
+
+/** This computer's sessions, and which one the tab shows (detectTabSession). undefined: there is none (the user was told). */
+export async function detectOf(tab: vscode.Tab, projectsDir: string | undefined): Promise<{ sessions: RecentSession[]; ctx: DetectContext; found: Detection } | undefined> {
+  const ctx = windowContext(tab);
+  let sessions = await recentSessions(projectsDir, undefined, ctx.window ? { exact: [...ctx.window.exact], worktreePrefixes: [...ctx.window.worktreePrefixes] } : undefined);
+  if (sessions.length === 0) {
+    await vscode.window.showErrorMessage(CONVERT_TEXTS.noSessions);
     return undefined;
   }
-  const hits = sessionsForLabel(tab.label, recent);
-  if (hits.length === 1) {
-    const s = await withPrompt(hits[0]);
-    if (!confirm) {
-      return s;
-    }
-    const choice = await vscode.window.showInformationMessage(confirm.message, { modal: true, detail: sessionDetail(s) }, confirm.yes, t.chooseAnother);
-    if (choice === confirm.yes) {
-      return s;
-    }
-    if (choice !== t.chooseAnother) {
-      return undefined;
-    }
+  let found = detectTabSession(tab.label, sessions, ctx);
+  if (found.kind === "ask" && found.why === "noMatch") {
+    // Before its session has a title, a tab's label is its prompt: read the first prompts of the untitled ones.
+    sessions = await Promise.all(sessions.map((s) => (s.title ? s : withPrompt(s))));
+    found = detectTabSession(tab.label, sessions, ctx);
   }
-  const rest = recent.filter((s) => !hits.includes(s));
-  const listed = await Promise.all([...hits, ...rest].map(withPrompt));
-  const picked = await vscode.window.showQuickPick(sessionPickItems(listed), {
-    title: pickTitle, placeHolder: hits.length > 1 ? t.pickDuplicatePlaceholder(tab.label, hits.length) : t.pickSessionPlaceholder(tab.label), matchOnDescription: true, matchOnDetail: true,
-  });
+  return { sessions, ctx, found };
+}
+
+/** The session pick (the label's matches first, then this window's folders); undefined: Esc. */
+export async function askSession(tab: vscode.Tab, sessions: readonly RecentSession[], found: Detection, ctx: DetectContext, pickTitle: string): Promise<RecentSession | undefined> {
+  const t = CONVERT_TEXTS;
+  const matches = found.kind === "ask" ? found.matches : [found.session];
+  const listed = await Promise.all(pickOrder(sessions, matches, ctx).map((s) => (s.firstPrompt ? s : withPrompt(s))));
+  // "one": the user asked for another session than the one found
+  const placeHolder = found.kind === "one" ? t.pickOtherPlaceholder
+    : found.why === "duplicate" ? t.pickDuplicatePlaceholder(tab.label, found.matches.length)
+      : found.why === "defaultTitle" ? t.pickDefaultPlaceholder : t.pickSessionPlaceholder(tab.label);
+  const picked = await vscode.window.showQuickPick(sessionPickItems(listed), { title: pickTitle, placeHolder, matchOnDescription: true, matchOnDetail: true });
   return picked?.session;
 }
 
 /**
- * Convert to cell: runs the session of a Claude Code tab in a new cell, in a terminal. `args` are what VS Code
- * passed to the command (from a tab's context menu: the tab's index in its group). Resolves the terminal, or
- * undefined when nothing was started (the user was told why, or cancelled).
+ * The tab's session among this computer's transcripts (detectTabSession). When it names one: with `confirm`, the
+ * user confirms it (title, last change, first prompt, short id) or chooses another; without, it is used. Otherwise
+ * the user picks (the label's matches first). undefined: none found (the user was told), Cancel or Esc.
+ */
+export async function tabSessionOf(tab: vscode.Tab, projectsDir: string | undefined, pickTitle: string = CONVERT_TEXTS.pickSessionTitle, confirm?: SessionConfirm): Promise<RecentSession | undefined> {
+  const d = await detectOf(tab, projectsDir);
+  if (!d) {
+    return undefined;
+  }
+  if (d.found.kind === "one") {
+    const s = await withPrompt(d.found.session);
+    if (!confirm) {
+      return s;
+    }
+    const choice = await vscode.window.showInformationMessage(confirm.message, { modal: true, detail: sessionDetail(s) }, confirm.yes, CONVERT_TEXTS.chooseAnother);
+    if (choice === confirm.yes) {
+      return s;
+    }
+    if (choice !== CONVERT_TEXTS.chooseAnother) {
+      return undefined;
+    }
+  }
+  return askSession(tab, d.sessions, d.found, d.ctx, pickTitle);
+}
+
+/** The names of the cells on this computer, as the Cells view last read them (a new cell can't take one). */
+function localCellNames(deps: CellCommandDeps): Set<string> {
+  try {
+    return new Set(deps.provider.cells.map((c) => c.name));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Convert to cell…: runs the session of a Claude Code tab in a new cell, in a terminal. `args` are what VS Code
+ * passed to the command (from a tab's context menu: the tab's index in its group). The mesh pick names the session
+ * it found, and offers another; then the cell's name. With `pickCell`, the cell pick of Run as cell instead, naming
+ * the session in its title. Resolves the terminal, or undefined when nothing was started (the user was told why,
+ * or cancelled).
  */
 export async function convertTabToCell(deps: CellCommandDeps, args: readonly unknown[] = [], options: ConvertOptions = {}): Promise<vscode.Terminal | undefined> {
+  const t = CONVERT_TEXTS;
   const tab = await claudeTabOf(args);
   if (!tab) {
     return undefined;
   }
-  const session = await tabSessionOf(tab, options.projectsDir, CONVERT_TEXTS.pickSessionTitle, { message: CONVERT_TEXTS.confirm, yes: CONVERT_TEXTS.confirmYes });
+  const d = await detectOf(tab, options.projectsDir);
+  if (!d) {
+    return undefined;
+  }
+  let session = d.found.kind === "one" ? await withPrompt(d.found.session) : await askSession(tab, d.sessions, d.found, d.ctx, t.pickSessionTitle);
   if (!session) {
     return undefined;
   }
-  // `claude --resume` finds the session only in the folder it ran in, and only while that folder exists.
-  const local = await findLocalSession(slugOf(session.sessionId), options.projectsDir, session.folder);
-  // the same id in another folder would be another transcript: only the one the user confirmed
-  if (!local || local.sessionId !== session.sessionId || local.folder !== session.folder) {
-    await vscode.window.showErrorMessage(CONVERT_TEXTS.notResumable);
-    return undefined;
-  }
   let meshId: string | undefined;
-  if (options.pickMesh && !options.pickCell) {
-    meshId = await options.pickMesh();
-    if (meshId === undefined) {
+  let cellName: string | undefined;
+  if (!options.pickCell) {
+    const listing: Promise<MeshListing> = options.listMeshes ? options.listMeshes().catch((e: unknown) => ({ kind: "error" as const, message: e instanceof Error ? e.message : String(e) }))
+      : Promise.resolve({ kind: "ok", meshes: [] });
+    let meshName: string | undefined;
+    for (;;) {
+      const picked = await vscode.window.showQuickPick<MeshPick>(listing.then((l): MeshPick[] => meshPickItems(l)), {
+        title: t.meshTitle(session.title ?? t.untitled, session.sessionId.slice(0, 8)), placeHolder: t.meshPlaceholder(sessionLine(session)), matchOnDescription: true, ignoreFocusOut: true,
+      });
+      if (!picked?.pick) {
+        return undefined;
+      }
+      if (picked.pick.kind === "another") {
+        session = await askSession(tab, d.sessions, d.found.kind === "one" ? d.found : { kind: "one", session, how: "title" }, d.ctx, t.pickSessionTitle);
+        if (!session) {
+          return undefined;
+        }
+        continue;
+      }
+      if (picked.pick.kind === "mesh") {
+        meshId = picked.pick.id;
+        meshName = picked.pick.name;
+      }
+      break;
+    }
+    const taken = localCellNames(deps);
+    const raw = await vscode.window.showInputBox({
+      title: t.nameTitle(meshName), prompt: t.namePrompt, value: suggestedCellName(session.title, taken), placeHolder: t.namePlaceholder,
+      validateInput: (v: string) => cellNameProblem(v, taken), ignoreFocusOut: true,
+    });
+    if (raw === undefined) {
       return undefined;
     }
+    cellName = raw.trim() || undefined;
+  }
+  // `claude --resume` finds the session only in the folder it ran in, and only while that folder exists.
+  const local = await findLocalSession(slugOf(session.sessionId), options.projectsDir, session.folder);
+  // the same id in another folder would be another transcript: only the one shown to the user
+  if (!local || local.sessionId !== session.sessionId || local.folder !== session.folder) {
+    await vscode.window.showErrorMessage(t.notResumable);
+    return undefined;
   }
   const terminal = await runAsCell(deps, { id: "", findLocal: async () => local },
-    options.pickCell ? undefined : { choice: { kind: "new" }, ...(meshId === undefined ? {} : { meshId }) });
+    options.pickCell ? undefined : { choice: { kind: "new" }, ...(meshId === undefined ? {} : { meshId }), ...(cellName === undefined ? {} : { cellName }) },
+    options.pickCell ? { title: t.intoCellTitle(session.title ?? t.untitled, session.sessionId.slice(0, 8)), placeHolder: t.intoCellPlaceholder(sessionLine(session)) } : undefined);
   if (terminal) {
     // not awaited: it never blocks the start
-    void Promise.resolve(vscode.window.showInformationMessage(CONVERT_TEXTS.started, CONVERT_TEXTS.closeTab)).then((choice) => {
-      if (choice === CONVERT_TEXTS.closeTab) {
+    void Promise.resolve(vscode.window.showInformationMessage(t.started, t.closeTab)).then((choice) => {
+      if (choice === t.closeTab) {
         return vscode.window.tabGroups.close(tab);
       }
       return undefined;

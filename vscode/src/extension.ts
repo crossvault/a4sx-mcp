@@ -23,7 +23,7 @@ import {
 } from "./cellsView";
 import { IN_SESSION_MESSAGE, insideMeshSession } from "./cliJson";
 import { convertAgentSessionToCell } from "./convertAgents";
-import { CONVERT_TEXTS, convertTabToCell, meshPickItems } from "./convertTab";
+import { convertTabToCell, MeshListing } from "./convertTab";
 import { findLocalSession, librarySlug } from "./localSession";
 import { runAsCell, RunAsCellSession } from "./runAsCell";
 import { LibraryUnreadable, SavedLookup, saveTabSession } from "./saveTab";
@@ -842,28 +842,23 @@ export async function startSessionInMesh(
 }
 
 /**
- * The mesh pick of "Convert to cell in mesh…": my active meshes, read from the server like the Meshes view.
- * Resolves the chosen mesh's id, or undefined when none was chosen (the user was told why, or pressed Esc).
+ * The meshes of "Convert to cell…"'s mesh pick (0.9.1): my active meshes, read from the server like the Meshes view,
+ * with my role and their member count. It asks nothing: signed out, or the server can't be read, the pick says so.
  */
-export async function pickMeshForCell(auth: { token(): Promise<string | undefined> }): Promise<string | undefined> {
+export async function listMeshesForCell(auth: { token(): Promise<string | undefined> }): Promise<MeshListing> {
   const token = await auth.token();
   if (!token) {
-    await vscode.window.showErrorMessage(STEP_UP.signInFirst);
-    return undefined;
+    return { kind: "signedOut" };
   }
-  let meshes: { id: string; name?: string }[];
   try {
-    meshes = (await listMeshes(client(), token)).items.filter((m) => startable(m) && MESH_ID.test(m.id)).map((m) => ({ id: m.id, name: showText(m.name) }));
+    const meshes = (await listMeshes(client(), token)).items.filter((m) => startable(m) && MESH_ID.test(m.id));
+    return {
+      kind: "ok",
+      meshes: meshes.map((m) => ({ id: m.id, ...(showText(m.name) ? { name: showText(m.name) } : {}), ...(m.role ? { role: m.role } : {}), ...(m.memberCountBucket ? { members: m.memberCountBucket } : {}) })),
+    };
   } catch (e) {
-    await vscode.window.showErrorMessage(errorText(e));
-    return undefined;
+    return { kind: "error", message: errorText(e) };
   }
-  if (meshes.length === 0) {
-    await vscode.window.showErrorMessage(CONVERT_TEXTS.noMeshes);
-    return undefined;
-  }
-  const picked = await vscode.window.showQuickPick(meshPickItems(meshes), { title: CONVERT_TEXTS.meshTitle, placeHolder: CONVERT_TEXTS.meshPlaceholder, matchOnDescription: true });
-  return picked?.id;
 }
 
 /**
@@ -1124,8 +1119,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_SET_CELL_PROFILE, (item?: LocalCellItem) => setCellProfile(cellDeps, item)),
     vscode.commands.registerCommand(CMD_OPEN_CELL_POLICY, (item?: LocalCellItem) => openCellPolicy(item)),
     vscode.commands.registerCommand(CMD_RUN_AS_CELL, (item?: SessionItem) => runAsCell(cellDeps, runAsCellSession(item))),
-    vscode.commands.registerCommand(CMD_CONVERT_TAB, (...args: unknown[]) => convertTabToCell(cellDeps, args)),
-    vscode.commands.registerCommand(CMD_CONVERT_TAB_IN_MESH, (...args: unknown[]) => convertTabToCell(cellDeps, args, { pickMesh: () => pickMeshForCell(auth) })),
+    vscode.commands.registerCommand(CMD_CONVERT_TAB, (...args: unknown[]) => convertTabToCell(cellDeps, args, { listMeshes: () => listMeshesForCell(auth) })),
+    // 0.9.1: "Convert to cell in mesh…" is now part of "Convert to cell…"; the id stays for keybindings
+    vscode.commands.registerCommand(CMD_CONVERT_TAB_IN_MESH, (...args: unknown[]) => convertTabToCell(cellDeps, args, { listMeshes: () => listMeshesForCell(auth) })),
     vscode.commands.registerCommand(CMD_CONVERT_TAB_INTO_CELL, (...args: unknown[]) => convertTabToCell(cellDeps, args, { pickCell: true })),
     vscode.commands.registerCommand(CMD_CONVERT_AGENT_SESSION, () => convertAgentSessionToCell(cellDeps)),
     vscode.commands.registerCommand(CMD_SAVE_TAB, (...args: unknown[]) => saveTabSession(cellDeps, args, { saved: savedEntries(auth) })),
