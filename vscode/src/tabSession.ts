@@ -6,7 +6,7 @@
 // no single session, the user picks one. From a transcript its title records are read, from its last TAIL_BYTES;
 // to show the user which session was matched, also its first prompt, from its first PROMPT_HEAD_BYTES, shortened
 // to PROMPT_MAX characters. That is shown only to the user (a confirm, the session pick, the terminal's banner);
-// nothing is kept or logged, and it never reaches a command line. Pure Node, no vscode import.
+// the extension keeps and logs nothing of it, and it never reaches a command line. Pure Node, no vscode import.
 import * as fs from "fs";
 import * as path from "path";
 import { claudeProjectsDir } from "./nativeSeed";
