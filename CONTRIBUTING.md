@@ -47,9 +47,44 @@ The extension lives in `vscode/` (TypeScript, Node.js 22). Before pushing a chan
 `npm install`, `npm run compile` and `npm test` in that directory; CI runs the same. Don't commit
 `node_modules/`, `out/` or `.vsix` files.
 
-The extension is published to the Visual Studio Marketplace as `crossvaultGmbH.a4sx` by
-`.github/workflows/vscode-publish.yml`, only from a `vscode-v*` tag or a manual run, and only after the
-owner approves the `marketplace` environment. Branch pushes and pull requests never package or publish it.
+The extension is published as `crossvaultGmbH.a4sx` to the Visual Studio Marketplace and to
+[Open VSX](https://open-vsx.org) by `.github/workflows/vscode-publish.yml`, only from a `vscode-v*` tag or
+a manual run, and only after the owner approves the `marketplace` environment. One approval releases both
+registries' jobs, and both publish the same `.vsix`. Branch pushes and pull requests never package or
+publish it.
+
+### Open VSX
+
+Open VSX needs an access token. One-time setup by the owner:
+
+1. Create an Eclipse Foundation account at https://accounts.eclipse.org/user/register and enter, in its
+   *GitHub Username* field, the GitHub account you sign in to Open VSX with.
+2. Sign in at https://open-vsx.org with that GitHub account (account icon, top right).
+3. Sign the Eclipse Foundation Open VSX Publisher Agreement: on
+   https://open-vsx.org/user-settings/profile click *Log in with Eclipse*, then *Show Publisher
+   Agreement*, read it and click *Agree*.
+4. Create an access token in *Settings → Access Tokens* (https://open-vsx.org/user-settings/tokens):
+   *Generate New Token*, describe it (for example "a4sx-mcp GitHub Actions"), *Generate Token*, and copy
+   it; it is shown only once.
+5. Create the namespace once, locally, from any directory (the workflow does not create it):
+
+   ```sh
+   npx ovsx@1.3.0 create-namespace crossvaultGmbH -p <token>
+   ```
+
+6. Add the token as the secret `OVSX_PAT` of the `marketplace` environment: repository *Settings →
+   Environments → marketplace → Environment secrets → Add environment secret*.
+7. Optional: to have the namespace shown as verified, claim its ownership with a public issue at
+   https://github.com/EclipseFdn/open-vsx.org/issues/new/choose (see
+   https://github.com/eclipse/openvsx/wiki/Namespace-Access).
+
+Check the setup with a manual run of *VS Code extension publish* on `main` with `mode: verify`,
+`target: openvsx`; it runs `ovsx verify-pat crossvaultGmbH` and publishes nothing. If `OVSX_PAT` is missing
+the Open VSX job fails and says so; it never skips silently.
+
+To publish a version that is already on the Marketplace to Open VSX only, run the workflow on `main` with
+`mode: publish`, `target: openvsx` (the Marketplace refuses a version it already has). A `vscode-v*` tag
+always publishes to both.
 
 ## AI-assisted contributions
 
