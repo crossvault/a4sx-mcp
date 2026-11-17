@@ -22,7 +22,8 @@ This extension connects VS Code to a4sx. It adds:
   - **a4sx library** works with your a4sx account. VS Code asks you to sign in the first time it connects, and VS Code handles that sign-in itself.
 - **a4sx: Save this session.** This command runs `a4sx push --latest` in a terminal. It saves your most recently changed local Claude Code session to your a4sx library. The CLI's output and questions appear in the terminal.
 - **a4sx: Open my library.** This command opens your library on session-exchange.com in your browser.
-- **Convert to cell** and **Convert to cell in mesh…** in the context menu of a Claude Code tab. They run that tab's session in a new mesh cell, in a terminal (see [Convert to cell](#convert-to-cell)).
+- **Convert to cell**, **Convert to cell in mesh…** and **Convert into a cell…** in the context menu of a Claude Code tab. They run that tab's session in a new mesh cell, or one you already have, in a terminal (see [Convert to cell](#convert-to-cell)).
+- **a4sx: Convert an Agents-window session to a cell…** in the Command Palette does the same for a Claude session of VS Code's Agents window (see [Agents-window sessions](#agents-window-sessions)).
 - **Save session to a4sx** and **Preview save to a4sx (dry run)** in the same context menu. They save that tab's session to your library, or show what a save would upload (see [Save a tab's session](#save-a-tabs-session)).
 
 ## Folders and the filter
@@ -102,6 +103,18 @@ The list is read when the view is first shown, on **Refresh cells**, after each 
 **Convert to cell in mesh…** first lists your active meshes and adds `--mesh <mesh id>` to the command. The browser approval still asks for the mesh; if you pick another one there, the a4sx CLI says so before it starts the cell. This action is offered when you are signed in and your a4sx server has meshes.
 
 The tab isn't turned into a cell in place: the session continues in the terminal, and the extension offers **Close tab** so that it isn't used in two places. The menu entries appear when you right-click a Claude Code tab, whichever editor is active (in VS Code before 1.106, which doesn't tell which kind of webview a tab is, they appear on webview tabs while a Claude Code tab is the active editor). A right-click doesn't make the tab's editor group active, and VS Code tells extensions only the clicked tab's position in its group. So with split editors, when more than one group could hold the clicked tab, the extension asks which Claude Code tab you mean instead of guessing. If the clicked tab isn't a Claude Code tab, it says so and does nothing.
+
+**Convert into a cell…** works like **Convert to cell**, but after you confirm the session you choose the cell as in **Run as cell in terminal**: a cell you already have (`a4sx launch --cell <cell> [options] -- --resume <session id>`) or **New cell…**.
+
+### Agents-window sessions
+
+VS Code's Agents window runs Claude through VS Code's agent host, which uses the Claude Agent SDK. The SDK saves each session where Claude Code saves its sessions, so `claude --resume <session id>` can continue it, and so can a cell. **a4sx: Convert an Agents-window session to a cell…** (Command Palette) does that:
+
+1. It lists this computer's Claude sessions that were started through the Claude Agent SDK, newest first: title (or first prompt), folder, when it last changed and the start of its session id. Other programs built on the Claude Agent SDK for TypeScript mark their sessions the same way, so they can show up too.
+2. You confirm the session in a dialog with its title, last change, first prompt and short id, or choose another.
+3. You choose the cell as in **Run as cell in terminal**: one you already have, or **New cell…**, then the options. The terminal runs `a4sx launch … -- --resume <session id>` in the folder the session ran in.
+
+Archive or close the session in the Agents window first: if it goes on there too, two programs write the same session. This is a Command Palette command because the Agents window offers extensions its session menus only as proposed API, which a Marketplace extension can't use. Only sessions on this computer are listed: a session of a remote agent host is on that machine. They are read from the Claude Code folder (`CLAUDE_CONFIG_DIR`, or `~/.claude`) that this extension and the a4sx CLI use. If you set `CLAUDE_CONFIG_DIR` for VS Code and the Agents window runs Claude through GitHub Copilot, its agent host doesn't pass that variable on, so those sessions are saved in `~/.claude` and aren't listed.
 
 ### Save a tab's session
 

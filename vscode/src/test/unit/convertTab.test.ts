@@ -756,9 +756,9 @@ describe("Convert to cell: the mesh pick, manifest and wiring", () => {
     const claude = `activeWebviewPanelId == '${CLAUDE_PANEL}'`;
     const tab = `resourceScheme == 'webview-panel' && (resourceFilename =~ /^webview-${CLAUDE_PANEL}-/ || ${claude} && resourceFilename =~ /^webview-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)`;
     const mesh = " && a4sx.signedIn && a4sx.meshesAvailable";
-    const menu = [[ext.CMD_CONVERT_TAB, tab], [ext.CMD_CONVERT_TAB_IN_MESH, tab + mesh], [ext.CMD_SAVE_TAB, tab], [ext.CMD_PREVIEW_TAB_SAVE, tab]];
+    const menu = [[ext.CMD_CONVERT_TAB, tab], [ext.CMD_CONVERT_TAB_IN_MESH, tab + mesh], [ext.CMD_CONVERT_TAB_INTO_CELL, tab], [ext.CMD_SAVE_TAB, tab], [ext.CMD_PREVIEW_TAB_SAVE, tab]];
     assert.deepStrictEqual(pkg.contributes.menus["editor/title/context"].map((m: any) => [m.command, m.when]), menu);
-    assert.deepStrictEqual(pkg.contributes.menus["editor/title/context"].map((m: any) => m.group), ["a4sx@1", "a4sx@2", "a4sx@3", "a4sx@4"]);
+    assert.deepStrictEqual(pkg.contributes.menus["editor/title/context"].map((m: any) => m.group), ["a4sx@1", "a4sx@2", "a4sx@3", "a4sx@4", "a4sx@5"]);
     // The clause's two patterns, against the resource names VS Code gives a clicked tab (resourceFilename).
     const [byType, noType] = [...tab.matchAll(/=~ \/(.*?)\/(?= |\))/g)].map((m) => new RegExp(m[1]));
     const uuid = "3f2a1b0c-9d8e-4f7a-8b6c-5d4e3f2a1b0c";
@@ -766,12 +766,13 @@ describe("Convert to cell: the mesh pick, manifest and wiring", () => {
     assert.ok(!byType.test(`webview-markdown.preview-${uuid}`) && !byType.test(`webview-${uuid}`));
     assert.ok(noType.test(`webview-${uuid}`), "before 1.106: no view type, so the active panel decides");
     assert.ok(!noType.test(`webview-${CLAUDE_PANEL}-${uuid}`) && !noType.test(`webview-markdown.preview-${uuid}`));
-    const expected = [[ext.CMD_CONVERT_TAB, claude], [ext.CMD_CONVERT_TAB_IN_MESH, claude + mesh], [ext.CMD_SAVE_TAB, claude], [ext.CMD_PREVIEW_TAB_SAVE, claude]];
+    const expected = [[ext.CMD_CONVERT_TAB, claude], [ext.CMD_CONVERT_TAB_IN_MESH, claude + mesh], [ext.CMD_CONVERT_TAB_INTO_CELL, claude], [ext.CMD_SAVE_TAB, claude], [ext.CMD_PREVIEW_TAB_SAVE, claude]];
     const palette = pkg.contributes.menus.commandPalette.filter((m: any) => expected.some(([id]) => id === m.command));
     assert.deepStrictEqual(palette.map((m: any) => [m.command, m.when]), expected);
     const titles = Object.fromEntries(pkg.contributes.commands.map((c: any) => [c.command, c.title]));
     assert.strictEqual(titles[ext.CMD_CONVERT_TAB], "Convert to cell");
     assert.strictEqual(titles[ext.CMD_CONVERT_TAB_IN_MESH], "Convert to cell in mesh…");
+    assert.strictEqual(titles[ext.CMD_CONVERT_TAB_INTO_CELL], "Convert into a cell…");
     assert.strictEqual(titles[ext.CMD_SAVE_TAB], "Save session to a4sx");
     assert.strictEqual(titles[ext.CMD_PREVIEW_TAB_SAVE], "Preview save to a4sx (dry run)");
   });
@@ -783,10 +784,11 @@ describe("Convert to cell: the mesh pick, manifest and wiring", () => {
       calls.tabGroups = [{ tabs: [fileTab("a.ts")], activeTab: fileTab("a.ts") }];
       assert.strictEqual(await calls.commands.get(ext.CMD_CONVERT_TAB)!(undefined, { groupId: 0, editorIndex: 0 }), undefined);
       assert.strictEqual(await calls.commands.get(ext.CMD_CONVERT_TAB_IN_MESH)!(), undefined);
+      assert.strictEqual(await calls.commands.get(ext.CMD_CONVERT_TAB_INTO_CELL)!(), undefined);
       assert.strictEqual(await calls.commands.get(ext.CMD_SAVE_TAB)!(undefined, { groupId: 0, editorIndex: 0 }), undefined);
       assert.strictEqual(await calls.commands.get(ext.CMD_PREVIEW_TAB_SAVE)!(), undefined);
       // From the menu the clicked tab (index 0) is the file tab; from the Command Palette there is no Claude Code tab.
-      assert.deepStrictEqual(calls.errors.map((e) => e.message), [CONVERT_TEXTS.notClaudeTab, CONVERT_TEXTS.noTab, CONVERT_TEXTS.notClaudeTab, CONVERT_TEXTS.noTab]);
+      assert.deepStrictEqual(calls.errors.map((e) => e.message), [CONVERT_TEXTS.notClaudeTab, CONVERT_TEXTS.noTab, CONVERT_TEXTS.noTab, CONVERT_TEXTS.notClaudeTab, CONVERT_TEXTS.noTab]);
     } finally {
       ctx.subscriptions.forEach((d) => d.dispose());
     }

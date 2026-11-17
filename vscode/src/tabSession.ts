@@ -240,7 +240,8 @@ export interface RecentSession {
   firstPrompt?: string;
 }
 
-async function readTail(file: string, size: number): Promise<string> {
+/** The last TAIL_BYTES of a transcript of `size` bytes. */
+export async function readTail(file: string, size: number): Promise<string> {
   const fh = await fs.promises.open(file, "r");
   try {
     const length = Math.min(size, TAIL_BYTES);
@@ -252,15 +253,24 @@ async function readTail(file: string, size: number): Promise<string> {
   }
 }
 
-/** The newest Claude Code transcripts on this computer (at most `max`), newest first, each with its title when it has one. */
-export async function recentSessions(projectsDir: string = claudeProjectsDir(), max: number = RECENT_MAX): Promise<RecentSession[]> {
+/** A transcript file: <projects dir>/<folder>/<session id>.jsonl, with its size and when it was last written. */
+export interface TranscriptFile {
+  sessionId: string;
+  folder: string;
+  file: string;
+  mtime: number;
+  size: number;
+}
+
+/** Every non-empty Claude Code transcript under the projects dir, newest first. Only names and sizes are read. */
+export async function listTranscripts(projectsDir: string = claudeProjectsDir()): Promise<TranscriptFile[]> {
   let folders: fs.Dirent[];
   try {
     folders = await fs.promises.readdir(projectsDir, { withFileTypes: true });
   } catch {
     return [];
   }
-  const found: (RecentSession & { size: number })[] = [];
+  const found: TranscriptFile[] = [];
   for (const d of folders) {
     if (!d.isDirectory()) {
       continue;
@@ -287,15 +297,23 @@ export async function recentSessions(projectsDir: string = claudeProjectsDir(), 
       }
     }
   }
-  found.sort((a, b) => b.mtime - a.mtime);
+  return found.sort((a, b) => b.mtime - a.mtime);
+}
+
+/** A transcript's title (transcriptTitle of its tail), or undefined when it has none or can't be read. */
+export async function readTitle(t: TranscriptFile): Promise<string | undefined> {
+  try {
+    return transcriptTitle(await readTail(t.file, t.size));
+  } catch {
+    return undefined;   // unreadable: listed without a title
+  }
+}
+
+/** The newest Claude Code transcripts on this computer (at most `max`), newest first, each with its title when it has one. */
+export async function recentSessions(projectsDir: string = claudeProjectsDir(), max: number = RECENT_MAX): Promise<RecentSession[]> {
   const out: RecentSession[] = [];
-  for (const s of found.slice(0, Math.max(0, max))) {
-    let title: string | undefined;
-    try {
-      title = transcriptTitle(await readTail(s.file, s.size));
-    } catch {
-      // unreadable: listed without a title
-    }
+  for (const s of (await listTranscripts(projectsDir)).slice(0, Math.max(0, max))) {
+    const title = await readTitle(s);
     out.push({ sessionId: s.sessionId, folder: s.folder, file: s.file, mtime: s.mtime, ...(title ? { title } : {}) });
   }
   return out;
