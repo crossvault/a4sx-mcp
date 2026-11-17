@@ -4,16 +4,17 @@
 # Packages the VS Code extension in vscode/ and publishes it as crossvaultGmbH.a4sx to the Visual Studio
 # Marketplace and to Open VSX (open-vsx.org).
 #   - Marketplace (`publish` job): signs in with workload identity federation (OIDC); no PAT is stored.
-#   - Open VSX (`openvsx` job): Open VSX needs an access token, the `OVSX_PAT` secret of the `marketplace`
-#     environment. It is handed to ovsx only through the environment of the one ovsx step, never on a
-#     command line, and never printed.
+#   - Open VSX (`openvsx` job): signs in with Open VSX trusted publishing (OIDC, audience
+#     https://open-vsx.org); no PAT is stored either. The registry issues a short-lived token only to this
+#     workflow file running in the `marketplace` environment, as registered for crossvaultGmbH.a4sx under
+#     https://open-vsx.org/user-settings/trusted-publishers (see CONTRIBUTING.md, Open VSX).
 # Both jobs run in the `marketplace` environment, which needs the owner's approval, so neither a tag nor a
 # manual run can publish on its own. One approval of that environment releases both waiting jobs.
 # Both publish the same .vsix, built once by the `package` job.
 #
-#   workflow_dispatch, mode=verify (default): package, then `vsce verify-pat` / `ovsx verify-pat` prove
-#                                             the credentials may publish for crossvaultGmbH. Nothing is
-#                                             published.
+#   workflow_dispatch, mode=verify (default): package, then prove each registry would let this run
+#                                             publish crossvaultGmbH.a4sx (`vsce verify-pat`; the Open VSX
+#                                             trusted-publishing token exchange). Nothing is published.
 #   workflow_dispatch, mode=publish, or a `vscode-v<version>` tag: package, then publish that exact .vsix.
 #   workflow_dispatch, target: which registries: both (default; a tag always means both), marketplace, or
 #                              openvsx. target=openvsx publishes a version that is already on the
@@ -182,11 +183,12 @@ jobs:
     needs: package
     if: needs.package.outputs.openvsx == 'true'
     runs-on: ubuntu-latest
-    # The same environment as `publish`: the same owner approval gates it, and OVSX_PAT is a secret of
-    # this environment, so no job outside it (and no pull request build) can read it.
+    # The same environment as `publish`: the same owner approval gates it, and the trusted publisher on
+    # open-vsx.org is registered with this environment, so a run outside it gets no Open VSX token.
     environment: marketplace
-    # No id-token: ovsx must not fall back to trusted publishing (OIDC); it publishes with OVSX_PAT only.
+    # id-token: for the OIDC ID token that ovsx exchanges for a short-lived Open VSX publishing token.
     permissions:
+      id-token: write
       contents: read
     defaults:
       run:
@@ -211,25 +213,23 @@ jobs:
         env:
           VSIX: ${{ runner.temp }}/vsix/${{ needs.package.outputs.vsix }}
         run: sha256sum "$VSIX"
-      # ovsx reads the token from OVSX_PAT itself; it is never put on a command line or printed.
-      - name: Verify the Open VSX token (publishes nothing)
+      # Runs the pinned ovsx's own token exchange (the first half of `ovsx publish --trusted-publishing`)
+      # and discards the result: it proves the trusted publisher matches this run. The issued token is
+      # never printed and expires within minutes.
+      - name: Verify trusted publishing (publishes nothing)
         if: env.MODE == 'verify'
-        env:
-          OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
-          if [ -z "$OVSX_PAT" ]; then
-            echo "::error::OVSX_PAT is not set: create an Open VSX access token (https://open-vsx.org/user-settings/tokens) and add it as the secret OVSX_PAT of the marketplace environment (see CONTRIBUTING.md, Open VSX). Nothing was published."
-            exit 1
-          fi
-          npx --no-install ovsx verify-pat "$PUBLISHER"
+          node -e '
+            const { Registry } = require("ovsx/lib/registry");
+            const tp = require("ovsx/lib/trusted-publishing");
+            const { publisher, name } = require("./package.json");
+            tp.getTrustedPublishingToken(new Registry(), publisher, name, {}).then(
+              () => console.log(`Open VSX accepts this workflow as the trusted publisher of ${publisher}.${name}. Nothing was published.`),
+              (err) => { console.log(`::error::Open VSX trusted publishing is not set up for ${publisher}.${name}: ${err.message} (see CONTRIBUTING.md, Open VSX). Nothing was published.`); process.exit(1); });
+          '
+      # --trusted-publishing fails instead of falling back to any stored credential; no OVSX_PAT exists.
       - name: Publish to Open VSX
         if: env.MODE == 'publish'
         env:
-          OVSX_PAT: ${{ secrets.OVSX_PAT }}
           VSIX: ${{ runner.temp }}/vsix/${{ needs.package.outputs.vsix }}
-        run: |
-          if [ -z "$OVSX_PAT" ]; then
-            echo "::error::OVSX_PAT is not set: create an Open VSX access token (https://open-vsx.org/user-settings/tokens) and add it as the secret OVSX_PAT of the marketplace environment (see CONTRIBUTING.md, Open VSX). Nothing was published."
-            exit 1
-          fi
-          npx --no-install ovsx publish --packagePath "$VSIX"
+        run: npx --no-install ovsx publish --packagePath "$VSIX" --trusted-publishing

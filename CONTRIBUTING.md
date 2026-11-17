@@ -55,7 +55,10 @@ publish it.
 
 ### Open VSX
 
-Open VSX needs an access token. One-time setup by the owner:
+The workflow publishes to Open VSX with [trusted publishing](https://github.com/eclipse/openvsx/wiki/Trusted-Publishing):
+GitHub's OIDC ID token is exchanged for a publishing token that is valid for a few minutes. No Open VSX
+token is stored in this repository. Open VSX lets a trusted publisher be registered only by an *owner* of
+the namespace and only for an extension that already has a version, so the owner sets it up once:
 
 1. Create an Eclipse Foundation account at https://accounts.eclipse.org/user/register and enter, in its
    *GitHub Username* field, the GitHub account you sign in to Open VSX with.
@@ -63,37 +66,50 @@ Open VSX needs an access token. One-time setup by the owner:
 3. Sign the Eclipse Foundation Open VSX Publisher Agreement: on
    https://open-vsx.org/user-settings/profile click *Log in with Eclipse*, then *Show Publisher
    Agreement*, read it and click *Agree*.
-4. Create an access token in *Settings → Access Tokens* (https://open-vsx.org/user-settings/tokens):
-   *Generate New Token*, describe it (for example "a4sx-mcp GitHub Actions"), *Generate Token*, and copy
-   it; it is shown only once.
-5. Create the namespace once, locally (the workflow does not create it). Run it in `vscode/` so the
-   pinned ovsx from the lockfile is used, and pass the token through the environment so it stays out of
-   the shell history and the process list:
+4. Create a temporary access token in *Settings → Access Tokens* (https://open-vsx.org/user-settings/tokens):
+   *Generate New Token*, describe it (for example "a4sx bootstrap"), *Generate Token*, and copy it. It is
+   needed only for steps 5 and 6, and is never added to GitHub.
+5. Create the namespace and publish the first version (0.8.0) with that token, locally. Use the exact
+   `.vsix` that the `vscode-v0.8.0` run published to the Marketplace (its sha256 is in that run's log;
+   the artifact is kept until 2027-02-15),
+   the ovsx pinned in `vscode/package-lock.json`, and pass the token through the environment so it stays
+   out of the shell history and the process list:
 
    ```sh
    cd vscode && npm ci --ignore-scripts
+   gh run download 43994223063 -R crossvault/a4sx-mcp -n vsix -D "$HOME/a4sx-vsix"
+   sha256sum "$HOME/a4sx-vsix/a4sx-0.8.0.vsix"
+   # must print 16a01dc23608775c5252f80fd38f543e1eeca7c319a44f8c50f3201706ee6cfc
    read -rs OVSX_PAT && export OVSX_PAT     # paste the token; it is not echoed
    npx --no-install ovsx create-namespace crossvaultGmbH
+   npx --no-install ovsx publish --packagePath "$HOME/a4sx-vsix/a4sx-0.8.0.vsix"
    unset OVSX_PAT
    ```
 
-6. Add the token as the secret `OVSX_PAT` of the `marketplace` environment: repository *Settings →
-   Environments → marketplace → Environment secrets → Add environment secret*.
-7. Optional: to have the namespace shown as verified, claim its ownership with a public issue at
-   https://github.com/EclipseFdn/open-vsx.org/issues/new/choose (see
-   https://github.com/eclipse/openvsx/wiki/Namespace-Access).
+6. Become owner of the namespace. Creating it makes you only a *contributor*. Claim ownership with a
+   public issue at https://github.com/EclipseFdn/open-vsx.org/issues/new/choose (process:
+   https://github.com/eclipse/openvsx/wiki/Namespace-Access) and wait until it is granted; the namespace
+   then shows as verified.
+7. Register the trusted publisher: *Settings → Trusted Publishers*
+   (https://open-vsx.org/user-settings/trusted-publishers), namespace `crossvaultGmbH`, extension `a4sx`,
+   provider GitHub Actions, with exactly:
+   - Organization or user name: `crossvault`
+   - Repository name: `a4sx-mcp`
+   - Workflow filename: `vscode-publish.yml`
+   - Environment name: `marketplace` (required here: Open VSX trusts any ref that runs the workflow file
+     otherwise; the environment adds the owner approval and the `main` / `vscode-v*` ref policy)
+8. Delete the temporary token in *Settings → Access Tokens*.
 
 Check the setup with a manual run of *VS Code extension publish* on `main` with `mode: verify`,
-`target: openvsx`; it runs `ovsx verify-pat crossvaultGmbH` and publishes nothing. If `OVSX_PAT` is missing
-the Open VSX job fails and says so; it never skips silently.
+`target: openvsx`: it runs ovsx's token exchange and publishes nothing. Until step 7 is done, the Open VSX
+job fails with a message saying so; it never skips silently. Until then, release with a tag as usual and
+expect only that job to fail, or start manual runs with `target: marketplace`.
 
-A `vscode-v*` tag always publishes to both, from one `.vsix`. If only the Open VSX job of such a run
-fails (for example because `OVSX_PAT` was missing), fix the cause and use *Re-run failed jobs* on that run:
-it publishes the same `.vsix` artifact. To publish a version that is already on the Marketplace to Open
-VSX only, start the workflow with `mode: publish`, `target: openvsx` (the Marketplace refuses a version
-it already has) on that version's `vscode-v<version>` tag, so the `.vsix` is rebuilt from the released
-sources. Only for a tag older than this Open VSX job (0.8.0) run it on `main` instead, and only while
-`vscode/` on `main` still has that version's sources.
+A `vscode-v*` tag always publishes to both registries, from one `.vsix`. If only the Open VSX job of such a
+run fails, fix the cause and use *Re-run failed jobs* on that run: it publishes the same `.vsix` artifact.
+To publish a version that is already on the Marketplace to Open VSX only, start the workflow on that
+version's `vscode-v<version>` tag with `mode: publish`, `target: openvsx` (the Marketplace refuses a
+version it already has), so the `.vsix` is rebuilt from the released sources.
 
 ## AI-assisted contributions
 
