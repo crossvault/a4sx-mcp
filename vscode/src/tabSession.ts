@@ -491,8 +491,8 @@ function narrow<T>(list: T[], keep: (x: T) => boolean): T[] {
 /**
  * The session an open Claude Code tab shows, from its label (see the header). Never a guess between sessions that
  * fit equally: several sessions with the label's title are narrowed only by what rules a session out as this tab's
- * (another open tab names it alone, or it isn't in one of the window's folders while others are); when more than
- * one is left, the user picks. `sessions` are newest first; prompts (firstPrompt) are needed only for sessions with
+ * (it isn't in one of the window's folders while others are; then, another open tab names it alone by its current
+ * title); when more than one is left, or the two rules leave none, the user picks. `sessions` are newest first; prompts (firstPrompt) are needed only for sessions with
  * no title.
  */
 export function detectTabSession(label: string, sessions: readonly RecentSession[], ctx: DetectContext = {}): Detection {
@@ -507,22 +507,28 @@ export function detectTabSession(label: string, sessions: readonly RecentSession
     return { kind: "one", session: hits[0], how };
   }
   const inWindow = (s: RecentSession) => inWindowFolder(s.folder, ctx.window, ctx.platform);
-  // A session another open tab names alone (narrowed to the window's folders) is that tab's: Claude Code opens a
-  // session in one tab at most.
+  // First the window's folders: when some matches are in them, the others can't be this tab's (all outside: all stay).
+  const windowed = narrow(hits, inWindow);
+  // Then a session another open tab names alone by its current title (among the window's, when it has some there) is
+  // that tab's: Claude Code opens a session in one tab at most. This only removes candidates: when it removes them
+  // all, the evidence conflicts and the user picks; an earlier title or a prompt never claims a session.
   const own = clean(label).toLowerCase();
   const claimed = new Set<RecentSession>();
   for (const other of ctx.otherLabels ?? []) {
     if (clean(other).toLowerCase() === own || clean(other) === DEFAULT_TAB_LABEL) {
       continue;
     }
-    const theirs = narrow(labelHits(other, sessions).hits, inWindow);
+    const theirs = narrow(sessions.filter((s) => labelMatches(other, s.title)), inWindow);
     if (theirs.length === 1) {
       claimed.add(theirs[0]);
     }
   }
-  const left = narrow(narrow(hits, (s) => !claimed.has(s)), inWindow);
+  const left = windowed.filter((s) => !claimed.has(s));
   if (left.length === 1) {
     return { kind: "one", session: left[0], how };
+  }
+  if (left.length === 0) {
+    return { kind: "ask", why: "duplicate", matches: [...windowed, ...hits.filter((s) => !windowed.includes(s))] };
   }
   return { kind: "ask", why: "duplicate", matches: [...left, ...hits.filter((s) => !left.includes(s))] };
 }

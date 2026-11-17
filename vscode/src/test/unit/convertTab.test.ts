@@ -322,13 +322,32 @@ describe("Convert to cell: which session a tab shows (0.9.1)", () => {
     assert.strictEqual(inWindowFolder(here.toUpperCase(), ctx.window, "linux"), false);
   });
 
-  it("same-title duplicates in the window's folder: one another open tab names alone is that tab's; else asked", () => {
-    const list = [rs(SID, here, { title: "Same", earlierTitles: ["Old name"] }), rs(SID2, here, { title: "Same" })];
-    // Another tab still shows SID's earlier title: SID is that tab's, so this one is SID2.
-    assert.deepStrictEqual(detectTabSession("Same", list, { ...ctx, otherLabels: ["Old name"] }), { kind: "one", session: list[1], how: "title" });
+  it("matches in the window's folder: one another open tab names alone by its current title is that tab's; else asked", () => {
+    const a = rs(SID, here, { title: "Refactor the cells view and more" });
+    const b = rs(SID2, here, { title: "Refactor the cells view 2" });
+    const label = tabLabel(a.title);
+    assert.strictEqual(label, "Refactor the cells view …");
+    assert.deepStrictEqual(detectTabSession(label, [a, b], ctx), { kind: "ask", why: "duplicate", matches: [a, b] });
+    assert.deepStrictEqual(detectTabSession(label, [a, b], { ...ctx, otherLabels: [b.title!] }), { kind: "one", session: a, how: "title" });
     // Two tabs with the same label tell nothing apart, nor does a fresh tab.
-    assert.deepStrictEqual(detectTabSession("Same", list, { ...ctx, otherLabels: ["Same", "Claude Code"] }), { kind: "ask", why: "duplicate", matches: list });
-    assert.deepStrictEqual(detectTabSession("Same", list, ctx), { kind: "ask", why: "duplicate", matches: list });
+    const same = [rs(SID, here, { title: "Same" }), rs(SID2, here, { title: "Same" })];
+    assert.deepStrictEqual(detectTabSession("Same", same, { ...ctx, otherLabels: ["Same", "Claude Code"] }), { kind: "ask", why: "duplicate", matches: same });
+  });
+
+  it("conflicting evidence is asked, never resolved to a session the rules rule out", () => {
+    // The window's session A, its copy B in a cell's folder; another tab's label is A's EARLIER title: no claim, A wins.
+    const a = rs(SID, here, { title: "Fix the login bug", earlierTitles: ["Login work"] });
+    const b = rs(SID2, "-root-cells-copy", { title: "Fix the login bug" });
+    assert.deepStrictEqual(detectTabSession("Fix the login bug", [b, a], { ...ctx, otherLabels: ["Login work"] }), { kind: "one", session: a, how: "title" });
+    // Other tabs name every in-window match by its current title (stale or unscanned evidence): never the copy
+    // outside the window, which the window rule ruled out; the user picks, the window's first.
+    const a2 = rs(SID, here, { title: "Fix the login bug in the cells view" });
+    const b2 = rs(SID2, "-root-cells-copy", { title: "Fix the login bug in the cells view" });
+    const c2 = rs(SID3, here, { title: "Fix the login bug in the" });
+    const label = tabLabel(a2.title);
+    assert.deepStrictEqual(detectTabSession(label, [b2, a2, c2], { ...ctx, otherLabels: [c2.title!, "Fix the login bug in the cells view"] }).kind, "ask");
+    const d = detectTabSession(label, [b2, a2], { ...ctx, otherLabels: ["Fix the login bug in the cells view"] });
+    assert.deepStrictEqual(d, { kind: "ask", why: "duplicate", matches: [a2, b2] });
   });
 
   it("the pick order: the matches, then this window's sessions, then Claude Code for VS Code's, then the rest", () => {
@@ -384,6 +403,7 @@ describe("Convert to cell: the command", () => {
   const MESH2 = `msh_${"b".repeat(32)}`;
   const listing = async (): Promise<MeshListing> => ({ kind: "ok", meshes: [{ id: MESH, name: "Alpha team", role: "owner", members: "3" }, { id: MESH2, role: "member", members: "2-5" }] });
   const labels = () => calls.quickPicks.map((q) => q.options.title);
+  const AID = SID.slice(0, 8);
 
   it("`launch --new-cell` takes an optional name and mesh; a mesh id or a name the CLI doesn't take gives no command", () => {
     const o = { reduced: true, autoAllow: false };
@@ -409,7 +429,7 @@ describe("Convert to cell: the command", () => {
     const t = await convertTabToCell(h.deps, [undefined, { groupId: 1, editorIndex: 1 }], { projectsDir: p.dir, listMeshes: listing });
     assert.ok(t);
     assert.deepStrictEqual(calls.modals, [], "no confirm dialog");
-    assert.deepStrictEqual(labels(), [CONVERT_TEXTS.meshTitle("Alpha work"), RUN_AS_CELL_TEXTS.optionsTitle]);
+    assert.deepStrictEqual(labels(), [CONVERT_TEXTS.meshTitle("Alpha work", AID), RUN_AS_CELL_TEXTS.optionsTitle]);
     const mesh = calls.quickPicks[0];
     assert.match(mesh.options.placeHolder, new RegExp(`^Session ${SID.slice(0, 8)} in .*alpha, changed .*\\. Choose the mesh for the new cell$`));
     assert.deepStrictEqual(mesh.items.map((i: any) => [i.label, i.description]), [
@@ -511,7 +531,7 @@ describe("Convert to cell: the command", () => {
     calls.pickQueue.push(3, 1, 0, [0]);   // Not this session?; the second row (Other work); the first mesh; options
     calls.inputQueue.push("");
     assert.ok(await convertTabToCell(harness().deps, [], { projectsDir: p.dir, listMeshes: listing }));
-    assert.deepStrictEqual(labels(), [CONVERT_TEXTS.meshTitle("Alpha work"), CONVERT_TEXTS.pickSessionTitle, CONVERT_TEXTS.meshTitle("Other work"), RUN_AS_CELL_TEXTS.optionsTitle]);
+    assert.deepStrictEqual(labels(), [CONVERT_TEXTS.meshTitle("Alpha work", SID2.slice(0, 8)), CONVERT_TEXTS.pickSessionTitle, CONVERT_TEXTS.meshTitle("Other work", SID.slice(0, 8)), RUN_AS_CELL_TEXTS.optionsTitle]);
     assert.strictEqual(calls.terminals[0].options.cwd, a);
     assert.match(calls.terminals[0].sent[0], new RegExp(`'--resume' '${SID}'\\n$`));
   });
@@ -579,7 +599,7 @@ describe("Convert to cell: the command", () => {
     calls.pickQueue.push(2, [0]);
     calls.inputQueue.push("");
     assert.ok(await convertTabToCell(harness().deps, [], { projectsDir: p.dir, listMeshes: listing }));
-    assert.strictEqual(calls.quickPicks[0].options.title, CONVERT_TEXTS.meshTitle("Same title"));
+    assert.strictEqual(calls.quickPicks[0].options.title, CONVERT_TEXTS.meshTitle("Same title", SID.slice(0, 8)));
     assert.match(calls.terminals[0].sent[0], new RegExp(`'--resume' '${SID}'\\n$`));
   });
 

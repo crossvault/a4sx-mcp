@@ -261,7 +261,7 @@ describe("Convert into a cell… on a Claude Code tab", () => {
     assert.ok(await convertTabToCell(harness().deps, [], { projectsDir: p.dir, pickCell: true, listMeshes: async () => { meshAsked = true; return { kind: "ok", meshes: [] }; } }));
     assert.strictEqual(meshAsked, false);
     assert.deepStrictEqual(calls.modals.filter((m) => m.message === CONVERT_TEXTS.confirm), [], "the cell pick names the session: no separate confirm");
-    assert.strictEqual(calls.quickPicks[0].options.title, CONVERT_TEXTS.intoCellTitle("Alpha work"));
+    assert.strictEqual(calls.quickPicks[0].options.title, CONVERT_TEXTS.intoCellTitle("Alpha work", SID.slice(0, 8)));
     assert.match(calls.quickPicks[0].options.placeHolder, new RegExp(`^Session ${SID.slice(0, 8)} in .*alpha, changed .*Choose the cell`));
     assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--cell' 'build' '--mesh-reduced-isolation' '--' '--resume' '${SID}'\n`]);
     assert.strictEqual(calls.terminals[0].options.cwd, cwd);

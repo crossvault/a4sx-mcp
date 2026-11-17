@@ -48,7 +48,7 @@ export const CONVERT_TEXTS = {
   closeTab: "Close tab",
   pickOtherPlaceholder: "Choose the session to convert (the tab's matches first, then this window's folders)",
   pickDefaultPlaceholder: "This tab has no title yet, so its session can't be told by it. Choose its session (this window's folders first)",
-  meshTitle: (title: string) => `Convert to cell: ${title}`,
+  meshTitle: (title: string, id: string) => `Convert to cell: ${title} (session ${id})`,
   meshPlaceholder: (line: string) => `${line}. Choose the mesh for the new cell`,
   meshSignedOut: "Sign in to a4sx to list your meshes here",
   meshNone: "You have no active mesh of your own yet",
@@ -63,7 +63,7 @@ export const CONVERT_TEXTS = {
   namePlaceholder: "Leave empty for a suggested name",
   nameRule: "Use a-z, 0-9 and '-' (not at the start or end), at most 48 characters; or leave it empty for a suggested name.",
   nameTaken: (name: string) => `A cell named ${name} is already on this computer. Choose another name, or leave it empty for a suggested one.`,
-  intoCellTitle: (title: string) => `Convert into an existing cell: ${title}`,
+  intoCellTitle: (title: string, id: string) => `Convert into an existing cell: ${title} (session ${id})`,
   intoCellPlaceholder: (line: string) => `${line}. Choose the cell to continue it in`,
 };
 
@@ -329,7 +329,7 @@ export async function convertTabToCell(deps: CellCommandDeps, args: readonly unk
     let meshName: string | undefined;
     for (;;) {
       const picked = await vscode.window.showQuickPick<MeshPick>(listing.then((l): MeshPick[] => meshPickItems(l)), {
-        title: t.meshTitle(session.title ?? t.untitled), placeHolder: t.meshPlaceholder(sessionLine(session)), matchOnDescription: true, ignoreFocusOut: true,
+        title: t.meshTitle(session.title ?? t.untitled, session.sessionId.slice(0, 8)), placeHolder: t.meshPlaceholder(sessionLine(session)), matchOnDescription: true, ignoreFocusOut: true,
       });
       if (!picked?.pick) {
         return undefined;
@@ -366,7 +366,7 @@ export async function convertTabToCell(deps: CellCommandDeps, args: readonly unk
   }
   const terminal = await runAsCell(deps, { id: "", findLocal: async () => local },
     options.pickCell ? undefined : { choice: { kind: "new" }, ...(meshId === undefined ? {} : { meshId }), ...(cellName === undefined ? {} : { cellName }) },
-    options.pickCell ? { title: t.intoCellTitle(session.title ?? t.untitled), placeHolder: t.intoCellPlaceholder(sessionLine(session)) } : undefined);
+    options.pickCell ? { title: t.intoCellTitle(session.title ?? t.untitled, session.sessionId.slice(0, 8)), placeHolder: t.intoCellPlaceholder(sessionLine(session)) } : undefined);
   if (terminal) {
     // not awaited: it never blocks the start
     void Promise.resolve(vscode.window.showInformationMessage(t.started, t.closeTab)).then((choice) => {
