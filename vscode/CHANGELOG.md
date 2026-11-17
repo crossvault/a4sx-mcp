@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.0
+
+- New actions **Convert to cell** and **Convert to cell in mesh…** in the context menu of a Claude Code tab (right-click the tab), and in the Command Palette while such a tab is active. They run the tab's session in a new cell: a terminal runs `a4sx launch --new-cell [options] -- --resume <session id>` in the folder the session ran in. The options are the two of **Run as cell in terminal** (**Keep my sign-in (reduced isolation)**, **Deliver messages from mesh peers without asking**), and the reduced-isolation dialog is shown as for every cell. You approve the new cell in your browser, where you pick its mesh.
+- **Convert to cell in mesh…** first lists your active meshes and adds `--mesh <mesh id>` to the command. The browser approval still asks for the mesh; if you pick another one there, the a4sx CLI says so before it starts the cell. It is offered when you are signed in and your a4sx server has meshes.
+- The Claude Code extension doesn't tell other extensions which session a tab shows. The tab is matched by its title, which Claude Code writes into the session's transcript on this computer. If no session or more than one has that title (a new chat, or two sessions with the same title), the extension lists this computer's newest sessions and you choose. From a transcript only its title records are read.
+- The tab isn't turned into a cell in place: the session continues in the terminal. The extension then offers **Close tab**, so the session isn't used in two places.
+- New actions **Save session to a4sx** and **Preview save to a4sx (dry run)** in the same context menu. They save the session of that tab, found as above: a terminal runs `a4sx push <transcript>`. **Save this session** still saves the most recently changed session on this computer (`a4sx push --latest`), which need not be the tab you are looking at.
+- If your library already holds that session, the save becomes a new version of its entry (`--into <entry>`). If it holds it more than once, you choose the entry. When the extension can't read your library (signed out in the sidebar, or offline), it runs the plain push and the server files the save.
+- **Preview save to a4sx (dry run)** runs `a4sx push <transcript> --dry-run`: the CLI lists what its scrub would change and uploads nothing. It needs no sign-in.
+- The menu entries appear while a Claude Code tab is the active editor. If you right-click a Claude Code tab while another kind of editor is active, they don't appear: click the tab first.
+
 ## 0.7.0
 
 - **Cells** shows each cell's tags and one line about its mesh's policy, from `a4sx mesh cells --json` (a4sx CLI 0.28.0 or newer): "Open · can talk to 3", "Own cells · can talk to 1" or "Closed · can talk to 0", or the policy alone ("Open") when the number of cells it can talk to isn't known. The tooltip lists the tags ("Tags: tag:ci, tag:gpu"). Only tags of the form `tag:<name>` are shown, as plain text. The view stays read-only: tags and the policy are changed on the website.

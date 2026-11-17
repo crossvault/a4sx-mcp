@@ -124,8 +124,18 @@ export async function pickLaunchOptions(configAutoAllowOn = false): Promise<Laun
   return o;
 }
 
-/** Run as cell in terminal. Resolves the terminal, or undefined when nothing was started (the user was told why). */
-export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession | undefined): Promise<vscode.Terminal | undefined> {
+/** A cell chosen before the command runs (0.8.0, Convert to cell): the cell pick is skipped. */
+export interface CellPreset {
+  choice: CellChoice;
+  /** For a new cell: the mesh it is meant for (`--mesh ID`; the browser approval still picks the mesh). */
+  meshId?: string;
+}
+
+/**
+ * Run as cell in terminal. Resolves the terminal, or undefined when nothing was started (the user was told why).
+ * With `preset` the cell isn't asked for; the options and the reduced-isolation consent are asked as always.
+ */
+export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession | undefined, preset?: CellPreset): Promise<vscode.Terminal | undefined> {
   if (!session) {
     return undefined;
   }
@@ -146,7 +156,9 @@ export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession
     return undefined;
   }
   const target: ResumeTarget = local ? { kind: "local", sessionId: local.sessionId } : { kind: "library", id: session.id };
-  const picked = await vscode.window.showQuickPick(cellChoices(load.cells), { title: t.pickTitle, placeHolder: t.pickPlaceholder });
+  const picked: { choice: CellChoice } | undefined = preset
+    ? { choice: preset.choice }
+    : await vscode.window.showQuickPick(cellChoices(load.cells), { title: t.pickTitle, placeHolder: t.pickPlaceholder });
   if (!picked) {
     return undefined;
   }
@@ -163,7 +175,7 @@ export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession
     }
     options.reduced = true;
   }
-  const args = picked.choice.kind === "cell" ? runAsCellArgs(picked.choice.cell, load.cells, options, target) : newCellRunArgs(options, target);
+  const args = picked.choice.kind === "cell" ? runAsCellArgs(picked.choice.cell, load.cells, options, target) : newCellRunArgs(options, target, preset?.meshId);
   if (!args) {
     await vscode.window.showErrorMessage(picked.choice.kind === "cell" ? CELL_CMD_TEXTS.badCell : t.badSession);
     return undefined;

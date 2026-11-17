@@ -65,6 +65,10 @@ export interface Calls {
   treeViews: Map<string, { message?: string; description?: string; visible: boolean; setVisible(v: boolean): void }>;
   /** Whether views made with createTreeView start out visible. */
   viewsVisible: boolean;
+  /** vscode.window.tabGroups.all; the first group is the active one. */
+  tabGroups: { tabs: any[]; activeTab?: any }[];
+  /** Tabs closed through vscode.window.tabGroups.close. */
+  closedTabs: any[];
 }
 
 export const calls: Calls = {
@@ -107,6 +111,8 @@ export const calls: Calls = {
   nextInfoChoice: undefined,
   shell: "/bin/bash",
   viewsVisible: false,
+  tabGroups: [],
+  closedTabs: [],
 };
 
 export function resetCalls(): void {
@@ -149,6 +155,8 @@ export function resetCalls(): void {
   calls.nextInfoChoice = undefined;
   calls.shell = "/bin/bash";
   calls.viewsVisible = false;
+  calls.tabGroups = [];
+  calls.closedTabs.length = 0;
 }
 
 function isModal(options: unknown): boolean {
@@ -270,6 +278,18 @@ const fake = {
     },
   },
   window: {
+    tabGroups: {
+      get all() {
+        return calls.tabGroups;
+      },
+      get activeTabGroup() {
+        return calls.tabGroups[0];
+      },
+      async close(tab: unknown) {
+        calls.closedTabs.push(tab);
+        return true;
+      },
+    },
     createTerminal(options: unknown) {
       const t = { options, shown: false, sent: [] as string[], show() { this.shown = true; }, sendText(text: string, addNewLine?: boolean) { this.sent.push(addNewLine === false ? text : `${text}\n`); } };
       calls.terminals.push(t);

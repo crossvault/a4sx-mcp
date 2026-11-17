@@ -2,7 +2,7 @@
   "name": "a4sx",
   "displayName": "a4sx",
   "description": "Use a4sx from VS Code: sign in, browse and resume your saved sessions or run them as mesh cells, sort them into folders, manage your launch profiles, start and manage the mesh cells on this computer, see your meshes, search the marketplace, and add the a4sx MCP servers for agent mode.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "crossvaultGmbH",
   "license": "Apache-2.0",
   "homepage": "https://session-exchange.com",
@@ -299,6 +299,30 @@
         "title": "Set as default",
         "category": "a4sx",
         "icon": "$(star-empty)"
+      },
+      {
+        "command": "a4sx.convertTabToCell",
+        "title": "Convert to cell",
+        "category": "a4sx",
+        "icon": "$(server-process)"
+      },
+      {
+        "command": "a4sx.convertTabToCellInMesh",
+        "title": "Convert to cell in mesh…",
+        "category": "a4sx",
+        "icon": "$(server-process)"
+      },
+      {
+        "command": "a4sx.saveTabSession",
+        "title": "Save session to a4sx",
+        "category": "a4sx",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "a4sx.previewTabSessionSave",
+        "title": "Preview save to a4sx (dry run)",
+        "category": "a4sx",
+        "icon": "$(eye)"
       }
     ],
     "viewsContainers": {
@@ -648,6 +672,28 @@
           "group": "2_danger@1"
         }
       ],
+      "editor/title/context": [
+        {
+          "command": "a4sx.convertTabToCell",
+          "when": "activeWebviewPanelId == 'claudeVSCodePanel'",
+          "group": "a4sx@1"
+        },
+        {
+          "command": "a4sx.convertTabToCellInMesh",
+          "when": "activeWebviewPanelId == 'claudeVSCodePanel' && a4sx.signedIn && a4sx.meshesAvailable",
+          "group": "a4sx@2"
+        },
+        {
+          "command": "a4sx.saveTabSession",
+          "when": "activeWebviewPanelId == 'claudeVSCodePanel'",
+          "group": "a4sx@3"
+        },
+        {
+          "command": "a4sx.previewTabSessionSave",
+          "when": "activeWebviewPanelId == 'claudeVSCodePanel'",
+          "group": "a4sx@4"
+        }
+      ],
       "commandPalette": [
         {
           "command": "a4sx.signIn",
@@ -792,6 +838,22 @@
         {
           "command": "a4sx.openCellPolicy",
           "when": "false"
+        },
+        {
+          "command": "a4sx.convertTabToCell",
+          "when": "activeWebviewPanelId == 'claudeVSCodePanel'"
+        },
+        {
+          "command": "a4sx.convertTabToCellInMesh",
+          "when": "activeWebviewPanelId == 'claudeVSCodePanel' && a4sx.signedIn && a4sx.meshesAvailable"
+        },
+        {
+          "command": "a4sx.saveTabSession",
+          "when": "activeWebviewPanelId == 'claudeVSCodePanel'"
+        },
+        {
+          "command": "a4sx.previewTabSessionSave",
+          "when": "activeWebviewPanelId == 'claudeVSCodePanel'"
         }
       ]
     },

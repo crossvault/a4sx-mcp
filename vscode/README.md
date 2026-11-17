@@ -22,6 +22,8 @@ This extension connects VS Code to a4sx. It adds:
   - **a4sx library** works with your a4sx account. VS Code asks you to sign in the first time it connects, and VS Code handles that sign-in itself.
 - **a4sx: Save this session.** This command runs `a4sx push --latest` in a terminal. It saves your most recently changed local Claude Code session to your a4sx library. The CLI's output and questions appear in the terminal.
 - **a4sx: Open my library.** This command opens your library on session-exchange.com in your browser.
+- **Convert to cell** and **Convert to cell in mesh…** in the context menu of a Claude Code tab. They run that tab's session in a new mesh cell, in a terminal (see [Convert to cell](#convert-to-cell)).
+- **Save session to a4sx** and **Preview save to a4sx (dry run)** in the same context menu. They save that tab's session to your library, or show what a save would upload (see [Save a tab's session](#save-a-tabs-session)).
 
 ## Folders and the filter
 
@@ -88,6 +90,27 @@ The list is read when the view is first shown, on **Refresh cells**, after each 
 3. A terminal runs `a4sx launch --cell <cell> [options] -- --resume <session id>` in the folder the session ran in. If the session isn't on this computer, only in your library, it runs `a4sx launch --cell <cell> [options] --a4sx-session=<id>` in your workspace folder instead, which fetches it. **New cell…** runs `a4sx launch --new-cell [options] …`; the browser approval picks the mesh. A session that is only in your library is fetched with your a4sx sign-in, so with **Keep my sign-in** off the extension warns first and starts only with it on.
 
 **Which sign-in the cell uses.** A new cell, or one with no launch profile, with no launch profile on your account either, runs on your Claude Code sign-in on this computer: no launch profile or a4sx router is needed (a4sx CLI 0.26.5 or newer, with **Keep my sign-in** on). When that applies, a short message says so as the terminal opens. If Claude Code isn't signed in on this computer, the cell starts anyway: run `/login` inside it. Claude Code saves that sign-in where a plain `claude` on this computer keeps it, and the next start of the cell uses it. A cell with a launch profile uses that profile, the a4sx router for example.
+
+### Convert to cell
+
+**Convert to cell** (right-click a Claude Code tab, or the Command Palette while such a tab is active) runs the session of that tab in a new cell:
+
+1. The extension finds the tab's session on this computer. The Claude Code extension doesn't tell other extensions which session a tab shows, so the tab is matched by its title, which Claude Code writes into the session's transcript. If no session or more than one has that title, the extension lists this computer's newest sessions and you choose. From a transcript only its title records are read.
+2. Choose the options, the same two as for **Run as cell in terminal**. The reduced-isolation dialog is shown as for every cell.
+3. A terminal runs `a4sx launch --new-cell [options] -- --resume <session id>` in the folder the session ran in. The CLI opens your browser, where you approve the new cell and pick its mesh.
+
+**Convert to cell in mesh…** first lists your active meshes and adds `--mesh <mesh id>` to the command. The browser approval still asks for the mesh; if you pick another one there, the a4sx CLI says so before it starts the cell. This action is offered when you are signed in and your a4sx server has meshes.
+
+The tab isn't turned into a cell in place: the session continues in the terminal, and the extension offers **Close tab** so that it isn't used in two places. The menu entries appear while a Claude Code tab is the active editor; if another kind of editor is active, click the Claude Code tab first.
+
+### Save a tab's session
+
+The same context menu has two actions that save the session of that tab to your library. The session is found as for **Convert to cell**.
+
+- **Save session to a4sx** opens a terminal that runs `a4sx push <transcript>`. If your library already holds that session, the save becomes a new version of its entry (`--into <entry>`); if it holds it more than once, you choose the entry. When the extension can't read your library (you aren't signed in in the sidebar, or you are offline), it runs the plain push and the server files the save. The CLI scrubs the transcript before it uploads it and prints what it changed.
+- **Preview save to a4sx (dry run)** runs `a4sx push <transcript> --dry-run`: the CLI lists what its scrub would change and uploads nothing. It needs no sign-in.
+
+**a4sx: Save this session** is a different command: it saves the most recently changed Claude Code session on this computer (`a4sx push --latest`), which need not be the tab you are looking at.
 
 **Inside an a4sx session.** If VS Code itself was started inside an a4sx session (`A4SX_HARNESS=1` or `A4SX_MESH_SESSION=1` in its environment), the extension never runs the a4sx CLI: it would act as that session, not as you. The views and commands say so instead.
 
