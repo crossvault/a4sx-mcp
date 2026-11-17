@@ -251,17 +251,18 @@ describe("Convert into a cell… on a Claude Code tab", () => {
   });
   afterEach(() => p.remove());
 
-  it("asks for the cell (one you have, or New cell…) after the session is confirmed; no mesh pick", async () => {
+  it("asks for the cell (one you have, or New cell…) with the session named in its title; no confirm, no mesh pick", async () => {
     const cwd = p.cwd("alpha");
     p.session(cwd, SID, "claude-vscode", "tab work", [{ type: "ai-title", aiTitle: "Alpha work" }]);
     const tab = { label: "Alpha work", input: { viewType: `mainThreadWebview-${CLAUDE_PANEL}` } };
     calls.tabGroups = [{ tabs: [tab], activeTab: tab }];
     calls.pickQueue.push(0, [0]);
     let meshAsked = false;
-    assert.ok(await convertTabToCell(harness().deps, [], { projectsDir: p.dir, pickCell: true, pickMesh: async () => { meshAsked = true; return MESH; } }));
+    assert.ok(await convertTabToCell(harness().deps, [], { projectsDir: p.dir, pickCell: true, listMeshes: async () => { meshAsked = true; return { kind: "ok", meshes: [] }; } }));
     assert.strictEqual(meshAsked, false);
-    assert.ok(calls.modals.some((m) => m.message === CONVERT_TEXTS.confirm));
-    assert.strictEqual(calls.quickPicks[0].options.title, RUN_AS_CELL_TEXTS.pickTitle);
+    assert.deepStrictEqual(calls.modals.filter((m) => m.message === CONVERT_TEXTS.confirm), [], "the cell pick names the session: no separate confirm");
+    assert.strictEqual(calls.quickPicks[0].options.title, CONVERT_TEXTS.intoCellTitle("Alpha work"));
+    assert.match(calls.quickPicks[0].options.placeHolder, new RegExp(`^Session ${SID.slice(0, 8)} in .*alpha, changed .*Choose the cell`));
     assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--cell' 'build' '--mesh-reduced-isolation' '--' '--resume' '${SID}'\n`]);
     assert.strictEqual(calls.terminals[0].options.cwd, cwd);
     // Esc on the cell pick starts nothing.

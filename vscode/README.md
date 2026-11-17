@@ -22,7 +22,7 @@ This extension connects VS Code to a4sx. It adds:
   - **a4sx library** works with your a4sx account. VS Code asks you to sign in the first time it connects, and VS Code handles that sign-in itself.
 - **a4sx: Save this session.** This command runs `a4sx push --latest` in a terminal. It saves your most recently changed local Claude Code session to your a4sx library. The CLI's output and questions appear in the terminal.
 - **a4sx: Open my library.** This command opens your library on session-exchange.com in your browser.
-- **Convert to cell**, **Convert to cell in mesh…** and **Convert into a cell…** in the context menu of a Claude Code tab. They run that tab's session in a new mesh cell, or one you already have, in a terminal (see [Convert to cell](#convert-to-cell)).
+- **Convert to cell…** and **Convert into an existing cell…** in the context menu of a Claude Code tab. They run that tab's session in a new mesh cell (you pick its mesh and name), or one you already have, in a terminal (see [Convert to cell](#convert-to-cell)).
 - **a4sx: Convert an Agents-window session to a cell…** in the Command Palette does the same for a Claude session of VS Code's Agents window (see [Agents-window sessions](#agents-window-sessions)).
 - **Save session to a4sx** and **Preview save to a4sx (dry run)** in the same context menu. They save that tab's session to your library, or show what a save would upload (see [Save a tab's session](#save-a-tabs-session)).
 
@@ -94,17 +94,30 @@ The list is read when the view is first shown, on **Refresh cells**, after each 
 
 ### Convert to cell
 
-**Convert to cell** (right-click a Claude Code tab, or the Command Palette while such a tab is active) runs the session of that tab in a new cell:
+**Convert to cell…** (right-click a Claude Code tab, or the Command Palette while such a tab is active) runs the session of that tab in a new cell:
 
-1. The extension finds the tab's session on this computer. The Claude Code extension doesn't tell other extensions which session a tab shows, so the tab is matched by its title, which Claude Code writes into the session's transcript. When exactly one session has that title, you confirm it before anything runs: the dialog shows its title, when it last changed, its first prompt (shortened) and the start of its session id, with **Choose another…** to pick a different one. If no session or more than one has that title, nothing is matched automatically: the extension lists this computer's newest sessions with the same details and you choose. From a transcript only its title records and its first prompt are read. They are only shown to you, in the dialog, the pick and the terminal's banner. The extension never logs them, stores them or puts them on a command line; VS Code may keep the banner with the terminal's scrollback.
-2. Choose the options, the same two as for **Run as cell in terminal**. The reduced-isolation dialog is shown as for every cell.
-3. A terminal runs `a4sx launch --new-cell [options] -- --resume <session id>` in the folder the session ran in. The CLI opens your browser, where you approve the new cell and pick its mesh.
-
-**Convert to cell in mesh…** first lists your active meshes and adds `--mesh <mesh id>` to the command. The browser approval still asks for the mesh; if you pick another one there, the a4sx CLI says so before it starts the cell. This action is offered when you are signed in and your a4sx server has meshes.
+1. The extension finds the tab's session on this computer (see [Which session a tab shows](#which-session-a-tab-shows)). In the normal case it asks nothing here.
+2. Pick the mesh. The list shows your active meshes with your role and their member count. Its title and placeholder name the session that will be converted: its title, the start of its session id, its folder and when it last changed. If that isn't the session you mean, pick **Not this session? Choose another…** at the end of the list. **Choose the mesh in the browser** leaves the mesh to the browser approval. When you aren't signed in, or your meshes can't be read, the list says so and still offers these two rows.
+3. Name the cell. The box is prefilled with the session title's first words in the form a cell name takes (a-z, 0-9 and `-`). Every member of the mesh sees the name. Leave the box empty and the a4sx server proposes two random words. The suggestion comes from the session title only, never from this computer's name.
+4. Choose the options, the same two as for **Run as cell in terminal**. The reduced-isolation dialog is shown as for every cell.
+5. A terminal runs `a4sx launch --new-cell [--as <name>] [--mesh <mesh id>] [options] -- --resume <session id>` in the folder the session ran in. The CLI opens your browser, where you approve the new cell. The approval still asks for the mesh and shows the name, and you can change both there. If you pick another mesh there, the a4sx CLI says so before it starts the cell.
 
 The tab isn't turned into a cell in place: the session continues in the terminal, and the extension offers **Close tab** so that it isn't used in two places. The menu entries appear when you right-click a Claude Code tab, whichever editor is active (in VS Code before 1.106, which doesn't tell which kind of webview a tab is, they appear on webview tabs while a Claude Code tab is the active editor). A right-click doesn't make the tab's editor group active, and VS Code tells extensions only the clicked tab's position in its group. So with split editors, when more than one group could hold the clicked tab, the extension asks which Claude Code tab you mean instead of guessing. If the clicked tab isn't a Claude Code tab, it says so and does nothing.
 
-**Convert into a cell…** works like **Convert to cell**, but after you confirm the session you choose the cell as in **Run as cell in terminal**: a cell you already have (`a4sx launch --cell <cell> [options] -- --resume <session id>`) or **New cell…**.
+**Convert into an existing cell…** finds the session the same way. Then you choose the cell as in **Run as cell in terminal**: a cell you already have (`a4sx launch --cell <cell> [options] -- --resume <session id>`) or **New cell…**. That list's title and placeholder name the session. Press Esc if it isn't the one you mean.
+
+Why the meshes aren't a submenu: VS Code builds context menus from the extension's manifest. Their entries and titles are fixed when the extension is installed, and an extension can only show or hide them. So a submenu can't list your meshes by name, and the mesh list opens after the click instead.
+
+#### Which session a tab shows
+
+The Claude Code extension doesn't tell other extensions which session a tab shows. Its tab's label is the session's summary: the session title, or before there is one, the prompt. A label longer than 25 characters is cut to 24 plus "…", and a tab with no summary yet is labelled "Claude Code". Claude Code writes the titles and the last prompt into the session's transcript on this computer. The extension matches the label against the newest transcripts on this computer, and also against the newer transcripts of this window's folders:
+
+- A session whose title, or a title it had before, matches the label. A tab keeps the first title Claude Code generated for it, even after the session gets a newer one.
+- Only when no title matches: a session with no title yet whose first or last prompt matches the label.
+
+When several sessions match (copies of a session in other folders share its title, for example), the extension rules out the ones that can't be this tab's. A session that another open Claude Code tab alone matches is shown in that tab, because Claude Code opens a session in one tab at most. And when some of the matches are in this window's folders, or in their `.claude/worktrees`, the others drop out, because Claude Code's tabs show the sessions of the window's folders. If exactly one session is left, it is used. If several are left, or none matches, or the tab is still labelled "Claude Code", the extension lists the sessions and you choose. The list shows the matches first, then this window's sessions, then the other sessions of Claude Code for VS Code, each with its title, folder, when it last changed, the start of its session id and its first prompt. Nothing is guessed between sessions that fit equally.
+
+From a transcript the extension reads only its end (titles, the last prompt and the newest record's entrypoint) and its first prompt. They are only shown to you, in the lists and the terminal's banner. The extension never logs them, stores them or puts them on a command line; VS Code may keep the banner with the terminal's scrollback. The cell name the box suggests comes from the title and goes on the command line only if you keep it.
 
 ### Agents-window sessions
 
@@ -118,10 +131,10 @@ Archive or close the session in the Agents window first: if it goes on there too
 
 ### Save a tab's session
 
-The same context menu has two actions that save the session of that tab to your library. The session is found as for **Convert to cell**.
+The same context menu has two actions that save the session of that tab to your library. The session is found as for **Convert to cell…** (see [Which session a tab shows](#which-session-a-tab-shows)).
 
 - **Save session to a4sx** opens a terminal that runs `a4sx push <transcript>`. If your library already holds that session, the save becomes a new version of its entry (`--into <entry>`); if it holds it more than once, you choose the entry. When the extension can't read your library (you aren't signed in in the sidebar, your sign-in has expired, or you are offline), it saves nothing and says why: a plain push could add the session as a second entry instead of a new version. If the entry's id is one the a4sx CLI doesn't take, the extension says so and offers **Save as a new entry**. The CLI scrubs the transcript before it uploads it and prints what it changed.
-- **Save session to a4sx** asks you to confirm the session as above (**Save this session**, **Choose another…** or Cancel). The terminal names the session it saves before the CLI's output.
+- When the session was found without asking you, **Save session to a4sx** asks you to confirm it in a dialog with its title, when it last changed, its first prompt (shortened) and the start of its session id (**Save this session**, **Choose another…** or Cancel). The terminal names the session it saves before the CLI's output.
 - **Preview save to a4sx (dry run)** doesn't ask for that confirm, since it uploads nothing; its terminal names the session the same way. It runs `a4sx push <transcript> --dry-run`: the CLI lists what its scrub would change and uploads nothing. It needs no sign-in.
 
 **a4sx: Save this session** is a different command: it saves the most recently changed Claude Code session on this computer (`a4sx push --latest`), which need not be the tab you are looking at.
