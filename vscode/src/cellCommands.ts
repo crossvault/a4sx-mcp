@@ -11,11 +11,12 @@ import * as fs from "fs";
 import { CLI_NAME } from "./cli";
 import { CellStartPlan, cellStartPlan, isDirectory, lastPromptFolder } from "./cellResume";
 import {
-  CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellProfileArgs, cellRenameArgs, cellsListDir, cellStopArgs, LocalCell, NEW_CELL_ARGS, policyUrl,
+  CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellProfileArgs, cellRenameArgs, cellsListDir, cellStopArgs, LocalCell, MIN_CELL_CONSENT_CLI, NEW_CELL_ARGS,
+  policyUrl,
   showText,
 } from "./cells";
 import { CellsProvider, CliOutput, CliResolution, CliRunner, lacksCellProfile, LocalCellItem, MeshGroupItem } from "./cellsView";
-import { IN_SESSION_MESSAGE, parseCliError, parseProfilesAnswer, PROFILES_ARGS } from "./cliJson";
+import { IN_SESSION_MESSAGE, parseCliError, parseProfilesAnswer, PROFILES_ARGS, versionAtLeast } from "./cliJson";
 import {
   bundledClaude, claudeFindable, downloadCli, Fetch, installedLauncher, launcherNeedsRepair, ProvisionError, repairLauncher, RepairResult, Runner, searchPython, updateArgs, updateDue,
   WINGET_PYTHON_ARGS, writeLauncher,
@@ -49,6 +50,11 @@ export const CELL_CMD_TEXTS = {
     "trust the agent on this computer.\n\nWhere the sandbox works, the cell runs in it and none of this applies. " +
     "You're asked once on this computer.",
   consentAccept: "Accept and start",
+  consentCliTooOld: (v: string) =>
+    `This a4sx CLI (${v}) can't remember for a cell that you accepted reduced isolation, so a cell started from here ` +
+    `would be refused when it starts again without a terminal (by the agent host, for one). Nothing was started. Update ` +
+    `the a4sx CLI to ${MIN_CELL_CONSENT_CLI} or newer, then start the cell again: it then asks you once in the terminal.`,
+  updateCli: "Update a4sx CLI",
   standalone: (name: string) => `The cell «${name}» isn't in a mesh yet. Add it to a mesh in the browser, then start it.`,
   openInBrowser: "Open in browser",
   badCell: "This cell can't be started from here: its name or mesh isn't one the a4sx CLI accepts.",
@@ -192,7 +198,26 @@ export function machineKey(): string {
   return createHash("sha256").update([os.hostname(), process.platform, os.homedir()].join("\0")).digest("hex").slice(0, 32);
 }
 
-/** Asks once per machine before the first start with --mesh-reduced-isolation; true when accepted. */
+/**
+ * 0.9.3: whether this CLI asks the reduced-isolation question itself (0.32.0+), so Start and New cell can leave it to
+ * the CLI. An older one: the user is told to update (with the button), and nothing starts. An unknown version: yes
+ * (the CLI then says itself what it needs).
+ */
+export async function cliAsksConsent(deps: CellCommandDeps, cli: string): Promise<boolean> {
+  const v = await deps.provider.versions.version(cli);
+  if (v === undefined || versionAtLeast(v, MIN_CELL_CONSENT_CLI)) {
+    return true;
+  }
+  if ((await vscode.window.showErrorMessage(CELL_CMD_TEXTS.consentCliTooOld(v), CELL_CMD_TEXTS.updateCli)) === CELL_CMD_TEXTS.updateCli) {
+    await updateCliInTerminal(deps);
+  }
+  return false;
+}
+
+/**
+ * Asks once per machine before the first start with --mesh-reduced-isolation; true when accepted. Only Run as cell
+ * and the Convert actions still pass that flag ("Keep my sign-in"); Start and New cell leave the question to the CLI.
+ */
 export async function consentReducedIsolation(state: State, key: string = machineKey()): Promise<boolean> {
   const seen = state.get<unknown>(CONSENT_KEY);
   const list = Array.isArray(seen) ? seen.filter((x): x is string => typeof x === "string") : [];
@@ -427,7 +452,7 @@ async function transcriptTitleOf(file: string): Promise<string | undefined> {
 }
 
 /**
- * Start in terminal: `a4sx launch --cell NAME [--mesh ID] --mesh-reduced-isolation`. 0.9.2: in the folder the cell's
+ * Start in terminal: `a4sx launch --cell NAME [--mesh ID]`. 0.9.2: in the folder the cell's
  * last conversation ran in, and with `-- --resume <its id>` while its transcript is there (Claude Code finds a
  * conversation only from its own folder). The CLI records that conversation (0.31.10+); with none recorded, or its
  * folder gone, the user picks the folder. Never the home folder by default, never this window's folder silently.
@@ -448,8 +473,9 @@ export async function startCell(deps: CellCommandDeps, item: LocalCellItem | und
     await vscode.window.showErrorMessage(CELL_CMD_TEXTS.badCell);
     return undefined;
   }
+  // 0.9.3: no reduced-isolation dialog here: the CLI asks in the terminal, once per cell, and stores the answer
   const cli = await ensureCli(deps);
-  if (!cli || !(await consentReducedIsolation(deps.state))) {
+  if (!cli || !(await cliAsksConsent(deps, cli))) {
     return undefined;
   }
   // Claude Code first: nobody picks a folder for a start that then can't happen.
@@ -514,10 +540,10 @@ export async function startCell(deps: CellCommandDeps, item: LocalCellItem | und
   return terminal;
 }
 
-/** New cell: `a4sx launch --new-cell --mesh-reduced-isolation`; the claim happens in the browser from there. */
+/** New cell: `a4sx launch --new-cell`; the claim happens in the browser, the reduced-isolation question in the terminal. */
 export async function newCell(deps: CellCommandDeps): Promise<vscode.Terminal | undefined> {
   const cli = await ensureCli(deps);
-  if (!cli || !(await consentReducedIsolation(deps.state))) {
+  if (!cli || !(await cliAsksConsent(deps, cli))) {
     return undefined;
   }
   const cwd = await deps.folder();
@@ -749,7 +775,7 @@ export function typedCommand(found: string, args: readonly string[], shell: stri
   return (kind && commandLine(exe, args, kind)) ?? commandLine(exe, args, "posix");
 }
 
-/** Copy launch command: `a4sx launch --cell NAME [--mesh ID] --mesh-reduced-isolation`, quoted for the default shell. */
+/** Copy launch command: `a4sx launch --cell NAME [--mesh ID]`, quoted for the default shell. */
 export async function copyCellLaunch(deps: CellCommandDeps, item: LocalCellItem | undefined): Promise<string | undefined> {
   if (!(item instanceof LocalCellItem)) {
     return undefined;

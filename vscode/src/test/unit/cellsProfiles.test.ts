@@ -375,10 +375,10 @@ describe("command builders", () => {
 
   it("Copy launch command: the bare name when a4sx is on PATH, quoted for the default shell; POSIX when the shell is unknown", () => {
     const args = cellLaunchArgs(build, cells)!;
-    assert.strictEqual(typedCommand("/usr/local/bin/a4sx", args, "/bin/zsh", "/usr/bin:/usr/local/bin", "linux"), "'a4sx' 'launch' '--cell' 'build' '--mesh-reduced-isolation'");
+    assert.strictEqual(typedCommand("/usr/local/bin/a4sx", args, "/bin/zsh", "/usr/bin:/usr/local/bin", "linux"), "'a4sx' 'launch' '--cell' 'build'");
     assert.strictEqual(typedCommand("C:\\Tools\\a4sx.cmd", args, "C:\\Program Files\\PowerShell\\7\\pwsh.exe", "C:\\Tools", "win32"),
-      "& 'a4sx' 'launch' '--cell' 'build' '--mesh-reduced-isolation'");
-    assert.strictEqual(typedCommand("/opt/a4sx/a4sx", args, undefined, "/usr/bin", "linux"), "'/opt/a4sx/a4sx' 'launch' '--cell' 'build' '--mesh-reduced-isolation'");
+      "& 'a4sx' 'launch' '--cell' 'build'");
+    assert.strictEqual(typedCommand("/opt/a4sx/a4sx", args, undefined, "/usr/bin", "linux"), "'/opt/a4sx/a4sx' 'launch' '--cell' 'build'");
   });
 });
 
@@ -455,7 +455,7 @@ describe("Cells view: grouped by mesh, with the other machines' cells", () => {
     assert.deepStrictEqual(calls.infos, [CELL_CMD_TEXTS.stopped("build"), CELL_CMD_TEXTS.renamed("docs", "notes")]);
     calls.shell = "/bin/bash";
     const line = await copyCellLaunch(h.deps, build);
-    assert.strictEqual(line, `'${CLI}' 'launch' '--cell' 'build' '--mesh-reduced-isolation'`);
+    assert.strictEqual(line, `'${CLI}' 'launch' '--cell' 'build'`);
     assert.strictEqual(calls.clipboard, line);
   });
 
@@ -602,7 +602,7 @@ describe("Run as cell in terminal", () => {
       assert.ok(args && !args.some((a) => forcing.test(a)), JSON.stringify(args));
     }
     assert.deepStrictEqual(newCellRunArgs({ reduced: true, autoAllow: false }), ["launch", "--new-cell", "--mesh-reduced-isolation"]);
-    assert.deepStrictEqual([...NEW_CELL_ARGS], ["launch", "--new-cell", "--mesh-reduced-isolation"]);
+    assert.deepStrictEqual([...NEW_CELL_ARGS], ["launch", "--new-cell"]);
   });
 
   it("0.5.2: the Claude Code sign-in hint shows only when it is sure: no profile (or New cell…), CLI 0.26.5+, Keep my sign-in on", async () => {

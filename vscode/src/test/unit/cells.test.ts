@@ -122,10 +122,10 @@ describe("cells: reading `a4sx mesh cells --json`", () => {
 describe("cells: the CLI commands", () => {
   const cells = parseCellsJson(JSON.stringify(CLI_ANSWER))!;
 
-  it("start: `launch --cell NAME --mesh-reduced-isolation`; --mesh only when another cell shares the name", () => {
-    assert.deepStrictEqual(cellLaunchArgs(cells[3], cells), ["launch", "--cell", "docs", "--mesh-reduced-isolation"]);
-    assert.deepStrictEqual(cellLaunchArgs(cells[0], cells), ["launch", "--cell", "build", "--mesh", MESH, "--mesh-reduced-isolation"]);
-    assert.deepStrictEqual(cellLaunchArgs(cells[1], cells), ["launch", "--cell", "build", "--mesh", MESH2, "--mesh-reduced-isolation"]);
+  it("start: `launch --cell NAME` (0.9.3: no --mesh-reduced-isolation); --mesh only when another cell shares the name", () => {
+    assert.deepStrictEqual(cellLaunchArgs(cells[3], cells), ["launch", "--cell", "docs"]);
+    assert.deepStrictEqual(cellLaunchArgs(cells[0], cells), ["launch", "--cell", "build", "--mesh", MESH]);
+    assert.deepStrictEqual(cellLaunchArgs(cells[1], cells), ["launch", "--cell", "build", "--mesh", MESH2]);
   });
 
   it("a standalone cell isn't started (it must be added to a mesh first)", () => {
@@ -133,7 +133,7 @@ describe("cells: the CLI commands", () => {
   });
 
   it("new cell, list, default and forget", () => {
-    assert.deepStrictEqual(NEW_CELL_ARGS, ["launch", "--new-cell", "--mesh-reduced-isolation"]);
+    assert.deepStrictEqual(NEW_CELL_ARGS, ["launch", "--new-cell"]);
     assert.deepStrictEqual(CELLS_LIST_ARGS, ["mesh", "cells", "--json"]);
     assert.deepStrictEqual(cellDefaultArgs(cells[3], cells), ["mesh", "cell", "default", "docs"]);
     assert.deepStrictEqual(cellDefaultArgs(cells[1], cells), ["mesh", "cell", "default", "build", "--mesh", MESH2]);
@@ -835,38 +835,29 @@ describe("Cells view", () => {
 describe("Cells: actions", () => {
   beforeEach(resetCalls);
 
-  it("Start in terminal: the reduced-isolation consent once per machine, then the launch in the folder picked (no conversation recorded)", async () => {
+  it("Start in terminal: no dialog of the extension's own, no --mesh-reduced-isolation (the CLI asks); the folder picked", async () => {
     const state = fakeMemento();
     const h = harness({ state });
     const list = await items(h);
-    calls.modalChoices.push(CELL_CMD_TEXTS.consentAccept);
     const t = await startCell(h.deps, list[3]);
     assert.ok(t);
-    assert.deepStrictEqual(calls.modals.map((m) => [m.kind, m.message, m.items]), [["warning", CELL_CMD_TEXTS.consentTitle, [CELL_CMD_TEXTS.consentAccept]]]);
-    assert.match(calls.modals[0].detail!, /read and use the a4sx sign-ins and keys saved on this computer/);
+    assert.deepStrictEqual(calls.modals, [], "the reduced-isolation question is the CLI's, in the terminal");
     assert.strictEqual(calls.terminals[0].options.name, "a4sx: cell docs");
     assert.strictEqual(calls.terminals[0].options.cwd, "/w/proj");
-    assert.deepStrictEqual(calls.terminals[0].sent, ["'/opt/a4sx bin/a4sx' 'launch' '--cell' 'docs' '--mesh-reduced-isolation'\n"]);
+    assert.deepStrictEqual(calls.terminals[0].sent, ["'/opt/a4sx bin/a4sx' 'launch' '--cell' 'docs'\n"]);
     assert.ok(h.deps.terminals.has(t!));
-    // The second start asks nothing.
     await startCell(h.deps, list[0]);
-    assert.strictEqual(calls.modals.length, 1);
-    assert.deepStrictEqual(calls.terminals[1].sent, [`'/opt/a4sx bin/a4sx' 'launch' '--cell' 'build' '--mesh' '${MESH}' '--mesh-reduced-isolation'\n`]);
-    assert.strictEqual((state.data_.get(CONSENT_KEY) as string[]).length, 1);
+    assert.deepStrictEqual(calls.terminals[1].sent, [`'/opt/a4sx bin/a4sx' 'launch' '--cell' 'build' '--mesh' '${MESH}'\n`]);
+    assert.strictEqual(state.data_.get(CONSENT_KEY), undefined, "nothing is accepted in the extension");
   });
 
-  it("declining the consent starts nothing and remembers nothing; another machine is asked again", async () => {
+  it("the machine-wide consent dialog (Run as cell only): once per machine; another machine is asked again", async () => {
     const state = fakeMemento();
-    const h = harness({ state });
-    const list = await items(h);
-    await startCell(h.deps, list[3]);
-    assert.strictEqual(calls.terminals.length, 0);
-    assert.strictEqual(state.data_.get(CONSENT_KEY), undefined);
     calls.modalChoices.push(CELL_CMD_TEXTS.consentAccept);
     assert.ok(await consentReducedIsolation(state as any, "machine-a"));
     assert.ok(await consentReducedIsolation(state as any, "machine-a"));
     assert.ok(!(await consentReducedIsolation(state as any, "machine-b")));
-    assert.strictEqual(calls.modals.length, 3);
+    assert.strictEqual(calls.modals.length, 2);
   });
 
   it("the terminal gets A4SX_CLAUDE = the Claude Code extension's bundled claude, and nothing else", async () => {
@@ -879,7 +870,7 @@ describe("Cells: actions", () => {
     const h = harness({ state: fakeMemento({ [CONSENT_KEY]: [require("../../cellCommands").machineKey()] }), env: {} });
     await newCell(h.deps);
     assert.deepStrictEqual(calls.terminals[0].options.env, { A4SX_CLAUDE: path.join(bin, process.platform === "win32" ? "claude.exe" : "claude") });
-    assert.deepStrictEqual(calls.terminals[0].sent, ["'/opt/a4sx bin/a4sx' 'launch' '--new-cell' '--mesh-reduced-isolation'\n"]);
+    assert.deepStrictEqual(calls.terminals[0].sent, ["'/opt/a4sx bin/a4sx' 'launch' '--new-cell'\n"]);
     assert.strictEqual(calls.terminals[0].options.isTransient, true, "never revived with an old env after a restart");
     h.deps.env = { A4SX_CLAUDE: someClaude() };
     await newCell(h.deps);
@@ -889,8 +880,8 @@ describe("Cells: actions", () => {
   it("Windows paths: PowerShell runs the launcher with & and single quotes; cmd with double quotes", async () => {
     const cli = "C:\\Users\\Jo Doe\\AppData\\Roaming\\Code\\User\\globalStorage\\crossvaultgmbh.a4sx\\cli\\a4sx.cmd";
     for (const [shell, want] of [
-      ["C:\\Program Files\\PowerShell\\7\\pwsh.exe", `& '${cli}' 'launch' '--cell' 'docs' '--mesh-reduced-isolation'\n`],
-      ["C:\\WINDOWS\\System32\\cmd.exe", `"${cli}" "launch" "--cell" "docs" "--mesh-reduced-isolation"\n`],
+      ["C:\\Program Files\\PowerShell\\7\\pwsh.exe", `& '${cli}' 'launch' '--cell' 'docs'\n`],
+      ["C:\\WINDOWS\\System32\\cmd.exe", `"${cli}" "launch" "--cell" "docs"\n`],
     ]) {
       resetCalls();
       calls.shell = shell;
@@ -972,7 +963,7 @@ describe("Cells: installing the CLI", () => {
     assert.ok(calls.infos.includes(CELL_CMD_TEXTS.installed("0.21.1")));
     const launcher = path.join(dir, "a4sx");
     assert.strictEqual(fs.readFileSync(launcher, "utf8"), `#!/bin/sh\n# a4sx CLI launcher, written by the a4sx VS Code extension.\nexec '/usr/bin/python3' '${dir}/a4sx.py' "$@"\n`);
-    assert.deepStrictEqual(calls.terminals[0].sent, [`'${launcher}' 'launch' '--new-cell' '--mesh-reduced-isolation'\n`]);
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${launcher}' 'launch' '--new-cell'\n`]);
     assert.strictEqual(typeof state.data_.get(LAST_UPDATE_KEY), "number");
   });
 

@@ -121,7 +121,7 @@ describe("0.9.2 bug 1: Start continues the cell's last conversation", () => {
     const { deps: d } = deps(w);
     const t = await startCell(d, await cellItem(d));
     assert.ok(t);
-    assert.deepStrictEqual(calls.terminals[0].sent, [q(["launch", "--cell", NAME, "--mesh-reduced-isolation", "--", "--resume", SID])]);
+    assert.deepStrictEqual(calls.terminals[0].sent, [q(["launch", "--cell", NAME, "--", "--resume", SID])]);
     assert.strictEqual(calls.terminals[0].options.cwd, w.folder);
     assert.strictEqual(calls.terminals[0].options.message, CELL_START_TEXTS.banner("83ce93e5", w.folder));
     assert.deepStrictEqual(calls.infos, [CELL_START_TEXTS.resuming(NAME, "Mesh test session", "83ce93e5", w.folder)]);
@@ -141,7 +141,7 @@ describe("0.9.2 bug 1: Start continues the cell's last conversation", () => {
     record(w, { [IID]: { sid: SID, cwd: w.folder } });
     const { deps: d } = deps(w);
     await startCell(d, await cellItem(d));
-    assert.deepStrictEqual(calls.terminals[0].sent, [q(["launch", "--cell", NAME, "--mesh-reduced-isolation"])]);
+    assert.deepStrictEqual(calls.terminals[0].sent, [q(["launch", "--cell", NAME])]);
     assert.strictEqual(calls.terminals[0].options.cwd, w.folder);
     assert.deepStrictEqual(calls.infos, [CELL_START_TEXTS.gone(NAME, "83ce93e5", w.folder)]);
   });
@@ -152,7 +152,7 @@ describe("0.9.2 bug 1: Start continues the cell's last conversation", () => {
     overlayTranscript(w, w.folder, "not-a-uuid_1");
     const { deps: d } = deps(w);
     await startCell(d, await cellItem(d));
-    assert.deepStrictEqual(calls.terminals[0].sent, [q(["launch", "--cell", NAME, "--mesh-reduced-isolation"])]);
+    assert.deepStrictEqual(calls.terminals[0].sent, [q(["launch", "--cell", NAME])]);
     assert.strictEqual(calls.terminals[0].options.cwd, w.folder);
   });
 
@@ -346,7 +346,7 @@ describe("0.9.2 bug 3: Start runs in the cell's folder, never the home folder", 
     calls.nextOpenDialog = [vscodeFake.Uri.file(w.folder)];
     await startCell(d, await cellItem(d));
     assert.strictEqual(calls.openDialogs[0].title, CELL_START_TEXTS.movedTitle(NAME, gone));
-    assert.deepStrictEqual(calls.terminals[0].sent, [q(["launch", "--cell", NAME, "--mesh-reduced-isolation", "--new-session"])], "the CLI doesn't ask again");
+    assert.deepStrictEqual(calls.terminals[0].sent, [q(["launch", "--cell", NAME, "--new-session"])], "the CLI doesn't ask again");
     assert.strictEqual(calls.terminals[0].options.cwd, w.folder);
     assert.deepStrictEqual(calls.infos, [CELL_START_TEXTS.movedStarted(NAME, "83ce93e5", gone, w.folder)]);
   });
@@ -378,13 +378,13 @@ describe("0.9.2 review: a home-folder record, other platforms' builds, Windows p
     const { deps: d } = deps(w);
     calls.modalChoices.push(CELL_START_TEXTS.homeContinue);
     await startCell(d, await cellItem(d));
-    assert.deepStrictEqual(calls.terminals[0].sent, [q(["launch", "--cell", NAME, "--mesh-reduced-isolation", "--", "--resume", SID])]);
+    assert.deepStrictEqual(calls.terminals[0].sent, [q(["launch", "--cell", NAME, "--", "--resume", SID])]);
     assert.strictEqual(calls.terminals[0].options.cwd, w.folder);
     const other = tmpdir();
     calls.modalChoices.push(CELL_START_TEXTS.homeChoose);
     calls.nextOpenDialog = [vscodeFake.Uri.file(other)];
     await startCell(d, await cellItem(d));
-    assert.deepStrictEqual(calls.terminals[1].sent, [q(["launch", "--cell", NAME, "--mesh-reduced-isolation", "--new-session"])]);
+    assert.deepStrictEqual(calls.terminals[1].sent, [q(["launch", "--cell", NAME, "--new-session"])]);
     assert.strictEqual(calls.terminals[1].options.cwd, other);
     assert.strictEqual(calls.terminals[1].options.message, undefined);
     assert.strictEqual(calls.infos[1], CELL_START_TEXTS.homeLeft(NAME, "83ce93e5", other));

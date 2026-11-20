@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.3
+
+- **Start in terminal** and **New cell** in the Cells view no longer add `--mesh-reduced-isolation`, and the extension no longer asks its own reduced-isolation question before them. That flag accepts reduced isolation for one start only and stores nothing, so a cell started from here never had your answer stored. A later start of that cell without a terminal, for example the agent host's, was then refused ("nobody has accepted that for this cell on this computer yet"). Now the a4sx CLI asks its own question in the terminal, once per cell and per computer, and stores your answer. The text is the CLI's.
+- This needs a4sx CLI 0.32.0 or newer. With an older CLI, Start and New cell say so and offer **Update a4sx CLI**; nothing starts.
+- **Copy launch command** copies `a4sx launch --cell <name>` without the flag too.
+- **Run as cell in terminal** and the **Convert** actions are unchanged: **Keep my sign-in (reduced isolation)** still adds `--mesh-reduced-isolation` for that start, after the extension's dialog.
+
 ## 0.9.2
 
 - **Start in terminal** in the Cells view continues the cell's last conversation. Before, it started a new one. The a4sx CLI records each cell's last conversation and its folder on this computer (since CLI 0.31.10). Start now runs in that folder and adds `-- --resume <session id>` to `a4sx launch --cell <name>`, while the conversation's transcript is on this computer. A notification names the conversation and its folder; for a new conversation, type `/clear` in it. If the transcript is gone, the cell starts a new conversation in that folder, and the notification says why. `a4sx mesh cells --json` doesn't name the conversation, so the extension reads the CLI's record (`cell-last-session.json` in the cell's a4sx state folder: a session id and a folder, nothing secret). This works with CLI 0.40.3.
