@@ -11,7 +11,7 @@ import * as path from "path";
 import { calls, fakeMemento, resetCalls } from "../fakeVscode";
 import { cellLaunchArgs, CELLS_LIST_ARGS, LocalCell } from "../../cells";
 import {
-  CELL_CLAUDE_TEXTS, CELL_FOLDERS_KEY, CELL_START_TEXTS, CellCommandDeps, claudeInstallCommand, CONSENT_KEY, machineKey, newCell, samePath, START_ANYWAY_KEY, startCell,
+  cellFolderConflict, CELL_CLAUDE_TEXTS, CELL_FOLDERS_KEY, CELL_START_TEXTS, CellCommandDeps, claudeInstallCommand, CONSENT_KEY, machineKey, newCell, samePath, START_ANYWAY_KEY, startCell,
 } from "../../cellCommands";
 import { runAsCell } from "../../runAsCell";
 import { cellStartPlan, lastPromptFolder, parseCellLastSession, readCellLastSession } from "../../cellResume";
@@ -76,7 +76,7 @@ function deps(w: World, over: Partial<CellCommandDeps> = {}): { deps: CellComman
     ({ code: 0, stdout: args.join(" ") === CELLS_LIST_ARGS.join(" ") ? JSON.stringify(ANSWER) : "", stderr: "" });
   const provider = new CellsProvider({ resolve: () => ({ kind: "found", path: CLI }), run, server: () => "https://session-exchange.com", onState: () => undefined });
   const d: CellCommandDeps = {
-    state: fakeMemento({ [CONSENT_KEY]: [machineKey()] }) as any,
+    state: fakeMemento() as any,
     cliDir: undefined,
     provider,
     resolve: () => ({ kind: "found", path: CLI }),
@@ -193,7 +193,7 @@ describe("0.9.2 bug 2: the Claude Code extension's claude, found where it is now
     calls.extensions.add("anthropic.claude-code");
     calls.extensionPaths.set("anthropic.claude-code", stale);
     const w = world();
-    const { deps: d } = deps(w, { env: {} });
+    const { deps: d } = deps(w, { env: {}, folder: async () => tmpdir() });
     await newCell(d);
     assert.deepStrictEqual(calls.terminals[0].options.env, { A4SX_CLAUDE: path.join(now, "resources", "native-binary", EXE) });
     assert.ok(!calls.terminals[0].options.env.A4SX_CLAUDE.includes("2.1.325"));
@@ -205,7 +205,7 @@ describe("0.9.2 bug 2: the Claude Code extension's claude, found where it is now
     const old = ext(root, "2.1.325");
     calls.extensions.add("anthropic.claude-code");
     calls.extensionPaths.set("anthropic.claude-code", old);
-    const { deps: d } = deps(world(), { env: {} });
+    const { deps: d } = deps(world(), { folder: async () => tmpdir(), env: {} });
     await newCell(d);
     assert.strictEqual(calls.terminals[0].options.env.A4SX_CLAUDE, path.join(old, "resources", "native-binary", EXE));
     fs.unlinkSync(path.join(old, "resources", "native-binary", EXE));
@@ -233,7 +233,7 @@ describe("0.9.2 bug 2: the Claude Code extension's claude, found where it is now
     calls.extensions.add("anthropic.claude-code");
     calls.extensionPaths.set("anthropic.claude-code", ext(root, "2.1.325", false));
     const bin = path.dirname(write(path.join(tmpdir(), EXE)));
-    const { deps: d } = deps(world(), { env: { PATH: bin, Path: bin } });
+    const { deps: d } = deps(world(), { folder: async () => tmpdir(), env: { PATH: bin, Path: bin } });
     await newCell(d);
     assert.strictEqual(calls.terminals.length, 1);
     assert.strictEqual(calls.terminals[0].options.env, undefined);
@@ -247,7 +247,7 @@ describe("0.9.2 bug 2: the Claude Code extension's claude, found where it is now
     const extPath = ext(root, "2.1.325", false);
     calls.extensions.add("anthropic.claude-code");
     calls.extensionPaths.set("anthropic.claude-code", extPath);
-    const { deps: d } = deps(world(), { env: { PATH: "" } });
+    const { deps: d } = deps(world(), { folder: async () => tmpdir(), env: { PATH: "" } });
     calls.modalChoices.push(CELL_CLAUDE_TEXTS.copyInstall);
     assert.strictEqual(await newCell(d), undefined);
     assert.strictEqual(calls.terminals.length, 0);
@@ -267,7 +267,7 @@ describe("0.9.2 bug 2: the Claude Code extension's claude, found where it is now
     calls.extensions.add("anthropic.claude-code");
     calls.extensionPaths.set("anthropic.claude-code", now);
     const gone = path.join(root, "anthropic.claude-code-2.1.325-win32-x64", "resources", "native-binary", "claude.exe");
-    const { deps: d } = deps(world(), { env: { A4SX_CLAUDE: gone } });
+    const { deps: d } = deps(world(), { folder: async () => tmpdir(), env: { A4SX_CLAUDE: gone } });
     assert.strictEqual(await newCell(d), undefined);
     assert.deepStrictEqual(calls.modals.map((m) => [m.message, m.items]), [[CELL_CLAUDE_TEXTS.badUserEnv(gone), [CELL_CLAUDE_TEXTS.useBundled]]]);
     assert.match(calls.modals[0].detail!, /remove A4SX_CLAUDE from your environment variables/);
@@ -346,7 +346,7 @@ describe("0.9.2 bug 3: Start runs in the cell's folder, never the home folder", 
     calls.nextOpenDialog = [vscodeFake.Uri.file(w.folder)];
     await startCell(d, await cellItem(d));
     assert.strictEqual(calls.openDialogs[0].title, CELL_START_TEXTS.movedTitle(NAME, gone));
-    assert.deepStrictEqual(calls.terminals[0].sent, [q(["launch", "--cell", NAME, "--new-session"])], "the CLI doesn't ask again");
+    assert.deepStrictEqual(calls.terminals[0].sent, [q(["launch", "--cell", NAME, "--new-session"])], "--new-session: the CLI doesn't ask whether to start a new conversation");
     assert.strictEqual(calls.terminals[0].options.cwd, w.folder);
     assert.deepStrictEqual(calls.infos, [CELL_START_TEXTS.movedStarted(NAME, "83ce93e5", gone, w.folder)]);
   });
@@ -364,34 +364,47 @@ describe("0.9.2 review: a home-folder record, other platforms' builds, Windows p
     return w;
   }
 
-  it("a conversation recorded in the home folder is never continued there without asking; Cancel starts nothing", async () => {
+  it("a conversation recorded in the home folder (it holds ~/.claude): the CLI won't start a cell there, so it says why; Cancel starts nothing", async () => {
     const w = homeWorld();
     const { deps: d } = deps(w);
     assert.strictEqual(await startCell(d, await cellItem(d)), undefined);
-    assert.deepStrictEqual(calls.modals.map((m) => [m.kind, m.message, m.items]),
-      [["warning", CELL_START_TEXTS.homeTitle(NAME, w.folder), [CELL_START_TEXTS.homeContinue, CELL_START_TEXTS.homeChoose]]]);
+    const what = `holds the a4sx config folder (${path.join(w.folder, ".config", "a4sx")})`;
+    assert.deepStrictEqual(calls.modals.map((m) => [m.kind, m.message, m.items, m.detail]),
+      [["warning", CELL_START_TEXTS.folderTitle(NAME, w.folder), [CELL_START_TEXTS.folderChoose], CELL_START_TEXTS.folderDetail(w.folder, what)]]);
     assert.strictEqual(calls.terminals.length, 0);
   });
 
-  it("home folder: Continue resumes it there; Choose a folder… starts a new conversation in the folder chosen", async () => {
+  it("home folder: Choose a folder… starts a new conversation in the folder chosen; the home folder chosen again is refused", async () => {
     const w = homeWorld();
     const { deps: d } = deps(w);
-    calls.modalChoices.push(CELL_START_TEXTS.homeContinue);
-    await startCell(d, await cellItem(d));
-    assert.deepStrictEqual(calls.terminals[0].sent, [q(["launch", "--cell", NAME, "--", "--resume", SID])]);
-    assert.strictEqual(calls.terminals[0].options.cwd, w.folder);
     const other = tmpdir();
-    calls.modalChoices.push(CELL_START_TEXTS.homeChoose);
+    calls.modalChoices.push(CELL_START_TEXTS.folderChoose);
     calls.nextOpenDialog = [vscodeFake.Uri.file(other)];
     await startCell(d, await cellItem(d));
-    assert.deepStrictEqual(calls.terminals[1].sent, [q(["launch", "--cell", NAME, "--new-session"])]);
-    assert.strictEqual(calls.terminals[1].options.cwd, other);
-    assert.strictEqual(calls.terminals[1].options.message, undefined);
-    assert.strictEqual(calls.infos[1], CELL_START_TEXTS.homeLeft(NAME, "83ce93e5", other));
+    assert.deepStrictEqual(calls.terminals[0].sent, [q(["launch", "--cell", NAME, "--new-session"])]);
+    assert.strictEqual(calls.terminals[0].options.cwd, other);
+    assert.strictEqual(calls.terminals[0].options.message, undefined);
+    assert.strictEqual(calls.infos[0], CELL_START_TEXTS.left(NAME, "83ce93e5", w.folder, other));
+    calls.modalChoices.push(CELL_START_TEXTS.folderChoose);
+    calls.nextOpenDialog = [vscodeFake.Uri.file(w.folder)];
+    assert.strictEqual(await startCell(d, await cellItem(d)), undefined);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [CELL_START_TEXTS.folderRefused(w.folder, `holds the a4sx config folder (${path.join(w.folder, ".config", "a4sx")})`)]);
+    assert.strictEqual(calls.terminals.length, 1);
+  });
+
+  it("the folders the CLI refuses: the home folder, ~/.claude itself or inside it, the a4sx state folder; a project folder is fine", () => {
+    const home = tmpdir();
+    const state = path.join(home, ".local", "state", "a4sx");
+    const d = { env: {}, home };
+    assert.match(cellFolderConflict(home, d, state)!, /^holds the a4sx state folder/);
+    assert.match(cellFolderConflict(path.join(home, ".claude"), d, state)!, /^is your Claude Code folder/);
+    assert.match(cellFolderConflict(path.join(home, ".claude", "projects"), d, state)!, /^is inside your Claude Code folder/);
+    assert.strictEqual(cellFolderConflict(path.join(home, "projects", "meshtest"), d, state), undefined);
+    assert.match(cellFolderConflict("C:\\Users\\Kartan", { env: {}, home: "C:\\Users\\kartan" }, undefined, "win32")!, /holds the a4sx config folder/);
   });
 
   it("Start anyway is remembered on this computer: the not-found message isn't shown again", async () => {
-    const { deps: d } = deps(world(), { env: { PATH: "" } });
+    const { deps: d } = deps(world(), { env: { PATH: "" }, folder: async () => tmpdir() });
     calls.modalChoices.push(CELL_CLAUDE_TEXTS.startAnyway);
     await newCell(d);
     assert.strictEqual(d.state.get(START_ANYWAY_KEY), machineKey());

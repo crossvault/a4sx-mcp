@@ -94,7 +94,7 @@ interface Harness {
   provider: CellsProvider;
 }
 
-function harness(answers: Record<string, CliOutput> = {}, resolve: CliResolution = { kind: "found", path: CLI }, state = fakeMemento({ [CONSENT_KEY]: [machineKey()] })): Harness {
+function harness(answers: Record<string, CliOutput> = {}, resolve: CliResolution = { kind: "found", path: CLI }, state = fakeMemento()): Harness {
   const runs: string[] = [];
   const run = async (_cli: string, args: readonly string[]): Promise<CliOutput> => {
     const key = args.join(" ");

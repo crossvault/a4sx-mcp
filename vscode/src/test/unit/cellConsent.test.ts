@@ -10,7 +10,8 @@ import * as os from "os";
 import * as path from "path";
 import { calls, fakeMemento, resetCalls } from "../fakeVscode";
 import { CELLS_LIST_ARGS, MIN_CELL_CONSENT_CLI, NEW_CELL_ARGS, REDUCED_FLAG } from "../../cells";
-import { CELL_CMD_TEXTS, CellCommandDeps, cliAsksConsent, CONSENT_KEY, copyCellLaunch, newCell, startCell } from "../../cellCommands";
+import { CELL_CMD_TEXTS, CELL_START_TEXTS, CellCommandDeps, cliAsksConsent, CONSENT_KEY, copyCellLaunch, newCell, startCell } from "../../cellCommands";
+import { runAsCell } from "../../runAsCell";
 import { CellsProvider, CliOutput, LocalCellItem, MeshGroupItem } from "../../cellsView";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -100,6 +101,29 @@ describe("0.9.3: the reduced-isolation question is the CLI's, stored per cell", 
     assert.strictEqual(await cliAsksConsent(h.deps, CLI), false);
     version = "0.40.3";
     assert.strictEqual(await cliAsksConsent(h.deps, CLI), true);
+  });
+
+  it("without the flag the CLI refuses a folder holding ~/.claude or the a4sx folders: New cell with no folder open asks, the home folder is refused", async () => {
+    const h = harness("0.40.3");
+    h.deps.folder = async () => undefined;   // no folder open: the terminal would start in the home folder
+    calls.nextOpenDialog = [vscodeFake.Uri.file(h.deps.home!)];
+    assert.strictEqual(await newCell(h.deps), undefined);
+    assert.strictEqual(calls.openDialogs[0].title, CELL_START_TEXTS.pickNewTitle);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [CELL_START_TEXTS.folderRefused(h.deps.home!, `holds the a4sx config folder (${path.join(h.deps.home!, ".config", "a4sx")})`)]);
+    assert.strictEqual(calls.terminals.length, 0);
+    const proj = tmpdir();
+    calls.nextOpenDialog = [vscodeFake.Uri.file(proj)];
+    await newCell(h.deps);
+    assert.strictEqual(calls.terminals[0].options.cwd, proj);
+  });
+
+  it("Run as cell of a session that ran in the home folder: said why, nothing starts", async () => {
+    const h = harness("0.40.3");
+    calls.pickQueue.push(0, []);
+    const t = await runAsCell(h.deps, { id: "ses_1", findLocal: async () => ({ sessionId: "0f1e2d3c-4b5a-4978-8a6b-5c4d3e2f1a0b", cwd: h.deps.home! }) });
+    assert.strictEqual(t, undefined);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [CELL_START_TEXTS.sessionFolderRefused(h.deps.home!, `holds the a4sx config folder (${path.join(h.deps.home!, ".config", "a4sx")})`)]);
+    assert.strictEqual(calls.terminals.length, 0);
   });
 
   it("a CLI before 0.32.0 can't store the answer: said with the fix, Update a4sx CLI runs `a4sx update`; nothing starts", async () => {

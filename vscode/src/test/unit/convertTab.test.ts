@@ -38,7 +38,7 @@ const fileTab = (label: string) => ({ label, input: { uri: { scheme: "file", fsP
 const out = (stdout: unknown, code = 0): CliOutput => ({ code, stdout: typeof stdout === "string" ? stdout : JSON.stringify(stdout), stderr: "" });
 const flush = async (n = 6) => { for (let i = 0; i < n; i++) { await new Promise((r) => setImmediate(r)); } };
 
-function harness(state = fakeMemento({ [CONSENT_KEY]: [machineKey()] }), resolution: CliResolution = { kind: "found", path: CLI }, cells: unknown[] = []): { deps: CellCommandDeps; runs: string[] } {
+function harness(state = fakeMemento(), resolution: CliResolution = { kind: "found", path: CLI }, cells: unknown[] = []): { deps: CellCommandDeps; runs: string[] } {
   const runs: string[] = [];
   const run = async (_cli: string, args: readonly string[]): Promise<CliOutput> => {
     const key = args.join(" ");
@@ -424,7 +424,7 @@ describe("Convert to cell: the command", () => {
     const tab = claudeTab("Alpha work");
     calls.tabGroups = [{ tabs: [fileTab("a.ts"), tab], activeTab: tab }];
     const h = harness();
-    calls.pickQueue.push(0, []);   // the first mesh; the options as offered (Keep my sign-in on)
+    calls.pickQueue.push(0, []);   // the first mesh; the option as offered (off)
     calls.inputQueue.push("alpha-work");
     const t = await convertTabToCell(h.deps, [undefined, { groupId: 1, editorIndex: 1 }], { projectsDir: p.dir, listMeshes: listing });
     assert.ok(t);

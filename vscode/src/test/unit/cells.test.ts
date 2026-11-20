@@ -480,7 +480,7 @@ describe("0.5.1: the Microsoft Store Python", () => {
   it("before the own copy is used: repaired silently, then the cell starts", async () => {
     const dir = ownCopy(STORE_EXE);
     const launcher = installedLauncher(dir, "win32")!;
-    const state = fakeMemento({ [CONSENT_KEY]: [machineKey()] });
+    const state = fakeMemento();
     const h = harness({ resolve: { kind: "found", path: launcher }, cliDir: dir, platform: "win32", state, python: pythons({ python: STORE_EXE, python3: GOOD_EXE }) });
     assert.ok(await newCell(h.deps));
     assert.ok(!launcherNeedsRepair(dir, "win32"));
@@ -491,7 +491,7 @@ describe("0.5.1: the Microsoft Store Python", () => {
   it("before the own copy is used: only the Store Python left: the Store message with the winget offer; nothing starts", async () => {
     const dir = ownCopy(STORE_EXE);
     const launcher = installedLauncher(dir, "win32")!;
-    const state = fakeMemento({ [CONSENT_KEY]: [machineKey()] });
+    const state = fakeMemento();
     const h = harness({ resolve: { kind: "found", path: launcher }, cliDir: dir, platform: "win32", state, python: pythons({ python: STORE_EXE }) });
     assert.strictEqual(await newCell(h.deps), undefined);
     assert.deepStrictEqual(calls.modals.map((m) => [m.message, m.items]), [[CELL_CMD_TEXTS.storePythonWin, [CELL_CMD_TEXTS.installPython]]]);
@@ -504,7 +504,7 @@ describe("0.5.1: the Microsoft Store Python", () => {
 
   it("a CLI that isn't the own copy is used as it is (its Python is the installer's business)", async () => {
     const dir = ownCopy(STORE_EXE);
-    const state = fakeMemento({ [CONSENT_KEY]: [machineKey()] });
+    const state = fakeMemento();
     const tried: string[] = [];
     const h = harness({ resolve: { kind: "found", path: "C:\\Users\\k\\AppData\\Local\\Programs\\a4sx\\a4sx.cmd" }, cliDir: dir, platform: "win32", state, python: pythons({}, tried) });
     assert.ok(await newCell(h.deps));
@@ -615,7 +615,7 @@ describe("0.5.1 review: paths, venvs, every Python on PATH, one repair at a time
   it("after an action-time repair, the CLI's version is asked again and the views read it again", async () => {
     const dir = ownCopy(STORE_EXE);
     const launcher = installedLauncher(dir, "win32")!;
-    const state = fakeMemento({ [CONSENT_KEY]: [machineKey()] });
+    const state = fakeMemento();
     let profiles = 0;
     const h = harness({ resolve: { kind: "found", path: launcher }, cliDir: dir, platform: "win32", state, python: pythons({ python: GOOD_EXE }) });
     h.deps.onRepaired = () => profiles++;
@@ -858,7 +858,7 @@ describe("Cells: actions", () => {
     fs.writeFileSync(path.join(bin, process.platform === "win32" ? "claude.exe" : "claude"), "", { mode: 0o755 });
     calls.extensions.add("anthropic.claude-code");
     calls.extensionPaths.set("anthropic.claude-code", dir);
-    const h = harness({ state: fakeMemento({ [CONSENT_KEY]: [require("../../cellCommands").machineKey()] }), env: {} });
+    const h = harness({ state: fakeMemento(), env: {} });
     await newCell(h.deps);
     assert.deepStrictEqual(calls.terminals[0].options.env, { A4SX_CLAUDE: path.join(bin, process.platform === "win32" ? "claude.exe" : "claude") });
     assert.deepStrictEqual(calls.terminals[0].sent, ["'/opt/a4sx bin/a4sx' 'launch' '--new-cell'\n"]);
@@ -876,7 +876,7 @@ describe("Cells: actions", () => {
     ]) {
       resetCalls();
       calls.shell = shell;
-      const h = harness({ resolve: { kind: "found", path: cli }, state: fakeMemento({ [CONSENT_KEY]: [require("../../cellCommands").machineKey()] }) });
+      const h = harness({ resolve: { kind: "found", path: cli }, state: fakeMemento() });
       await startCell(h.deps, (await items(h))[3]);
       assert.deepStrictEqual(calls.terminals[0].sent, [want], shell);
     }
@@ -944,7 +944,7 @@ describe("Cells: installing the CLI", () => {
 
   it("New cell without a CLI offers the install; it finds Python, downloads, checks, writes the launcher, then starts", async () => {
     const dir = path.join(tmpdir(), "cli");
-    const state = fakeMemento({ [CONSENT_KEY]: [require("../../cellCommands").machineKey()] });
+    const state = fakeMemento();
     const python = async (_f: string, args: readonly string[]) => ({ code: 0, stdout: args.includes("-c") ? probeOut("/usr/bin/python3") : "" });
     const h = harness({ resolve: { kind: "no-cli" }, cliDir: dir, fetch, python, state, platform: "linux" });
     calls.modalChoices.push(CELL_CMD_TEXTS.installCli);

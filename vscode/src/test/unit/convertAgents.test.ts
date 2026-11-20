@@ -38,7 +38,7 @@ function harness(cells: unknown[] = [CELL_ROW]): { deps: CellCommandDeps; runs: 
   const resolve = () => ({ kind: "found" as const, path: CLI });
   const provider = new CellsProvider({ resolve, run, server: () => BASE, onState: () => undefined });
   const deps: CellCommandDeps = {
-    state: fakeMemento({ [CONSENT_KEY]: [machineKey()] }) as any, cliDir: undefined, provider, resolve, run, server: () => BASE, defaultServer: BASE,
+    state: fakeMemento() as any, cliDir: undefined, provider, resolve, run, server: () => BASE, defaultServer: BASE,
     folder: async () => "/w/proj", fetch: async () => { throw new Error("no network"); }, python: async () => ({ code: 1, stdout: "" }), terminals: new Set(),
   };
   return { deps, runs };

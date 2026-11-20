@@ -13,7 +13,8 @@
 import * as vscode from "vscode";
 import { CLI_NAME } from "./cli";
 import { LaunchOptions, LocalCell, newCellRunArgs, ResumeTarget, runAsCellArgs, startableCell } from "./cells";
-import { CELL_CMD_TEXTS, CellCommandDeps, cellClaudeEnv, cliAsksConsent, ensureCli } from "./cellCommands";
+import { CELL_CMD_TEXTS, CELL_START_TEXTS, CellCommandDeps, cellClaudeEnv, cellFolderConflict, cellStartFolder, cliAsksConsent, ensureCli } from "./cellCommands";
+import { cellsListDir, showText } from "./cells";
 import { CELL_TEXTS, CliRunner, CMD_UPDATE_CLI } from "./cellsView";
 import { CONFIG_SHOW_ARGS, configAutoAllow, versionAtLeast } from "./cliJson";
 import { LocalSession } from "./localSession";
@@ -184,9 +185,20 @@ export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession
     return undefined;
   }
   // A session on this computer resumes in its own folder (Claude Code files it there); else the workspace's.
-  const cwd = local ? local.cwd : await deps.folder();
-  if (cwd === null) {
-    return undefined;
+  let cwd: string | undefined;
+  if (local) {
+    const platform = deps.platform ?? process.platform;
+    const what = cellFolderConflict(local.cwd, deps, deps.stateDir ?? cellsListDir(deps.env ?? process.env, platform, deps.home), platform);
+    if (what) {
+      await vscode.window.showErrorMessage(CELL_START_TEXTS.sessionFolderRefused(showText(local.cwd, 300) ?? local.cwd, what));
+      return undefined;
+    }
+    cwd = local.cwd;
+  } else {
+    cwd = await cellStartFolder(deps, await deps.folder());
+    if (cwd === undefined) {
+      return undefined;
+    }
   }
   const name = picked.choice.kind === "cell" ? CELL_CMD_TEXTS.cellTerminal(picked.choice.cell.name) : CELL_CMD_TEXTS.newCellTerminal;
   const claude = await cellClaudeEnv(deps);
