@@ -8,23 +8,29 @@ import * as vscode from "vscode";
 import { createHash } from "crypto";
 import * as os from "os";
 import * as fs from "fs";
+import * as path from "path";
 import { CLI_NAME } from "./cli";
 import { CellStartPlan, cellStartPlan, isDirectory, lastPromptFolder } from "./cellResume";
 import {
-  CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellProfileArgs, cellRenameArgs, cellsListDir, cellStopArgs, LocalCell, NEW_CELL_ARGS, policyUrl,
+  CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellProfileArgs, cellRenameArgs, cellsListDir, cellStopArgs, LocalCell, MIN_CELL_CONSENT_CLI, NEW_CELL_ARGS,
+  policyUrl,
   showText,
 } from "./cells";
 import { CellsProvider, CliOutput, CliResolution, CliRunner, lacksCellProfile, LocalCellItem, MeshGroupItem } from "./cellsView";
-import { IN_SESSION_MESSAGE, parseCliError, parseProfilesAnswer, PROFILES_ARGS } from "./cliJson";
+import { IN_SESSION_MESSAGE, parseCliError, parseProfilesAnswer, PROFILES_ARGS, versionAtLeast } from "./cliJson";
 import {
   bundledClaude, claudeFindable, downloadCli, Fetch, installedLauncher, launcherNeedsRepair, ProvisionError, repairLauncher, RepairResult, Runner, searchPython, updateArgs, updateDue,
   WINGET_PYTHON_ARGS, writeLauncher,
 } from "./provision";
-import { claudeProjectsDir } from "./nativeSeed";
+import { claudeProjectsDir, cliConfigDir } from "./nativeSeed";
 import { openCommandTerminal, State } from "./resume";
 import { readTail, transcriptTitle } from "./tabSession";
 import { commandLine, programName, shellKind } from "./terminalCommand";
 
+/**
+ * Before 0.9.3: where the extension's own reduced-isolation consent was kept, per machine. Never read since: that
+ * consent was only good for one start, and the CLI asks per cell now (cliAsksConsent).
+ */
 export const CONSENT_KEY = "a4sx.cellReducedIsolationConsent";
 export const LAST_UPDATE_KEY = "a4sx.cliLastUpdate";
 /** 0.9.2: the folder each stored cell was last started in from here, by instance id (the folder picker's default). */
@@ -41,14 +47,11 @@ export const CELL_CMD_TEXTS = {
   cellTerminal: (name: string) => `a4sx: cell ${name}`,
   updateTerminal: "a4sx: update",
   pythonTerminal: "a4sx: install Python",
-  consentTitle: "Start cells with reduced isolation on this computer?",
-  consentDetail:
-    "Where this computer can't sandbox your agent, a cell runs as your own user (\"reduced isolation\"). Then your agent " +
-    "could act as this cell in its mesh and skip the cell's outgoing checks, and it can read and use the a4sx sign-ins " +
-    "and keys saved on this computer, and its Claude Code sign-in. Every other session still checks everything it receives. Continue only if you " +
-    "trust the agent on this computer.\n\nWhere the sandbox works, the cell runs in it and none of this applies. " +
-    "You're asked once on this computer.",
-  consentAccept: "Accept and start",
+  consentCliTooOld: (v: string) =>
+    `This a4sx CLI (${v}) can't remember for a cell that you accepted reduced isolation, so a cell started from here ` +
+    `would be refused when it starts again without a terminal (by the agent host, for one). Nothing was started. Update ` +
+    `the a4sx CLI to ${MIN_CELL_CONSENT_CLI} or newer, then start the cell again: it then asks you once in the terminal.`,
+  updateCli: "Update a4sx CLI",
   standalone: (name: string) => `The cell «${name}» isn't in a mesh yet. Add it to a mesh in the browser, then start it.`,
   openInBrowser: "Open in browser",
   badCell: "This cell can't be started from here: its name or mesh isn't one the a4sx CLI accepts.",
@@ -112,19 +115,26 @@ export const CELL_START_TEXTS = {
   fresh: (name: string, folder: string) =>
     `«${name}» starts in ${folder}. No earlier conversation of it is recorded on this computer, so it starts a new one, ` +
     "unless the a4sx CLI finds one of an older CLI there (it says so in the terminal). From then on, Start continues it there.",
-  homeTitle: (name: string, home: string) => `«${name}»'s last conversation ran in your home folder (${home}). Continue it there?`,
-  homeDetail:
-    "An earlier version of this extension started cells in the home folder when no folder was open, so this may not be " +
-    "the folder the cell should work in. Continue it there, or choose the cell's folder: Claude Code keeps a " +
-    "conversation with the folder it ran in, so the cell then starts a new conversation in the folder you choose.",
-  homeDetailGone:
-    "Its transcript isn't on this computer any more, so it starts a new conversation either way. An earlier version of " +
-    "this extension started cells in the home folder when no folder was open: choose the folder the cell should work in.",
-  homeContinue: "Continue in home folder",
-  homeChoose: "Choose a folder…",
-  homeLeftGone: (name: string, folder: string) => `«${name}» starts a new conversation in ${folder}.`,
-  homeLeft: (name: string, short: string, folder: string) =>
-    `«${name}» starts a new conversation in ${folder}. Its last one (session ${short}) stays in your home folder ` +
+  folderTitle: (name: string, folder: string) => `«${name}»'s last conversation ran in ${folder}, where a cell can't start`,
+  folderDetail: (folder: string, what: string) =>
+    `${folder} ${what}. The agent writes into the folder it starts in and could read or overwrite those files, so the ` +
+    `a4sx CLI doesn't start a cell there${what.startsWith("holds") ? " (only --mesh-reduced-isolation would allow it, " +
+      "for that one start, and it stores nothing, so the agent host couldn't start the cell again)" : ", with or without --mesh-reduced-isolation"}. ` +
+    "Choose the cell's own project folder: Claude Code keeps a conversation with its folder, so the cell starts a new " +
+    "conversation there.",
+  folderChoose: "Choose a folder…",
+  folderRefused: (folder: string, what: string) =>
+    `A cell can't start in ${folder}: it ${what}, and the agent writes into the folder it starts in, so it could read ` +
+    "or overwrite those files. Nothing was started. Choose a project folder outside those folders that doesn't contain " +
+    "them either, then try again.",
+  sessionFolderRefused: (folder: string, what: string) =>
+    `This session can't run as a cell: it ran in ${folder}, which ${what}, and the a4sx CLI doesn't start a cell there ` +
+    "(the agent writes into the folder it starts in and could read or overwrite those files). Nothing was started. " +
+    "Continue it with Resume in Claude Code instead (a conversation can't move to another folder), or use New cell in a " +
+    "project folder, which starts a new conversation.",
+  leftGone: (name: string, folder: string) => `«${name}» starts a new conversation in ${folder}.`,
+  left: (name: string, short: string, old: string, folder: string) =>
+    `«${name}» starts a new conversation in ${folder}. Its last one (session ${short}) stays with ${old} ` +
     "(Claude Code keeps a conversation with its folder).",
   movedTitle: (name: string, folder: string) => `«${name}» last ran in ${folder}, which isn't there any more. Choose the folder to start it in`,
   movedStarted: (name: string, short: string, lastFolder: string, folder: string) =>
@@ -132,6 +142,7 @@ export const CELL_START_TEXTS = {
     `can't be continued (Claude Code keeps a conversation with its folder). The cell starts a new conversation in ${folder}.`,
   pickTitle: (name: string) => `Choose the folder to start «${name}» in: no earlier conversation of it is recorded on this computer`,
   pickLabel: "Start the cell here",
+  pickNewTitle: "Choose the folder to start the cell in (no folder is open in this window)",
 };
 
 /** 0.9.2: what a cell's terminal says when the Claude Code to start isn't there. */
@@ -192,19 +203,27 @@ export function machineKey(): string {
   return createHash("sha256").update([os.hostname(), process.platform, os.homedir()].join("\0")).digest("hex").slice(0, 32);
 }
 
-/** Asks once per machine before the first start with --mesh-reduced-isolation; true when accepted. */
-export async function consentReducedIsolation(state: State, key: string = machineKey()): Promise<boolean> {
-  const seen = state.get<unknown>(CONSENT_KEY);
-  const list = Array.isArray(seen) ? seen.filter((x): x is string => typeof x === "string") : [];
-  if (list.includes(key)) {
+/**
+ * 0.9.3: whether this CLI asks the reduced-isolation question itself (0.32.0+), so Start and New cell can leave it to
+ * the CLI. An older one: the user is told to update (with the button), and nothing starts. An unknown version: yes
+ * (the CLI then says itself what it needs).
+ */
+export async function cliAsksConsent(deps: CellCommandDeps, cli: string): Promise<boolean> {
+  let v = await deps.provider.versions.version(cli);
+  if (v !== undefined && !versionAtLeast(v, MIN_CELL_CONSENT_CLI)) {
+    deps.provider.versions.clear();   // asked once more: an update may have finished since the version was read
+    v = await deps.provider.versions.version(cli);
+  }
+  // Deliberately on an unknown version too: a CLI that doesn't answer --version still gets the start, and an old one
+  // then refuses with its own message. Asked on every computer, also where the sandbox works and nothing is asked:
+  // the extension can't tell that before the start, and an older CLI should be updated anyway.
+  if (v === undefined || versionAtLeast(v, MIN_CELL_CONSENT_CLI)) {
     return true;
   }
-  const choice = await vscode.window.showWarningMessage(CELL_CMD_TEXTS.consentTitle, { modal: true, detail: CELL_CMD_TEXTS.consentDetail }, CELL_CMD_TEXTS.consentAccept);
-  if (choice !== CELL_CMD_TEXTS.consentAccept) {
-    return false;
+  if ((await vscode.window.showErrorMessage(CELL_CMD_TEXTS.consentCliTooOld(v), CELL_CMD_TEXTS.updateCli)) === CELL_CMD_TEXTS.updateCli) {
+    await updateCliInTerminal(deps);
   }
-  await state.update(CONSENT_KEY, [...list, key].slice(-20));
-  return true;
+  return false;
 }
 
 function plainFile(p: string): boolean {
@@ -399,13 +418,92 @@ async function pickCellFolder(state: State, cell: LocalCell, title: string, stat
   return uri && uri.scheme === "file" && uri.fsPath ? uri.fsPath : undefined;
 }
 
-/** The folder with its links resolved (the CLI records a folder that way), or itself when that fails. */
+/**
+ * The folder with its links resolved, as Python's realpath does: the longest part of it that exists, resolved, and
+ * the rest as given (the CLI records and compares folders that way).
+ */
 function realFolder(p: string): string {
-  try {
-    return fs.realpathSync.native(p);
-  } catch {
-    return p;
+  const rest: string[] = [];
+  let cur = p;
+  for (let i = 0; i < 64; i++) {
+    try {
+      const real = fs.realpathSync.native(cur);
+      return rest.length ? path.join(real, ...rest.reverse()) : real;
+    } catch {
+      const up = path.dirname(cur);
+      if (up === cur) {
+        return p;
+      }
+      rest.push(path.basename(cur));
+      cur = up;
+    }
   }
+  return p;
+}
+
+/**
+ * 0.9.3: the folder a cell without a folder of its own starts in: the window's folder (`chosen`), else one picked
+ * (with no folder open the terminal would start in the home folder, where the CLI refuses a cell). undefined: cancelled,
+ * or a folder the CLI refuses (the user was told).
+ */
+export async function cellStartFolder(deps: CellCommandDeps, chosen: string | vscode.Uri | undefined | null): Promise<string | undefined> {
+  if (chosen === null) {
+    return undefined;
+  }
+  let cwd = typeof chosen === "string" ? chosen : chosen?.fsPath;
+  if (!cwd) {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectFolders: true, canSelectFiles: false, canSelectMany: false, title: CELL_START_TEXTS.pickNewTitle, openLabel: CELL_START_TEXTS.pickLabel,
+    });
+    const uri = picked?.[0];
+    if (!uri || uri.scheme !== "file" || !uri.fsPath) {
+      return undefined;
+    }
+    cwd = uri.fsPath;
+  }
+  const platform = deps.platform ?? process.platform;
+  const what = cellFolderConflict(cwd, deps, deps.stateDir ?? cellsListDir(deps.env ?? process.env, platform, deps.home), platform);
+  if (what) {
+    await vscode.window.showErrorMessage(CELL_START_TEXTS.folderRefused(showText(cwd, 300) ?? cwd, what));
+    return undefined;
+  }
+  return cwd;
+}
+
+/**
+ * 0.9.3: why the a4sx CLI refuses to start a cell in `folder` without --mesh-reduced-isolation (its _ipc_check_cwd):
+ * the folder is, is inside, or holds the a4sx state folder, the a4sx config folder or your Claude Code folder (the home
+ * folder holds all three). undefined: none of that. Links resolved and, on Windows, case-blind, as the CLI compares.
+ */
+export function cellFolderConflict(folder: string, deps: Pick<CellCommandDeps, "env" | "home">, stateDir: string | undefined, platform: NodeJS.Platform = process.platform): string | undefined {
+  const p = platform === "win32" ? path.win32 : path.posix;
+  const env = deps.env ?? process.env;
+  const home = deps.home ?? os.homedir();
+  const norm = (x: string) => {
+    const abs = p.resolve(realFolder(x));
+    const r = abs === p.parse(abs).root ? abs : abs.replace(/[\\/]+$/, "");   // a drive root keeps its separator
+    return platform === "win32" ? r.toLowerCase() : r;
+  };
+  const under = (child: string, parent: string) => child.startsWith(parent.endsWith(p.sep) ? parent : parent + p.sep);
+  const cw = norm(folder);
+  const dirs: [string, string | undefined][] = [
+    ["the a4sx state folder", stateDir],
+    ["the a4sx config folder", cliConfigDir(home)],
+    ["your Claude Code folder", env.CLAUDE_CONFIG_DIR || p.join(home, ".claude")],
+  ];
+  for (const [label, dir] of dirs) {
+    if (!dir) {
+      continue;
+    }
+    const d = norm(dir);
+    if (d === cw || under(cw, d)) {
+      return `is ${d === cw ? "" : "inside "}${label} (${showText(dir, 300) ?? dir})`;
+    }
+    if (d !== cw && cw !== p.parse(cw).root && under(d, cw)) {   // the CLI never counts a root as holding them
+      return `holds ${label} (${showText(dir, 300) ?? dir})`;
+    }
+  }
+  return undefined;
 }
 
 /** Whether two folders are the same (Windows: case-blind, either slash, no trailing slash). */
@@ -427,7 +525,7 @@ async function transcriptTitleOf(file: string): Promise<string | undefined> {
 }
 
 /**
- * Start in terminal: `a4sx launch --cell NAME [--mesh ID] --mesh-reduced-isolation`. 0.9.2: in the folder the cell's
+ * Start in terminal: `a4sx launch --cell NAME [--mesh ID]`. 0.9.2: in the folder the cell's
  * last conversation ran in, and with `-- --resume <its id>` while its transcript is there (Claude Code finds a
  * conversation only from its own folder). The CLI records that conversation (0.31.10+); with none recorded, or its
  * folder gone, the user picks the folder. Never the home folder by default, never this window's folder silently.
@@ -448,8 +546,9 @@ export async function startCell(deps: CellCommandDeps, item: LocalCellItem | und
     await vscode.window.showErrorMessage(CELL_CMD_TEXTS.badCell);
     return undefined;
   }
+  // 0.9.3: no reduced-isolation dialog here: the CLI asks in the terminal, once per cell, and stores the answer
   const cli = await ensureCli(deps);
-  if (!cli || !(await consentReducedIsolation(deps.state))) {
+  if (!cli || !(await cliAsksConsent(deps, cli))) {
     return undefined;
   }
   // Claude Code first: nobody picks a folder for a start that then can't happen.
@@ -462,28 +561,22 @@ export async function startCell(deps: CellCommandDeps, item: LocalCellItem | und
   const plan: CellStartPlan = cellStartPlan(stateDir, deps.claudeProjects ?? claudeProjectsDir(deps.env ?? process.env, deps.home), cell, platform);
   const t = CELL_START_TEXTS;
   let cwd: string | undefined;
-  /** The user chose another folder than the home folder its conversation ran in: a new conversation there. */
-  let leftHome = false;
-  const home = deps.home ?? os.homedir();
-  if ((plan.kind === "resume" || plan.kind === "gone") && (samePath(plan.cwd, home, platform) || samePath(plan.cwd, realFolder(home), platform))) {
-    // 0.9.1 started a cell in the home folder when no folder was open, so the CLI may have recorded that: never
-    // continued there without asking.
-    const shownHome = showText(plan.cwd, 300) ?? plan.cwd;
-    const choice = await vscode.window.showWarningMessage(
-      t.homeTitle(cell.name, shownHome), { modal: true, detail: plan.kind === "resume" ? t.homeDetail : t.homeDetailGone }, t.homeContinue, t.homeChoose,
-    );
-    if (choice === t.homeContinue) {
-      cwd = plan.cwd;
-    } else if (choice === t.homeChoose) {
-      cwd = await pickCellFolder(deps.state, cell, t.pickTitle(cell.name), stateDir, platform);
-      if (cwd === undefined) {
-        return undefined;
-      }
-      leftHome = !samePath(cwd, plan.cwd, platform);
-      cwd = leftHome ? cwd : plan.cwd;
-    } else {
+  /** The conversation's folder is one a cell can't start in: the user chose another, a new conversation there. */
+  let left = false;
+  const conflict = plan.kind === "resume" || plan.kind === "gone" ? cellFolderConflict(plan.cwd, deps, stateDir, platform) : undefined;
+  if (conflict && (plan.kind === "resume" || plan.kind === "gone")) {
+    // 0.9.1 started a cell in the home folder when no folder was open, so the CLI may have recorded that. The CLI
+    // refuses a cell there without --mesh-reduced-isolation, which 0.9.3 no longer adds.
+    const shown = showText(plan.cwd, 300) ?? plan.cwd;
+    const choice = await vscode.window.showWarningMessage(t.folderTitle(cell.name, shown), { modal: true, detail: t.folderDetail(shown, conflict) }, t.folderChoose);
+    if (choice !== t.folderChoose) {
       return undefined;
     }
+    cwd = await pickCellFolder(deps.state, cell, t.pickTitle(cell.name), stateDir, platform);
+    if (cwd === undefined) {
+      return undefined;
+    }
+    left = true;
   } else if (plan.kind === "resume" || plan.kind === "gone") {
     cwd = plan.cwd;
   } else {
@@ -492,12 +585,17 @@ export async function startCell(deps: CellCommandDeps, item: LocalCellItem | und
       return undefined;
     }
   }
+  const picked = cellFolderConflict(cwd, deps, stateDir, platform);
+  if (picked) {
+    await vscode.window.showErrorMessage(t.folderRefused(showText(cwd, 300) ?? cwd, picked));
+    return undefined;
+  }
   // Only a Claude Code session id goes on the command line; another id the CLI recorded is resumed by the CLI itself
   // (0.31.10+: a stored cell started in its last conversation's folder continues it).
   // A record exists only from CLI 0.31.10 on, which knows --new-session: a gone folder's start doesn't ask again.
   // The CLI records a last conversation only for a Claude Code launch, so `--resume` goes to Claude Code.
-  const resuming = plan.kind === "resume" && !leftHome;
-  const session = resuming && cellLaunchArgs(cell, item.all, plan.sessionId) ? plan.sessionId : plan.kind === "moved" || leftHome ? "new" : undefined;
+  const resuming = plan.kind === "resume" && !left;
+  const session = resuming && cellLaunchArgs(cell, item.all, plan.sessionId) ? plan.sessionId : plan.kind === "moved" || left ? "new" : undefined;
   const args = cellLaunchArgs(cell, item.all, session)!;
   const short = plan.kind === "none" ? "" : plan.sessionId.slice(0, 8);
   const shownCwd = showText(cwd, 300) ?? cwd;
@@ -505,7 +603,8 @@ export async function startCell(deps: CellCommandDeps, item: LocalCellItem | und
     CELL_CMD_TEXTS.cellTerminal(cell.name), cli, CLI_NAME, args, cwd, claude.env, resuming ? t.banner(short, shownCwd) : undefined, true,
   ));
   await rememberFolder(deps.state, cell, cwd);
-  const said = leftHome ? (plan.kind === "resume" ? t.homeLeft(cell.name, short, shownCwd) : t.homeLeftGone(cell.name, shownCwd))
+  const said = left && plan.kind === "resume" ? t.left(cell.name, short, showText(plan.cwd, 300) ?? plan.cwd, shownCwd)
+    : left ? t.leftGone(cell.name, shownCwd)
     : plan.kind === "resume" ? t.resuming(cell.name, await transcriptTitleOf(plan.transcript), short, shownCwd)
     : plan.kind === "gone" ? t.gone(cell.name, short, shownCwd)
       : plan.kind === "moved" ? t.movedStarted(cell.name, short, showText(plan.lastCwd, 300) ?? plan.lastCwd, shownCwd)
@@ -514,18 +613,18 @@ export async function startCell(deps: CellCommandDeps, item: LocalCellItem | und
   return terminal;
 }
 
-/** New cell: `a4sx launch --new-cell --mesh-reduced-isolation`; the claim happens in the browser from there. */
+/** New cell: `a4sx launch --new-cell`; the claim happens in the browser, the reduced-isolation question in the terminal. */
 export async function newCell(deps: CellCommandDeps): Promise<vscode.Terminal | undefined> {
   const cli = await ensureCli(deps);
-  if (!cli || !(await consentReducedIsolation(deps.state))) {
-    return undefined;
-  }
-  const cwd = await deps.folder();
-  if (cwd === null) {
+  if (!cli || !(await cliAsksConsent(deps, cli))) {
     return undefined;
   }
   const claude = await cellClaudeEnv(deps);
   if (!claude) {
+    return undefined;
+  }
+  const cwd = await cellStartFolder(deps, await deps.folder());
+  if (cwd === undefined) {
     return undefined;
   }
   return track(deps, openCommandTerminal(CELL_CMD_TEXTS.newCellTerminal, cli, CLI_NAME, NEW_CELL_ARGS, cwd, claude.env, undefined, true));
@@ -749,7 +848,7 @@ export function typedCommand(found: string, args: readonly string[], shell: stri
   return (kind && commandLine(exe, args, kind)) ?? commandLine(exe, args, "posix");
 }
 
-/** Copy launch command: `a4sx launch --cell NAME [--mesh ID] --mesh-reduced-isolation`, quoted for the default shell. */
+/** Copy launch command: `a4sx launch --cell NAME [--mesh ID]`, quoted for the default shell. */
 export async function copyCellLaunch(deps: CellCommandDeps, item: LocalCellItem | undefined): Promise<string | undefined> {
   if (!(item instanceof LocalCellItem)) {
     return undefined;

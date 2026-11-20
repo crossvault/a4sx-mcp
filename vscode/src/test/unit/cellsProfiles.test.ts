@@ -94,12 +94,12 @@ interface Harness {
   provider: CellsProvider;
 }
 
-function harness(answers: Record<string, CliOutput> = {}, resolve: CliResolution = { kind: "found", path: CLI }, state = fakeMemento({ [CONSENT_KEY]: [machineKey()] })): Harness {
+function harness(answers: Record<string, CliOutput> = {}, resolve: CliResolution = { kind: "found", path: CLI }, state = fakeMemento()): Harness {
   const runs: string[] = [];
   const run = async (_cli: string, args: readonly string[]): Promise<CliOutput> => {
     const key = args.join(" ");
     runs.push(key);
-    return answers[key] ?? (key === "--version" ? out("a4sx 0.25.0  (server 0.718.0)") : key === "mesh cells --json" ? out(V1_CELLS)
+    return answers[key] ?? (key === "--version" ? out("a4sx 0.40.3  (server 0.718.0)") : key === "mesh cells --json" ? out(V1_CELLS)
       : key === `mesh peers ${MESH} --json` ? out(V1_PEERS) : out(""));
   };
   const provider = new CellsProvider({ resolve: () => resolve, run, server: () => BASE, onState: () => undefined });
@@ -375,10 +375,10 @@ describe("command builders", () => {
 
   it("Copy launch command: the bare name when a4sx is on PATH, quoted for the default shell; POSIX when the shell is unknown", () => {
     const args = cellLaunchArgs(build, cells)!;
-    assert.strictEqual(typedCommand("/usr/local/bin/a4sx", args, "/bin/zsh", "/usr/bin:/usr/local/bin", "linux"), "'a4sx' 'launch' '--cell' 'build' '--mesh-reduced-isolation'");
+    assert.strictEqual(typedCommand("/usr/local/bin/a4sx", args, "/bin/zsh", "/usr/bin:/usr/local/bin", "linux"), "'a4sx' 'launch' '--cell' 'build'");
     assert.strictEqual(typedCommand("C:\\Tools\\a4sx.cmd", args, "C:\\Program Files\\PowerShell\\7\\pwsh.exe", "C:\\Tools", "win32"),
-      "& 'a4sx' 'launch' '--cell' 'build' '--mesh-reduced-isolation'");
-    assert.strictEqual(typedCommand("/opt/a4sx/a4sx", args, undefined, "/usr/bin", "linux"), "'/opt/a4sx/a4sx' 'launch' '--cell' 'build' '--mesh-reduced-isolation'");
+      "& 'a4sx' 'launch' '--cell' 'build'");
+    assert.strictEqual(typedCommand("/opt/a4sx/a4sx", args, undefined, "/usr/bin", "linux"), "'/opt/a4sx/a4sx' 'launch' '--cell' 'build'");
   });
 });
 
@@ -455,7 +455,7 @@ describe("Cells view: grouped by mesh, with the other machines' cells", () => {
     assert.deepStrictEqual(calls.infos, [CELL_CMD_TEXTS.stopped("build"), CELL_CMD_TEXTS.renamed("docs", "notes")]);
     calls.shell = "/bin/bash";
     const line = await copyCellLaunch(h.deps, build);
-    assert.strictEqual(line, `'${CLI}' 'launch' '--cell' 'build' '--mesh-reduced-isolation'`);
+    assert.strictEqual(line, `'${CLI}' 'launch' '--cell' 'build'`);
     assert.strictEqual(calls.clipboard, line);
   });
 
@@ -492,59 +492,43 @@ describe("Run as cell in terminal", () => {
     ]);
   });
 
-  it("a local session: the cell, Keep my sign-in on by default, `-- --resume ID` in the session's own folder", async () => {
+  it("a local session: the cell, the one option, `-- --resume ID` in the session's own folder; no reduced-isolation flag or dialog", async () => {
     const h = harness();
-    calls.pickQueue.push(1, [0]);   // docs; the options as offered (Keep my sign-in on)
+    calls.pickQueue.push(1, []);   // docs; the option as offered (off)
     const t = await runAsCell(h.deps, local());
     assert.ok(t);
     const opts = calls.quickPicks[1];
     assert.strictEqual(opts.options.canPickMany, true);
-    assert.deepStrictEqual(opts.items.map((i: any) => [i.label, i.picked]), [[RUN_AS_CELL_TEXTS.keepSignIn, true], [RUN_AS_CELL_TEXTS.autoAllow, false]]);
+    assert.deepStrictEqual(opts.items.map((i: any) => [i.label, i.picked]), [[RUN_AS_CELL_TEXTS.autoAllow, false]]);
     assert.strictEqual(calls.terminals[0].options.name, "a4sx: cell docs");
     assert.strictEqual(calls.terminals[0].options.cwd, "/home/me/proj");
-    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--cell' 'docs' '--mesh-reduced-isolation' '--' '--resume' '${SID}'\n`]);
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--cell' 'docs' '--' '--resume' '${SID}'\n`]);
+    assert.deepStrictEqual(calls.modals, [], "the reduced-isolation question is the CLI's, in the terminal");
     assert.ok(h.deps.terminals.has(t!));
   });
 
   it("a library-only session: `--a4sx-session=ID` in the workspace folder; New cell… runs --new-cell; PowerShell quoting", async () => {
     const h = harness();
     calls.shell = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
-    calls.pickQueue.push(3, [0]);
+    calls.pickQueue.push(3, []);
     await runAsCell(h.deps, library);
     assert.strictEqual(calls.terminals[0].options.name, CELL_CMD_TEXTS.newCellTerminal);
     assert.strictEqual(calls.terminals[0].options.cwd, "/w/proj");
-    assert.deepStrictEqual(calls.terminals[0].sent, [`& '${CLI}' 'launch' '--new-cell' '--mesh-reduced-isolation' '--a4sx-session=${LIB_ID}'\n`]);
+    assert.deepStrictEqual(calls.terminals[0].sent, [`& '${CLI}' 'launch' '--new-cell' '--a4sx-session=${LIB_ID}'\n`]);
+    assert.deepStrictEqual(calls.modals, [], "a library session needs no flag either: the CLI's yes keeps the sign-in");
   });
 
   it("Deliver messages without asking: a warning first; Cancel starts nothing; accepting adds --auto-allow-ipc-messages", async () => {
     const h = harness();
-    calls.pickQueue.push(0, [0, 1]);
+    calls.pickQueue.push(0, [0]);
     assert.strictEqual(await runAsCell(h.deps, library), undefined);
     assert.deepStrictEqual(calls.modals.map((m) => [m.kind, m.message, m.items]), [["warning", RUN_AS_CELL_TEXTS.autoAllowTitle, [RUN_AS_CELL_TEXTS.autoAllowAccept]]]);
     assert.strictEqual(calls.modals[0].detail, RUN_AS_CELL_TEXTS.autoAllowWarning);
     assert.strictEqual(calls.terminals.length, 0);
-    calls.pickQueue.push(0, [1]);
+    calls.pickQueue.push(0, [0]);
     calls.modalChoices.push(RUN_AS_CELL_TEXTS.autoAllowAccept);
     await runAsCell(h.deps, local());
     assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--cell' 'build' '--auto-allow-ipc-messages' '--' '--resume' '${SID}'\n`]);
-  });
-
-  it("a library-only session with Keep my sign-in off: a warning first (the CLI can't seed without it); Cancel starts nothing", async () => {
-    const h = harness();
-    calls.pickQueue.push(0, []);
-    assert.strictEqual(await runAsCell(h.deps, library), undefined);
-    assert.deepStrictEqual(calls.modals.map((m) => [m.kind, m.message, m.items, m.detail]),
-      [["warning", RUN_AS_CELL_TEXTS.seedSignInTitle, [RUN_AS_CELL_TEXTS.seedSignInAccept], RUN_AS_CELL_TEXTS.seedSignInDetail]]);
-    assert.strictEqual(calls.terminals.length, 0);
-    calls.pickQueue.push(3, []);
-    calls.modalChoices.push(RUN_AS_CELL_TEXTS.seedSignInAccept);
-    await runAsCell(h.deps, library);
-    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--new-cell' '--mesh-reduced-isolation' '--a4sx-session=${LIB_ID}'\n`]);
-    // A session on this computer needs no sign-in to resume: no warning.
-    calls.pickQueue.push(0, []);
-    await runAsCell(h.deps, local());
-    assert.strictEqual(calls.modals.length, 2);
-    assert.deepStrictEqual(calls.terminals[1].sent, [`'${CLI}' 'launch' '--cell' 'build' '--' '--resume' '${SID}'\n`]);
   });
 
   it("the CLI's config: `a4sx config show` turns the auto-allow toggle on and says where it comes from; off, the toggle names the config key", async () => {
@@ -556,27 +540,27 @@ describe("Run as cell in terminal", () => {
     await runAsCell(on.deps, local());
     assert.ok(on.runs.includes("config show"));
     assert.deepStrictEqual(calls.quickPicks[1].items.map((i: any) => [i.picked, i.detail]), [
-      [true, RUN_AS_CELL_TEXTS.keepSignInDetail], [true, RUN_AS_CELL_TEXTS.autoAllowFromConfig],
+      [true, RUN_AS_CELL_TEXTS.autoAllowFromConfig],
     ]);
     const off = harness({ "config show": out("", 1, "a4sx: no config at ~/.config/a4sx/config.json") });
     calls.pickQueue.push(0, undefined);
     await runAsCell(off.deps, local());
     assert.deepStrictEqual(calls.quickPicks[3].items.map((i: any) => [i.picked, i.detail]), [
-      [true, RUN_AS_CELL_TEXTS.keepSignInDetail], [false, RUN_AS_CELL_TEXTS.autoAllowDetail],
+      [false, RUN_AS_CELL_TEXTS.autoAllowDetail],
     ]);
     assert.match(RUN_AS_CELL_TEXTS.autoAllowDetail, /ipc\.auto_allow_messages/);
   });
 
-  it("Keep my sign-in asks the per-computer consent once; Esc in either pick starts nothing", async () => {
+  it("Esc in either pick starts nothing; a CLI before 0.32.0 is asked to update first, nothing starts", async () => {
     const h = harness({}, { kind: "found", path: CLI }, fakeMemento());
-    calls.pickQueue.push(0, [0]);
-    await runAsCell(h.deps, local());
-    assert.deepStrictEqual(calls.modals.map((m) => m.message), [CELL_CMD_TEXTS.consentTitle]);
-    assert.strictEqual(calls.terminals.length, 0, "consent declined");
     calls.pickQueue.push(undefined);
     await runAsCell(h.deps, local());
     calls.pickQueue.push(0, undefined);
     await runAsCell(h.deps, local());
+    assert.strictEqual(calls.terminals.length, 0);
+    const old = harness({ "--version": out("a4sx 0.31.11  (server 0.726.0)") });
+    assert.strictEqual(await runAsCell(old.deps, local()), undefined);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [CELL_CMD_TEXTS.consentCliTooOld("0.31.11")]);
     assert.strictEqual(calls.terminals.length, 0);
   });
 
@@ -601,24 +585,20 @@ describe("Run as cell in terminal", () => {
     for (const args of lines) {
       assert.ok(args && !args.some((a) => forcing.test(a)), JSON.stringify(args));
     }
-    assert.deepStrictEqual(newCellRunArgs({ reduced: true, autoAllow: false }), ["launch", "--new-cell", "--mesh-reduced-isolation"]);
-    assert.deepStrictEqual([...NEW_CELL_ARGS], ["launch", "--new-cell", "--mesh-reduced-isolation"]);
+    assert.deepStrictEqual(newCellRunArgs({ reduced: false, autoAllow: false }), ["launch", "--new-cell"]);
+    assert.deepStrictEqual([...NEW_CELL_ARGS], ["launch", "--new-cell"]);
   });
 
-  it("0.5.2: the Claude Code sign-in hint shows only when it is sure: no profile (or New cell…), CLI 0.26.5+, Keep my sign-in on", async () => {
+  it("0.5.2: the Claude Code sign-in hint shows only when it is sure: no profile (or New cell…), CLI 0.26.5+", async () => {
     assert.strictEqual(RUN_AS_CELL_TEXTS.claudeSignIn, "Without a launch profile, this cell uses your Claude Code sign-in on this machine; run /login inside the cell if you have none.");
     assert.strictEqual(RUN_AS_CELL_TEXTS.newCellDetail, "Approve it in your browser, where you pick its mesh.");
-    assert.match(RUN_AS_CELL_TEXTS.keepSignInDetail, /the Claude Code sign-in saved on this computer/);
     const v = (ver: string) => ({ "--version": out(`a4sx ${ver}  (server 0.726.0)`) });
     const runs: [Record<string, CliOutput>, number, number[], boolean][] = [
-      [v("0.26.5"), 1, [0], true],      // docs: no launch profile
-      [v("0.26.5"), 3, [0], true],      // New cell…
-      [v("0.27.0"), 1, [0], true],
-      [v("0.26.5"), 0, [0], false],     // build: launch profile work
-      [v("0.26.5"), 1, [], false],      // Keep my sign-in off
-      [v("0.26.4"), 1, [0], false],     // a CLI without the default
-      [{}, 1, [0], false],              // 0.25.0
-      [{ "--version": out("not a version") }, 3, [0], false],
+      [v("0.32.0"), 1, [], true],       // docs: no launch profile (0.9.3: Start needs CLI 0.32.0+, past 0.26.5)
+      [v("0.32.0"), 3, [], true],       // New cell…
+      [v("0.40.3"), 1, [], true],
+      [v("0.32.0"), 0, [], false],      // build: launch profile work
+      [{ "--version": out("not a version") }, 3, [], false],
     ];
     for (const [answers, cell, opts, shown] of runs) {
       resetCalls();
@@ -630,22 +610,20 @@ describe("Run as cell in terminal", () => {
     }
     // legacy rows (no profile field), or a v1 row whose server part couldn't be read (registry state "unknown", so
     // `profile: null` proves nothing): no hint; New cell… still gets it
-    const on = { reduced: true, autoAllow: false };
     const legacy = { name: "docs", instance_id: "ins_D4", mesh_id: MESH, mesh_name: "Team mesh" };
     const cellWith = (state?: "active" | "reserved" | "revoked" | "unknown") => ({ kind: "cell" as const, cell: { ...parseLocalCell(legacy)!, ...(state ? { registryState: state } : {}) } });
-    assert.strictEqual(claudeSignInHint(cellWith("active"), true, "0.26.5", on), false);
-    assert.strictEqual(claudeSignInHint(cellWith("active"), false, "0.26.5", on), true);
-    assert.strictEqual(claudeSignInHint(cellWith("reserved"), false, "0.26.5", on), true);
-    assert.strictEqual(claudeSignInHint(cellWith("unknown"), false, "0.26.5", on), false);
-    assert.strictEqual(claudeSignInHint(cellWith("revoked"), false, "0.26.5", on), false);
-    assert.strictEqual(claudeSignInHint(cellWith(), false, "0.26.5", on), false);
-    assert.strictEqual(claudeSignInHint({ kind: "new" }, true, "0.26.5", on), true);
-    const unknownRow = harness({ ...v("0.26.5"), "mesh cells --json": out({ ...V1_CELLS, cells: [row({ name: "docs", registry: { state: "unknown" } })] }) });
+    assert.strictEqual(claudeSignInHint(cellWith("active"), true, "0.26.5"), false);
+    assert.strictEqual(claudeSignInHint(cellWith("active"), false, "0.26.5"), true);
+    assert.strictEqual(claudeSignInHint(cellWith("reserved"), false, "0.26.5"), true);
+    assert.strictEqual(claudeSignInHint(cellWith("unknown"), false, "0.26.5"), false);
+    assert.strictEqual(claudeSignInHint(cellWith("revoked"), false, "0.26.5"), false);
+    assert.strictEqual(claudeSignInHint(cellWith(), false, "0.26.5"), false);
+    assert.strictEqual(claudeSignInHint({ kind: "new" }, true, "0.26.5"), true);
+    const unknownRow = harness({ ...v("0.32.0"), "mesh cells --json": out({ ...V1_CELLS, cells: [row({ name: "docs", registry: { state: "unknown" } })] }) });
     resetCalls();
-    calls.pickQueue.push(0, [0]);
+    calls.pickQueue.push(0, []);
     assert.ok(await runAsCell(unknownRow.deps, local()));
     assert.deepStrictEqual(calls.infos, []);
-    assert.match(CELL_CMD_TEXTS.consentDetail, /keys saved on this computer, and its Claude Code sign-in\./);
   });
 
   it("the menu item on My sessions, hidden from the palette", () => {

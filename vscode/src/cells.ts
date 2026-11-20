@@ -256,7 +256,15 @@ export function parseCellsJson(stdout: string): LocalCell[] | undefined {
 
 export const CELLS_LIST_ARGS: readonly string[] = ["mesh", "cells", "--json"];
 export const REDUCED_FLAG = "--mesh-reduced-isolation";
-export const NEW_CELL_ARGS: readonly string[] = ["launch", "--new-cell", REDUCED_FLAG];
+/**
+ * 0.9.3: no cell start of the extension passes --mesh-reduced-isolation. That flag accepts reduced isolation for one start only
+ * and stores nothing, so a cell started from here never had its answer stored, and the agent host's later start of it
+ * (no terminal) was refused. Without the flag the CLI (0.32.0+) asks its own question in the terminal, once per cell
+ * per computer, and stores the answer.
+ */
+export const NEW_CELL_ARGS: readonly string[] = ["launch", "--new-cell"];
+/** The first CLI that asks the reduced-isolation question itself and stores the answer per cell (#2118 consent_once). */
+export const MIN_CELL_CONSENT_CLI = "0.32.0";
 
 /** True when another stored cell has this name, so the commands need `--mesh` to pick it. */
 function nameShared(cell: LocalCell, all: readonly LocalCell[]): boolean {
@@ -276,7 +284,8 @@ export function startableCell(cell: LocalCell): boolean {
 export const NEW_SESSION_FLAG = "--new-session";
 
 /**
- * `launch --cell NAME [--mesh ID] --mesh-reduced-isolation [--new-session | -- --resume SESSION]`; undefined for a
+ * `launch --cell NAME [--mesh ID] [--new-session | -- --resume SESSION]` (0.9.3: no --mesh-reduced-isolation, see
+ * NEW_CELL_ARGS); undefined for a
  * standalone or bad cell, or a session id that isn't a Claude Code session id. 0.9.2: `session` is the cell's last
  * conversation to continue, or "new" when it can't be continued (its folder is gone: without the flag the CLI would
  * ask in the terminal whether to start a new one).
@@ -286,7 +295,7 @@ export function cellLaunchArgs(cell: LocalCell, all: readonly LocalCell[], sessi
     return undefined;
   }
   const tail = session === undefined ? [] : session === "new" ? [NEW_SESSION_FLAG] : ["--", "--resume", session];
-  return ["launch", "--cell", cell.name, ...(nameShared(cell, all) ? ["--mesh", cell.meshId!] : []), REDUCED_FLAG, ...tail];
+  return ["launch", "--cell", cell.name, ...(nameShared(cell, all) ? ["--mesh", cell.meshId!] : []), ...tail];
 }
 
 function pickArgs(cell: LocalCell, all: readonly LocalCell[]): string[] | undefined {
@@ -325,7 +334,7 @@ const CLAUDE_SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 /** The two toggles of "Run as cell in terminal". */
 export interface LaunchOptions {
-  /** "Keep my sign-in (reduced isolation)": --mesh-reduced-isolation. */
+  /** --mesh-reduced-isolation. 0.9.3: never set by the extension (the CLI asks and stores the answer per cell). */
   reduced: boolean;
   /** "Deliver messages from mesh peers without asking": --auto-allow-ipc-messages. */
   autoAllow: boolean;
@@ -434,6 +443,7 @@ export function localCellTooltip(cell: LocalCell, defaultServer: string): string
  */
 export function cellsListDir(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, home: string = os.homedir()): string | undefined {
   const p = platform === "win32" ? path.win32 : path.posix;
-  const state = env.XDG_STATE_HOME || (platform === "win32" ? env.LOCALAPPDATA : p.join(home, ".local", "state"));
+  // on Windows without LOCALAPPDATA, ~\AppData\Local, as the CLI's _win_local
+  const state = env.XDG_STATE_HOME || (platform === "win32" ? env.LOCALAPPDATA || p.join(home, "AppData", "Local") : p.join(home, ".local", "state"));
   return state ? p.join(state, "a4sx") : undefined;
 }

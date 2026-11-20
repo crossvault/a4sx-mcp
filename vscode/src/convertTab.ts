@@ -3,8 +3,8 @@
 // 0.8.0: "Convert to cell" and "Convert to cell in mesh…" in the context menu of a Claude Code tab (and in the
 // Command Palette while such a tab is active). The tab's session is found on this computer (tabSession.ts), then
 // "Run as cell in terminal" runs it in a new cell:
-//   a4sx launch --new-cell [--mesh <id>] [--mesh-reduced-isolation] [--auto-allow-ipc-messages] -- --resume <session id>
-// in the folder the session ran in. The options and the reduced-isolation consent are asked as in Run as cell; the
+//   a4sx launch --new-cell [--mesh <id>] [--auto-allow-ipc-messages] -- --resume <session id>
+// in the folder the session ran in. The option is asked as in Run as cell (reduced isolation: the CLI asks); the
 // browser approval picks the mesh. The tab stays open: the session now continues in the terminal, so the command
 // offers to close the tab. saveTab.ts uses the same tab and session lookup.
 // 0.9.0: "Convert into a cell…" does the same, but asks for the cell as Run as cell does: a cell you already have
