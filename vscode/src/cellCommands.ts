@@ -118,17 +118,20 @@ export const CELL_START_TEXTS = {
   folderTitle: (name: string, folder: string) => `«${name}»'s last conversation ran in ${folder}, where a cell can't start`,
   folderDetail: (folder: string, what: string) =>
     `${folder} ${what}. The agent writes into the folder it starts in and could read or overwrite those files, so the ` +
-    "a4sx CLI doesn't start a cell there (only --mesh-reduced-isolation would allow it, for that one start, and it stores " +
-    "nothing, so the agent host couldn't start the cell again). Choose the cell's own project folder: Claude Code keeps a " +
-    "conversation with its folder, so the cell starts a new conversation there.",
+    `a4sx CLI doesn't start a cell there${what.startsWith("holds") ? " (only --mesh-reduced-isolation would allow it, " +
+      "for that one start, and it stores nothing, so the agent host couldn't start the cell again)" : ", with or without --mesh-reduced-isolation"}. ` +
+    "Choose the cell's own project folder: Claude Code keeps a conversation with its folder, so the cell starts a new " +
+    "conversation there.",
   folderChoose: "Choose a folder…",
   folderRefused: (folder: string, what: string) =>
     `A cell can't start in ${folder}: it ${what}, and the agent writes into the folder it starts in, so it could read ` +
-    "or overwrite those files. Nothing was started. Choose a project folder that doesn't hold it, then start the cell again.",
+    "or overwrite those files. Nothing was started. Choose a project folder outside those folders that doesn't contain " +
+    "them either, then try again.",
   sessionFolderRefused: (folder: string, what: string) =>
     `This session can't run as a cell: it ran in ${folder}, which ${what}, and the a4sx CLI doesn't start a cell there ` +
     "(the agent writes into the folder it starts in and could read or overwrite those files). Nothing was started. " +
-    "Continue it in Claude Code instead, or start a cell in a project folder.",
+    "Continue it with Resume in Claude Code instead (a conversation can't move to another folder), or use New cell in a " +
+    "project folder, which starts a new conversation.",
   leftGone: (name: string, folder: string) => `«${name}» starts a new conversation in ${folder}.`,
   left: (name: string, short: string, old: string, folder: string) =>
     `«${name}» starts a new conversation in ${folder}. Its last one (session ${short}) stays with ${old} ` +
@@ -415,13 +418,27 @@ async function pickCellFolder(state: State, cell: LocalCell, title: string, stat
   return uri && uri.scheme === "file" && uri.fsPath ? uri.fsPath : undefined;
 }
 
-/** The folder with its links resolved (the CLI records a folder that way), or itself when that fails. */
+/**
+ * The folder with its links resolved, as Python's realpath does: the longest part of it that exists, resolved, and
+ * the rest as given (the CLI records and compares folders that way).
+ */
 function realFolder(p: string): string {
-  try {
-    return fs.realpathSync.native(p);
-  } catch {
-    return p;
+  const rest: string[] = [];
+  let cur = p;
+  for (let i = 0; i < 64; i++) {
+    try {
+      const real = fs.realpathSync.native(cur);
+      return rest.length ? path.join(real, ...rest.reverse()) : real;
+    } catch {
+      const up = path.dirname(cur);
+      if (up === cur) {
+        return p;
+      }
+      rest.push(path.basename(cur));
+      cur = up;
+    }
   }
+  return p;
 }
 
 /**
@@ -463,9 +480,11 @@ export function cellFolderConflict(folder: string, deps: Pick<CellCommandDeps, "
   const env = deps.env ?? process.env;
   const home = deps.home ?? os.homedir();
   const norm = (x: string) => {
-    const r = p.resolve(realFolder(x)).replace(/[\\/]+$/, "");
+    const abs = p.resolve(realFolder(x));
+    const r = abs === p.parse(abs).root ? abs : abs.replace(/[\\/]+$/, "");   // a drive root keeps its separator
     return platform === "win32" ? r.toLowerCase() : r;
   };
+  const under = (child: string, parent: string) => child.startsWith(parent.endsWith(p.sep) ? parent : parent + p.sep);
   const cw = norm(folder);
   const dirs: [string, string | undefined][] = [
     ["the a4sx state folder", stateDir],
@@ -477,10 +496,10 @@ export function cellFolderConflict(folder: string, deps: Pick<CellCommandDeps, "
       continue;
     }
     const d = norm(dir);
-    if (d === cw || cw.startsWith(d + p.sep)) {
+    if (d === cw || under(cw, d)) {
       return `is ${d === cw ? "" : "inside "}${label} (${showText(dir, 300) ?? dir})`;
     }
-    if (d.startsWith(cw + p.sep)) {
+    if (d !== cw && cw !== p.parse(cw).root && under(d, cw)) {   // the CLI never counts a root as holding them
       return `holds ${label} (${showText(dir, 300) ?? dir})`;
     }
   }

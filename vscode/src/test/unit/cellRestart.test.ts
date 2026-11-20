@@ -401,6 +401,18 @@ describe("0.9.2 review: a home-folder record, other platforms' builds, Windows p
     assert.match(cellFolderConflict(path.join(home, ".claude", "projects"), d, state)!, /^is inside your Claude Code folder/);
     assert.strictEqual(cellFolderConflict(path.join(home, "projects", "meshtest"), d, state), undefined);
     assert.match(cellFolderConflict("C:\\Users\\Kartan", { env: {}, home: "C:\\Users\\kartan" }, undefined, "win32")!, /holds the a4sx config folder/);
+    // CLAUDE_CONFIG_DIR moves the Claude Code folder; a root never counts as holding them (as in the CLI)
+    const cc = path.join(tmpdir(), "cc");
+    assert.match(cellFolderConflict(path.join(cc, "x"), { env: { CLAUDE_CONFIG_DIR: cc }, home }, state)!, /^is inside your Claude Code folder/);
+    assert.strictEqual(cellFolderConflict(path.parse(home).root, d, state), undefined);
+    // a folder below a link that doesn't exist yet resolves through the link, as Python's realpath does
+    const real = tmpdir();
+    const link = path.join(tmpdir(), "home-link");
+    fs.symlinkSync(real, link);
+    assert.match(cellFolderConflict(path.join(link, ".claude", "new"), { env: {}, home: real }, undefined)!, /^is inside your Claude Code folder/);
+    // "is inside": the flag wouldn't help either, and the text says so
+    assert.match(CELL_START_TEXTS.folderDetail("/x", "is inside your Claude Code folder (/x)"), /with or without --mesh-reduced-isolation/);
+    assert.match(CELL_START_TEXTS.folderDetail("/x", "holds your Claude Code folder (/x/.claude)"), /only --mesh-reduced-isolation would allow it/);
   });
 
   it("Start anyway is remembered on this computer: the not-found message isn't shown again", async () => {

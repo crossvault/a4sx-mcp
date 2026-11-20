@@ -115,7 +115,7 @@ describe("cells: reading `a4sx mesh cells --json`", () => {
     assert.strictEqual(cellsListDir({}, "linux", "/home/u"), "/home/u/.local/state/a4sx");
     assert.strictEqual(cellsListDir({ XDG_STATE_HOME: "/s" }, "linux", "/home/u"), "/s/a4sx");
     assert.strictEqual(cellsListDir({ LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local" }, "win32", "C:\\Users\\me"), "C:\\Users\\me\\AppData\\Local\\a4sx");
-    assert.strictEqual(cellsListDir({}, "win32", "C:\\Users\\me"), undefined);
+    assert.strictEqual(cellsListDir({}, "win32", "C:\\Users\\me"), "C:\\Users\\me\\AppData\\Local\\a4sx", "no LOCALAPPDATA: the CLI's fallback");
   });
 });
 

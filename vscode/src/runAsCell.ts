@@ -160,6 +160,15 @@ export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession
     await vscode.window.showErrorMessage(load.kind === "error" && load.message ? load.message : CELL_TEXTS.listFailed);
     return undefined;
   }
+  // A session that ran in a folder the CLI refuses a cell in can't run as one: said before any pick.
+  if (local) {
+    const platform = deps.platform ?? process.platform;
+    const what = cellFolderConflict(local.cwd, deps, deps.stateDir ?? cellsListDir(deps.env ?? process.env, platform, deps.home), platform);
+    if (what) {
+      await vscode.window.showErrorMessage(CELL_START_TEXTS.sessionFolderRefused(showText(local.cwd, 300) ?? local.cwd, what));
+      return undefined;
+    }
+  }
   const target: ResumeTarget = local ? { kind: "local", sessionId: local.sessionId } : { kind: "library", id: session.id };
   const picked: { choice: CellChoice } | undefined = preset
     ? { choice: preset.choice }
@@ -185,16 +194,8 @@ export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession
     return undefined;
   }
   // A session on this computer resumes in its own folder (Claude Code files it there); else the workspace's.
-  let cwd: string | undefined;
-  if (local) {
-    const platform = deps.platform ?? process.platform;
-    const what = cellFolderConflict(local.cwd, deps, deps.stateDir ?? cellsListDir(deps.env ?? process.env, platform, deps.home), platform);
-    if (what) {
-      await vscode.window.showErrorMessage(CELL_START_TEXTS.sessionFolderRefused(showText(local.cwd, 300) ?? local.cwd, what));
-      return undefined;
-    }
-    cwd = local.cwd;
-  } else {
+  let cwd: string | undefined = local?.cwd;
+  if (!local) {
     cwd = await cellStartFolder(deps, await deps.folder());
     if (cwd === undefined) {
       return undefined;

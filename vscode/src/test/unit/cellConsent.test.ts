@@ -122,6 +122,7 @@ describe("0.9.3: the reduced-isolation question is the CLI's, stored per cell", 
     calls.pickQueue.push(0, []);
     const t = await runAsCell(h.deps, { id: "ses_1", findLocal: async () => ({ sessionId: "0f1e2d3c-4b5a-4978-8a6b-5c4d3e2f1a0b", cwd: h.deps.home! }) });
     assert.strictEqual(t, undefined);
+    assert.deepStrictEqual(calls.quickPicks, [], "said before any pick");
     assert.deepStrictEqual(calls.errors.map((e) => e.message), [CELL_START_TEXTS.sessionFolderRefused(h.deps.home!, `holds the a4sx config folder (${path.join(h.deps.home!, ".config", "a4sx")})`)]);
     assert.strictEqual(calls.terminals.length, 0);
   });

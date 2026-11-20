@@ -443,6 +443,7 @@ export function localCellTooltip(cell: LocalCell, defaultServer: string): string
  */
 export function cellsListDir(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, home: string = os.homedir()): string | undefined {
   const p = platform === "win32" ? path.win32 : path.posix;
-  const state = env.XDG_STATE_HOME || (platform === "win32" ? env.LOCALAPPDATA : p.join(home, ".local", "state"));
+  // on Windows without LOCALAPPDATA, ~\AppData\Local, as the CLI's _win_local
+  const state = env.XDG_STATE_HOME || (platform === "win32" ? env.LOCALAPPDATA || p.join(home, "AppData", "Local") : p.join(home, ".local", "state"));
   return state ? p.join(state, "a4sx") : undefined;
 }
