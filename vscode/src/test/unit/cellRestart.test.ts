@@ -220,6 +220,7 @@ describe("0.9.2 bug 2: the Claude Code extension's claude, found where it is now
     const b = ext(root, "2.1.330", true, ["dist", "bin"]);
     assert.strictEqual(bundledClaude(a), path.join(b, "dist", "bin", EXE));
     write(path.join(root, ".obsolete"), JSON.stringify({ [path.basename(b)]: true }));
+    fs.chmodSync(path.join(root, ".obsolete"), 0o644);   // as VS Code writes it
     assert.strictEqual(bundledClaude(a), path.join(a, "resources", "native-binary", EXE));
     const lone = path.join(tmpdir(), "my-dev-copy");
     write(path.join(lone, "resources", "native-binary", EXE));
@@ -237,7 +238,8 @@ describe("0.9.2 bug 2: the Claude Code extension's claude, found where it is now
     assert.strictEqual(calls.terminals.length, 1);
     assert.strictEqual(calls.terminals[0].options.env, undefined);
     assert.deepStrictEqual(calls.modals, []);
-    assert.ok(claudeFindable({ PATH: "/nowhere" }, path.dirname(path.dirname(path.dirname(write(path.join(tmpdir(), ".local", "bin", "claude")))))), "linux");
+    const home = path.dirname(path.dirname(path.dirname(write(path.join(tmpdir(), ".local", "bin", "claude")))));
+    assert.ok(claudeFindable({ PATH: "/nowhere" }, home, "linux", (p) => fs.existsSync(p)), "~/.local/bin/claude");
   });
 
   it("nothing anywhere: one message with the install command; nothing starts; Copy and Start anyway", async () => {

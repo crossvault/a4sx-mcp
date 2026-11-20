@@ -425,8 +425,8 @@ export function updateArgs(base: string, defaultBase: string): string[] {
 /** The Claude Code extension's folder name: `anthropic.claude-code-<version>[-<platform>]` (the CLI's _CLAUDE_VSCODE_EXT_RE). */
 const CLAUDE_EXT_DIR = /^anthropic\.claude-code-(\d+(?:\.\d+)*)(-.*)?$/i;
 /**
- * Where the Claude Code extension keeps its `claude`, relative to its folder. 2.1.x (checked in the win32-x64 build
- * of 2.1.329 on Open VSX): `resources/native-binary/claude[.exe]`. The others are where a
+ * Where the Claude Code extension keeps its `claude`, relative to its folder. 2.1.x (checked in the win32-x64 builds
+ * of 2.1.325 and 2.1.329 on Open VSX): `resources/native-binary/claude[.exe]`. The others are where a
  * later layout may put it; anything else is found by the bounded search below (as the CLI's own search does).
  */
 export const CLAUDE_BINARY_DIRS: readonly (readonly string[])[] = [["resources", "native-binary"], ["resources", "bin"], ["native-binary"], ["bin"]];
@@ -524,9 +524,6 @@ function newerFirst(a: number[], b: number[]): number {
 /** The folder names VS Code's `.obsolete` file lists in an extensions folder: removed versions it deletes later. */
 function obsoleteNames(parent: string, f: ClaudeFs): Set<string> {
   const file = path.join(parent, ".obsolete");
-  if (!f.isFile(file)) {
-    return new Set();
-  }
   try {
     const raw = JSON.parse(fs.readFileSync(file, "utf8"));
     return new Set(raw && typeof raw === "object" && !Array.isArray(raw) ? Object.keys(raw).filter((k) => raw[k] === true).map((k) => k.toLowerCase()) : []);

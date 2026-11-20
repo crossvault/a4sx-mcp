@@ -122,6 +122,7 @@ export const CELL_START_TEXTS = {
     "this extension started cells in the home folder when no folder was open: choose the folder the cell should work in.",
   homeContinue: "Continue in home folder",
   homeChoose: "Choose a folder…",
+  homeLeftGone: (name: string, folder: string) => `«${name}» starts a new conversation in ${folder}.`,
   homeLeft: (name: string, short: string, folder: string) =>
     `«${name}» starts a new conversation in ${folder}. Its last one (session ${short}) stays in your home folder ` +
     "(Claude Code keeps a conversation with its folder).",
@@ -146,7 +147,8 @@ export const CELL_CLAUDE_TEXTS = {
     `${extPath ? `The Claude Code extension's folder ${extPath} holds no claude program` : "The Claude Code extension isn't installed"}, and ` +
     `claude isn't on PATH or where its installer puts it. Fix: install Claude Code${shell ? ` in ${shell}` : ""} with\n\n${install}\n\n` +
     "or install (or reinstall) the Claude Code extension, then start the cell again. If you pointed the a4sx CLI at claude " +
-    "yourself (a4sx config set harness.claude_path <path>), \"Start anyway\" starts it with that one, and this message isn't shown again on this computer.",
+    "yourself (a4sx config set harness.claude_path <path>), or the cell's launch profile starts another agent than Claude " +
+    "Code, \"Start anyway\" starts it, and this message isn't shown again on this computer.",
   copyInstall: "Copy install command",
   startAnyway: "Start anyway",
   copied: "Copied the install command. Run it, then start the cell again.",
@@ -397,6 +399,15 @@ async function pickCellFolder(state: State, cell: LocalCell, title: string, stat
   return uri && uri.scheme === "file" && uri.fsPath ? uri.fsPath : undefined;
 }
 
+/** The folder with its links resolved (the CLI records a folder that way), or itself when that fails. */
+function realFolder(p: string): string {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return p;
+  }
+}
+
 /** Whether two folders are the same (Windows: case-blind, either slash, no trailing slash). */
 export function samePath(a: string, b: string, platform: NodeJS.Platform = process.platform): boolean {
   const norm = (x: string) => {
@@ -441,6 +452,11 @@ export async function startCell(deps: CellCommandDeps, item: LocalCellItem | und
   if (!cli || !(await consentReducedIsolation(deps.state))) {
     return undefined;
   }
+  // Claude Code first: nobody picks a folder for a start that then can't happen.
+  const claude = await cellClaudeEnv(deps);
+  if (!claude) {
+    return undefined;
+  }
   const platform = deps.platform ?? process.platform;
   const stateDir = deps.stateDir ?? cellsListDir(deps.env ?? process.env, platform, deps.home);
   const plan: CellStartPlan = cellStartPlan(stateDir, deps.claudeProjects ?? claudeProjectsDir(deps.env ?? process.env, deps.home), cell, platform);
@@ -448,7 +464,8 @@ export async function startCell(deps: CellCommandDeps, item: LocalCellItem | und
   let cwd: string | undefined;
   /** The user chose another folder than the home folder its conversation ran in: a new conversation there. */
   let leftHome = false;
-  if ((plan.kind === "resume" || plan.kind === "gone") && samePath(plan.cwd, deps.home ?? os.homedir(), platform)) {
+  const home = deps.home ?? os.homedir();
+  if ((plan.kind === "resume" || plan.kind === "gone") && (samePath(plan.cwd, home, platform) || samePath(plan.cwd, realFolder(home), platform))) {
     // 0.9.1 started a cell in the home folder when no folder was open, so the CLI may have recorded that: never
     // continued there without asking.
     const shownHome = showText(plan.cwd, 300) ?? plan.cwd;
@@ -475,10 +492,6 @@ export async function startCell(deps: CellCommandDeps, item: LocalCellItem | und
       return undefined;
     }
   }
-  const claude = await cellClaudeEnv(deps);
-  if (!claude) {
-    return undefined;
-  }
   // Only a Claude Code session id goes on the command line; another id the CLI recorded is resumed by the CLI itself
   // (0.31.10+: a stored cell started in its last conversation's folder continues it).
   // A record exists only from CLI 0.31.10 on, which knows --new-session: a gone folder's start doesn't ask again.
@@ -492,7 +505,7 @@ export async function startCell(deps: CellCommandDeps, item: LocalCellItem | und
     CELL_CMD_TEXTS.cellTerminal(cell.name), cli, CLI_NAME, args, cwd, claude.env, resuming ? t.banner(short, shownCwd) : undefined, true,
   ));
   await rememberFolder(deps.state, cell, cwd);
-  const said = leftHome ? t.homeLeft(cell.name, short, shownCwd)
+  const said = leftHome ? (plan.kind === "resume" ? t.homeLeft(cell.name, short, shownCwd) : t.homeLeftGone(cell.name, shownCwd))
     : plan.kind === "resume" ? t.resuming(cell.name, await transcriptTitleOf(plan.transcript), short, shownCwd)
     : plan.kind === "gone" ? t.gone(cell.name, short, shownCwd)
       : plan.kind === "moved" ? t.movedStarted(cell.name, short, showText(plan.lastCwd, 300) ?? plan.lastCwd, shownCwd)
