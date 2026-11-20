@@ -7,21 +7,29 @@
 import * as vscode from "vscode";
 import { createHash } from "crypto";
 import * as os from "os";
+import * as fs from "fs";
 import { CLI_NAME } from "./cli";
+import { CellStartPlan, cellStartPlan, isDirectory, lastPromptFolder } from "./cellResume";
 import {
-  CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellProfileArgs, cellRenameArgs, cellStopArgs, NEW_CELL_ARGS, policyUrl, showText,
+  CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellProfileArgs, cellRenameArgs, cellsListDir, cellStopArgs, LocalCell, NEW_CELL_ARGS, policyUrl,
+  showText,
 } from "./cells";
 import { CellsProvider, CliOutput, CliResolution, CliRunner, lacksCellProfile, LocalCellItem, MeshGroupItem } from "./cellsView";
 import { IN_SESSION_MESSAGE, parseCliError, parseProfilesAnswer, PROFILES_ARGS } from "./cliJson";
 import {
-  bundledClaude, downloadCli, Fetch, installedLauncher, launcherNeedsRepair, ProvisionError, repairLauncher, RepairResult, Runner, searchPython, updateArgs, updateDue,
+  bundledClaude, claudeFindable, downloadCli, Fetch, installedLauncher, launcherNeedsRepair, ProvisionError, repairLauncher, RepairResult, Runner, searchPython, updateArgs, updateDue,
   WINGET_PYTHON_ARGS, writeLauncher,
 } from "./provision";
+import { claudeProjectsDir } from "./nativeSeed";
 import { openCommandTerminal, State } from "./resume";
+import { readTail, transcriptTitle } from "./tabSession";
 import { commandLine, programName, shellKind } from "./terminalCommand";
 
 export const CONSENT_KEY = "a4sx.cellReducedIsolationConsent";
 export const LAST_UPDATE_KEY = "a4sx.cliLastUpdate";
+/** 0.9.2: the folder each stored cell was last started in from here, by instance id (the folder picker's default). */
+export const CELL_FOLDERS_KEY = "a4sx.cellFolders";
+const CELL_FOLDERS_MAX = 50;
 export const CLAUDE_CODE_ID = "anthropic.claude-code";
 export const CLAUDE_ENV = "A4SX_CLAUDE";
 export const PYTHON_DOWNLOAD_URL = "https://www.python.org/downloads/";
@@ -90,6 +98,50 @@ export const CELL_CMD_TEXTS = {
   profileTooOld: "This a4sx CLI can't set a cell's launch profile yet. Update it to 0.27.0 or newer, then try again.",
 };
 
+/** 0.9.2: what Start in terminal says about the cell's conversation and its folder. */
+export const CELL_START_TEXTS = {
+  resuming: (name: string, title: string | undefined, short: string, folder: string) =>
+    `«${name}» continues its last conversation${title ? ` «${title}»` : ""} (session ${short}) in ${folder}, the folder it ran in. ` +
+    "For a new conversation instead, type /clear in it.",
+  banner: (short: string, folder: string) => `a4sx: continuing this cell's last conversation (session ${short}) in ${folder}`,
+  gone: (name: string, short: string, folder: string) =>
+    `«${name}»'s last conversation (session ${short}) can't be continued: its transcript isn't on this computer any more ` +
+    `(it was deleted or moved). The cell starts a new conversation in ${folder}, the folder it last ran in.`,
+  fresh: (name: string, folder: string) =>
+    `«${name}» has no earlier conversation recorded on this computer, so it starts a new one in ${folder}. ` +
+    "From then on, Start continues it there.",
+  movedTitle: (name: string, folder: string) => `«${name}» last ran in ${folder}, which isn't there any more. Choose the folder to start it in`,
+  movedStarted: (name: string, short: string, lastFolder: string, folder: string) =>
+    `«${name}»'s last conversation (session ${short}) ran in ${lastFolder}, which isn't on this computer any more, so it ` +
+    `can't be continued (Claude Code keeps a conversation with its folder). The cell starts a new conversation in ${folder}.`,
+  pickTitle: (name: string) => `Choose the folder to start «${name}» in: no earlier conversation of it is recorded on this computer`,
+  pickLabel: "Start the cell here",
+};
+
+/** 0.9.2: what a cell's terminal says when the Claude Code to start isn't there. */
+export const CELL_CLAUDE_TEXTS = {
+  badUserEnv: (p: string) => `A4SX_CLAUDE is set to ${p}, but no program is there, so the cell can't start Claude Code. Nothing was started.`,
+  badUserEnvDetail: (exe: string, bundled: boolean) =>
+    `VS Code passes its environment to the cell's terminal, and the a4sx CLI uses A4SX_CLAUDE before anything else. Fix: ` +
+    `remove A4SX_CLAUDE from your environment variables, or set it to the full path of ${exe}, then restart VS Code and ` +
+    `start the cell again.${bundled ? " \"Use Claude Code's claude\" starts it now with the Claude Code extension's claude instead." : ""}`,
+  useBundled: "Use Claude Code's claude",
+  none: "Claude Code wasn't found on this computer, so the cell can't start it. Nothing was started.",
+  noneDetail: (extPath: string | undefined, install: string, shell: string | undefined) =>
+    `${extPath ? `The Claude Code extension's folder ${extPath} holds no claude program` : "The Claude Code extension isn't installed"}, and ` +
+    `claude isn't on PATH or where its installer puts it. Fix: install Claude Code${shell ? ` in ${shell}` : ""} with\n\n${install}\n\n` +
+    "or install (or reinstall) the Claude Code extension, then start the cell again. If you pointed the a4sx CLI at claude " +
+    "yourself (a4sx config set harness.claude_path <path>), \"Start anyway\" starts it with that one.",
+  copyInstall: "Copy install command",
+  startAnyway: "Start anyway",
+  copied: "Copied the install command. Run it, then start the cell again.",
+};
+
+/** Claude Code's installer command (the CLI's HARNESS_INSTALL). */
+export function claudeInstallCommand(platform: NodeJS.Platform): string {
+  return platform === "win32" ? "irm https://claude.ai/install.ps1 | iex" : "curl -fsSL https://claude.ai/install.sh | bash";
+}
+
 export interface CellCommandDeps {
   state: State;
   /** <globalStorage>/cli: where the extension's copy of the CLI lives; undefined when VS Code gave none. */
@@ -109,6 +161,13 @@ export interface CellCommandDeps {
   terminals: Set<vscode.Terminal>;
   /** After the own copy's launcher was repaired: the views that show the CLI read it again (Launch profiles). */
   onRepaired?: () => void;
+  /** 0.9.2: `<state home>/a4sx`, where the CLI records each cell's last conversation (default: cellsListDir()). */
+  stateDir?: string;
+  /** 0.9.2: your Claude Code projects folder (default: claudeProjectsDir()). */
+  claudeProjects?: string;
+  /** 0.9.2: the environment and home folder the Claude Code checks read (default: this process's). */
+  env?: NodeJS.ProcessEnv;
+  home?: string;
 }
 
 /** This machine, as the consent remembers it: a hash, so no host name is stored. */
@@ -131,16 +190,56 @@ export async function consentReducedIsolation(state: State, key: string = machin
   return true;
 }
 
-/**
- * The env for a cell's terminal: A4SX_CLAUDE = the Claude Code extension's bundled claude, when that
- * extension is installed and the user hasn't set A4SX_CLAUDE themselves. No key, nothing secret.
- */
-export function cellTerminalEnv(platform: NodeJS.Platform = process.platform): Record<string, string> | undefined {
-  if (process.env[CLAUDE_ENV]) {
-    return undefined;
+function plainFile(p: string): boolean {
+  try {
+    return fs.statSync(p).isFile();
+  } catch {
+    return false;
   }
-  const claude = bundledClaude(vscode.extensions.getExtension(CLAUDE_CODE_ID)?.extensionPath, platform);
-  return claude ? { [CLAUDE_ENV]: claude } : undefined;
+}
+
+/**
+ * 0.9.2: the env for a cell's terminal, after checking that the cell will find Claude Code: { env } to start with
+ * (env undefined: nothing to add), or undefined when nothing may start (the user was told what to fix). An
+ * A4SX_CLAUDE of the user's that names no program is said here, with the fix, instead of in the terminal; the
+ * bundled claude is offered for this start. With no bundled claude, the CLI looks for claude itself; when it
+ * wouldn't find one either, one message names the install command.
+ */
+export async function cellClaudeEnv(deps: Pick<CellCommandDeps, "platform" | "env" | "home">): Promise<{ env?: Record<string, string> } | undefined> {
+  const platform = deps.platform ?? process.platform;
+  const env = deps.env ?? process.env;
+  const extPath = vscode.extensions.getExtension(CLAUDE_CODE_ID)?.extensionPath;
+  const bundled = bundledClaude(extPath, platform);
+  const t = CELL_CLAUDE_TEXTS;
+  const own = env[CLAUDE_ENV]?.trim();
+  if (own) {
+    // The CLI expands ~, $VAR and %VAR% in it: such a value is left to the CLI, which says what's wrong with it.
+    if (/[~$%]/.test(own) || plainFile(own)) {
+      return {};
+    }
+    const shown = showText(own, 300) ?? CLAUDE_ENV;
+    const exe = platform === "win32" ? "claude.exe" : "claude";
+    const choice = await vscode.window.showErrorMessage(t.badUserEnv(shown), { modal: true, detail: t.badUserEnvDetail(exe, !!bundled) }, ...(bundled ? [t.useBundled] : []));
+    return choice === t.useBundled && bundled ? { env: { [CLAUDE_ENV]: bundled } } : undefined;
+  }
+  if (bundled) {
+    return { env: { [CLAUDE_ENV]: bundled } };
+  }
+  if (claudeFindable(env, deps.home ?? os.homedir(), platform)) {
+    return {};
+  }
+  const install = claudeInstallCommand(platform);
+  const choice = await vscode.window.showErrorMessage(
+    t.none, { modal: true, detail: t.noneDetail(showText(extPath, 300), install, platform === "win32" ? "PowerShell" : undefined) }, t.copyInstall, t.startAnyway,
+  );
+  if (choice === t.startAnyway) {
+    return {};
+  }
+  if (choice === t.copyInstall) {
+    await vscode.env.clipboard.writeText(install);
+    void vscode.window.showInformationMessage(t.copied);
+  }
+  return undefined;
 }
 
 /** The CLI to run: found, or after offering the install. undefined when there is none (the user was told). */
@@ -249,20 +348,64 @@ function track(deps: CellCommandDeps, t: vscode.Terminal): vscode.Terminal {
   return t;
 }
 
-/** Start in terminal: `a4sx launch --cell NAME [--mesh ID] --mesh-reduced-isolation` in the workspace folder. */
+/** The folder the user last started this cell in from here, when it is still there. */
+function rememberedFolder(state: State, cell: LocalCell): string | undefined {
+  const all = state.get<unknown>(CELL_FOLDERS_KEY);
+  const v = all && typeof all === "object" && !Array.isArray(all) ? (all as Record<string, unknown>)[cell.instanceId] : undefined;
+  return typeof v === "string" && isDirectory(v) ? v : undefined;
+}
+
+async function rememberFolder(state: State, cell: LocalCell, folder: string): Promise<void> {
+  const all = state.get<unknown>(CELL_FOLDERS_KEY);
+  const kept = Object.entries(all && typeof all === "object" && !Array.isArray(all) ? (all as Record<string, unknown>) : {})
+    .filter((e): e is [string, string] => typeof e[1] === "string" && e[0] !== cell.instanceId);
+  await state.update(CELL_FOLDERS_KEY, Object.fromEntries([...kept, [cell.instanceId, folder]].slice(-CELL_FOLDERS_MAX)));
+}
+
+/**
+ * The folder picker for a cell whose conversation folder isn't known (or is gone): it opens on the folder the cell
+ * was last started in from here, else the folder of the last prompt typed in it, else this window's first folder;
+ * never a silent default. undefined: cancelled.
+ */
+async function pickCellFolder(state: State, cell: LocalCell, title: string, stateDir: string | undefined, platform: NodeJS.Platform): Promise<string | undefined> {
+  const start = rememberedFolder(state, cell) ?? lastPromptFolder(stateDir, cell.name, platform)
+    ?? vscode.workspace.workspaceFolders?.find((f) => f.uri.scheme === "file")?.uri.fsPath;
+  const chosen = await vscode.window.showOpenDialog({
+    canSelectFolders: true, canSelectFiles: false, canSelectMany: false, title, openLabel: CELL_START_TEXTS.pickLabel,
+    ...(start ? { defaultUri: vscode.Uri.file(start) } : {}),
+  });
+  const uri = chosen?.[0];
+  return uri && uri.scheme === "file" && uri.fsPath ? uri.fsPath : undefined;
+}
+
+async function transcriptTitleOf(file: string): Promise<string | undefined> {
+  try {
+    const st = await fs.promises.stat(file);
+    return showText(transcriptTitle(await readTail(file, st.size)), 80);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Start in terminal: `a4sx launch --cell NAME [--mesh ID] --mesh-reduced-isolation`. 0.9.2: in the folder the cell's
+ * last conversation ran in, and with `-- --resume <its id>` while its transcript is there (Claude Code finds a
+ * conversation only from its own folder). The CLI records that conversation (0.31.10+); with none recorded, or its
+ * folder gone, the user picks the folder. Never the home folder by default, never this window's folder silently.
+ */
 export async function startCell(deps: CellCommandDeps, item: LocalCellItem | undefined): Promise<vscode.Terminal | undefined> {
   if (!(item instanceof LocalCellItem)) {
     return undefined;
   }
-  if (item.cell.meshId === undefined) {
-    const choice = await vscode.window.showInformationMessage(CELL_CMD_TEXTS.standalone(item.cell.name), CELL_CMD_TEXTS.openInBrowser);
+  const cell = item.cell;
+  if (cell.meshId === undefined) {
+    const choice = await vscode.window.showInformationMessage(CELL_CMD_TEXTS.standalone(cell.name), CELL_CMD_TEXTS.openInBrowser);
     if (choice === CELL_CMD_TEXTS.openInBrowser) {
       await openCellOnWeb(deps, item);
     }
     return undefined;
   }
-  const args = cellLaunchArgs(item.cell, item.all);
-  if (!args) {
+  if (!cellLaunchArgs(cell, item.all)) {
     await vscode.window.showErrorMessage(CELL_CMD_TEXTS.badCell);
     return undefined;
   }
@@ -270,11 +413,40 @@ export async function startCell(deps: CellCommandDeps, item: LocalCellItem | und
   if (!cli || !(await consentReducedIsolation(deps.state))) {
     return undefined;
   }
-  const cwd = await deps.folder();
-  if (cwd === null) {
+  const platform = deps.platform ?? process.platform;
+  const stateDir = deps.stateDir ?? cellsListDir(deps.env ?? process.env, platform, deps.home);
+  const plan: CellStartPlan = cellStartPlan(stateDir, deps.claudeProjects ?? claudeProjectsDir(deps.env ?? process.env, deps.home), cell, platform);
+  const t = CELL_START_TEXTS;
+  let cwd: string | undefined;
+  if (plan.kind === "resume" || plan.kind === "gone") {
+    cwd = plan.cwd;
+  } else {
+    cwd = await pickCellFolder(deps.state, cell, plan.kind === "moved" ? t.movedTitle(cell.name, plan.lastCwd) : t.pickTitle(cell.name), stateDir, platform);
+    if (cwd === undefined) {
+      return undefined;
+    }
+  }
+  const claude = await cellClaudeEnv(deps);
+  if (!claude) {
     return undefined;
   }
-  return track(deps, openCommandTerminal(CELL_CMD_TEXTS.cellTerminal(item.cell.name), cli, CLI_NAME, args, cwd, cellTerminalEnv(deps.platform)));
+  // Only a Claude Code session id goes on the command line; another id the CLI recorded is resumed by the CLI itself
+  // (0.31.10+: a stored cell started in its last conversation's folder continues it).
+  // A record exists only from CLI 0.31.10 on, which knows --new-session: a gone folder's start doesn't ask again.
+  const session = plan.kind === "resume" && cellLaunchArgs(cell, item.all, plan.sessionId) ? plan.sessionId : plan.kind === "moved" ? "new" : undefined;
+  const args = cellLaunchArgs(cell, item.all, session)!;
+  const short = plan.kind === "none" ? "" : plan.sessionId.slice(0, 8);
+  const shownCwd = showText(cwd, 300) ?? cwd;
+  const terminal = track(deps, openCommandTerminal(
+    CELL_CMD_TEXTS.cellTerminal(cell.name), cli, CLI_NAME, args, cwd, claude.env, plan.kind === "resume" ? t.banner(short, shownCwd) : undefined, true,
+  ));
+  await rememberFolder(deps.state, cell, cwd);
+  const said = plan.kind === "resume" ? t.resuming(cell.name, await transcriptTitleOf(plan.transcript), short, shownCwd)
+    : plan.kind === "gone" ? t.gone(cell.name, short, shownCwd)
+      : plan.kind === "moved" ? t.movedStarted(cell.name, short, showText(plan.lastCwd, 300) ?? plan.lastCwd, shownCwd)
+        : t.fresh(cell.name, shownCwd);
+  void vscode.window.showInformationMessage(said);
+  return terminal;
 }
 
 /** New cell: `a4sx launch --new-cell --mesh-reduced-isolation`; the claim happens in the browser from there. */
@@ -287,7 +459,11 @@ export async function newCell(deps: CellCommandDeps): Promise<vscode.Terminal | 
   if (cwd === null) {
     return undefined;
   }
-  return track(deps, openCommandTerminal(CELL_CMD_TEXTS.newCellTerminal, cli, CLI_NAME, NEW_CELL_ARGS, cwd, cellTerminalEnv(deps.platform)));
+  const claude = await cellClaudeEnv(deps);
+  if (!claude) {
+    return undefined;
+  }
+  return track(deps, openCommandTerminal(CELL_CMD_TEXTS.newCellTerminal, cli, CLI_NAME, NEW_CELL_ARGS, cwd, claude.env, undefined, true));
 }
 
 /** The last line the CLI wrote to stderr, made safe to show (its own message, e.g. "no cell named …"). */

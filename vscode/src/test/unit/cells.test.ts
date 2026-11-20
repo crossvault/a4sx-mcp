@@ -48,6 +48,13 @@ function tmpdir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "a4sx-cells-test-"));
 }
 
+/** A file standing in for an installed claude. */
+function someClaude(): string {
+  const f = path.join(tmpdir(), process.platform === "win32" ? "claude.exe" : "claude");
+  fs.writeFileSync(f, "");
+  return f;
+}
+
 /** The Python probe's line: sys.executable, sys._base_executable, sys.base_prefix. */
 const probeOut = (exe: string, base = exe, prefix = "") => `${JSON.stringify([exe, base, prefix])}\r\n`;
 
@@ -720,7 +727,7 @@ interface Harness {
 
 function harness(opts: {
   resolve?: CliResolution; answers?: Record<string, CliOutput>; cliDir?: string; fetch?: Fetch; python?: CellCommandDeps["python"]; platform?: NodeJS.Platform;
-  state?: ReturnType<typeof fakeMemento>;
+  state?: ReturnType<typeof fakeMemento>; env?: NodeJS.ProcessEnv; stateDir?: string; claudeProjects?: string; home?: string;
 } = {}): Harness {
   const runs: { cli: string; args: string[] }[] = [];
   const states: CellsLoad[] = [];
@@ -750,7 +757,14 @@ function harness(opts: {
     python: opts.python ?? (async () => ({ code: 1, stdout: "" })),
     platform: opts.platform,
     terminals: new Set(),
+    // 0.9.2: no cell has a recorded conversation (an empty state dir), the folder picker answers /w/proj, and
+    // A4SX_CLAUDE names a program that is there (the tests of the Claude Code checks set their own).
+    stateDir: opts.stateDir ?? tmpdir(),
+    claudeProjects: opts.claudeProjects ?? tmpdir(),
+    env: opts.env ?? { A4SX_CLAUDE: someClaude() },
+    home: opts.home ?? tmpdir(),
   };
+  calls.nextOpenDialog = [vscodeFake.Uri.file("/w/proj")];
   return { deps, runs, provider, states };
 }
 
@@ -821,7 +835,7 @@ describe("Cells view", () => {
 describe("Cells: actions", () => {
   beforeEach(resetCalls);
 
-  it("Start in terminal: the reduced-isolation consent once per machine, then the launch in the workspace folder", async () => {
+  it("Start in terminal: the reduced-isolation consent once per machine, then the launch in the folder picked (no conversation recorded)", async () => {
     const state = fakeMemento();
     const h = harness({ state });
     const list = await items(h);
@@ -862,23 +876,14 @@ describe("Cells: actions", () => {
     fs.writeFileSync(path.join(bin, process.platform === "win32" ? "claude.exe" : "claude"), "");
     calls.extensions.add("anthropic.claude-code");
     calls.extensionPaths.set("anthropic.claude-code", dir);
-    const saved = process.env.A4SX_CLAUDE;
-    delete process.env.A4SX_CLAUDE;
-    try {
-      const h = harness({ state: fakeMemento({ [CONSENT_KEY]: [require("../../cellCommands").machineKey()] }) });
-      await newCell(h.deps);
-      assert.deepStrictEqual(calls.terminals[0].options.env, { A4SX_CLAUDE: path.join(bin, process.platform === "win32" ? "claude.exe" : "claude") });
-      assert.deepStrictEqual(calls.terminals[0].sent, ["'/opt/a4sx bin/a4sx' 'launch' '--new-cell' '--mesh-reduced-isolation'\n"]);
-      process.env.A4SX_CLAUDE = "/my/claude";
-      await newCell(h.deps);
-      assert.strictEqual(calls.terminals[1].options.env, undefined, "the user's own A4SX_CLAUDE wins");
-    } finally {
-      if (saved === undefined) {
-        delete process.env.A4SX_CLAUDE;
-      } else {
-        process.env.A4SX_CLAUDE = saved;
-      }
-    }
+    const h = harness({ state: fakeMemento({ [CONSENT_KEY]: [require("../../cellCommands").machineKey()] }), env: {} });
+    await newCell(h.deps);
+    assert.deepStrictEqual(calls.terminals[0].options.env, { A4SX_CLAUDE: path.join(bin, process.platform === "win32" ? "claude.exe" : "claude") });
+    assert.deepStrictEqual(calls.terminals[0].sent, ["'/opt/a4sx bin/a4sx' 'launch' '--new-cell' '--mesh-reduced-isolation'\n"]);
+    assert.strictEqual(calls.terminals[0].options.isTransient, true, "never revived with an old env after a restart");
+    h.deps.env = { A4SX_CLAUDE: someClaude() };
+    await newCell(h.deps);
+    assert.strictEqual(calls.terminals[1].options.env, undefined, "the user's own A4SX_CLAUDE wins");
   });
 
   it("Windows paths: PowerShell runs the launcher with & and single quotes; cmd with double quotes", async () => {

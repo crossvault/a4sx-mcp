@@ -422,24 +422,155 @@ export function updateArgs(base: string, defaultBase: string): string[] {
 
 // --- the Claude Code extension's bundled claude -------------------------------------------------
 
+/** The Claude Code extension's folder name: `anthropic.claude-code-<version>[-<platform>]` (the CLI's _CLAUDE_VSCODE_EXT_RE). */
+const CLAUDE_EXT_DIR = /^anthropic\.claude-code-(\d+(?:\.\d+)*)(-.*)?$/i;
 /**
- * The `claude` binary the Claude Code extension ships (`resources/native-binary/claude[.exe]`), when it is
- * there. Passed to the CLI as A4SX_CLAUDE, so a cell starts the same Claude Code the panel uses.
+ * Where the Claude Code extension keeps its `claude`, relative to its folder. 2.1.x (checked in the win32-x64 build
+ * of 2.1.329 on Open VSX): `resources/native-binary/claude[.exe]`. The others are where a
+ * later layout may put it; anything else is found by the bounded search below (as the CLI's own search does).
  */
-export function bundledClaude(extensionPath: string | undefined, platform: NodeJS.Platform = process.platform, isFile: (p: string) => boolean = fileExists): string | undefined {
+export const CLAUDE_BINARY_DIRS: readonly (readonly string[])[] = [["resources", "native-binary"], ["resources", "bin"], ["native-binary"], ["bin"]];
+/** How deep below the extension's folder the search for `claude` goes (the CLI's: 4). */
+const CLAUDE_SEARCH_DEPTH = 4;
+const CLAUDE_SEARCH_SKIP = new Set(["node_modules", "webview", ".git"]);
+
+export interface ClaudeFs {
+  isFile(p: string): boolean;
+  /** The folder's sub-folder names, [] when it can't be read. */
+  dirs(p: string): string[];
+}
+
+const realClaudeFs: ClaudeFs = {
+  isFile: fileExists,
+  dirs: (p) => {
+    try {
+      return fs.readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
+    } catch {
+      return [];
+    }
+  },
+};
+
+function claudeNames(platform: NodeJS.Platform): string[] {
+  return platform === "win32" ? ["claude.exe"] : ["claude"];
+}
+
+/** `claude[.exe]` in one Claude Code extension folder: the known layouts first, then a bounded search. */
+function claudeIn(dir: string, platform: NodeJS.Platform, f: ClaudeFs): string | undefined {
   const p = platform === "win32" ? path.win32 : path.posix;
-  if (!extensionPath || !p.isAbsolute(extensionPath)) {
+  const names = claudeNames(platform);
+  for (const sub of CLAUDE_BINARY_DIRS) {
+    for (const n of names) {
+      const candidate = p.join(dir, ...sub, n);
+      if (!CONTROL.test(candidate) && f.isFile(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  const walk = (cur: string, depth: number): string | undefined => {
+    for (const n of names) {
+      const candidate = p.join(cur, n);
+      if (depth > 0 && !CONTROL.test(candidate) && f.isFile(candidate)) {
+        return candidate;
+      }
+    }
+    if (depth >= CLAUDE_SEARCH_DEPTH) {
+      return undefined;
+    }
+    for (const d of f.dirs(cur)) {
+      if (!CLAUDE_SEARCH_SKIP.has(d.toLowerCase())) {
+        const hit = walk(p.join(cur, d), depth + 1);
+        if (hit) {
+          return hit;
+        }
+      }
+    }
+    return undefined;
+  };
+  return walk(dir, 0);
+}
+
+function versionOf(name: string): number[] | undefined {
+  const m = CLAUDE_EXT_DIR.exec(name);
+  return m ? m[1].split(".").map(Number) : undefined;
+}
+
+function newerFirst(a: number[], b: number[]): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (b[i] ?? 0) - (a[i] ?? 0);
+    if (d) {
+      return d;
+    }
+  }
+  return 0;
+}
+
+/** The folder names VS Code's `.obsolete` file lists in an extensions folder: removed versions it deletes later. */
+function obsoleteNames(parent: string, f: ClaudeFs): Set<string> {
+  const file = path.join(parent, ".obsolete");
+  if (!f.isFile(file)) {
+    return new Set();
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    return new Set(raw && typeof raw === "object" && !Array.isArray(raw) ? Object.keys(raw).filter((k) => raw[k] === true).map((k) => k.toLowerCase()) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * The `claude` binary the Claude Code extension ships, when it is there. Passed to the CLI as A4SX_CLAUDE, so a
+ * cell starts the same Claude Code the panel uses. Asked at every start, never kept. 0.9.2: every candidate is
+ * checked to be a file, in the newest installed version of the extension: VS Code updates an extension into a new
+ * folder (`anthropic.claude-code-<version>-<platform>`) and removes the old one, while a window that ran before the
+ * update still names the old folder as the extension's path. So the `anthropic.claude-code-*` folders next to it
+ * count too, newest version first (this machine's architecture first on a tie), except those VS Code's `.obsolete`
+ * lists for removal. In each, the known layouts first, then a bounded search. undefined: none found.
+ */
+export function bundledClaude(
+  extensionPath: string | undefined, platform: NodeJS.Platform = process.platform, isFile?: (p: string) => boolean, dirs?: (p: string) => string[], arch: string = process.arch,
+): string | undefined {
+  const p = platform === "win32" ? path.win32 : path.posix;
+  if (!extensionPath || !p.isAbsolute(extensionPath) || CONTROL.test(extensionPath)) {
     return undefined;
   }
-  const dir = p.join(extensionPath, "resources", "native-binary");
-  const names = platform === "win32" ? ["claude.exe", "claude"] : ["claude"];
-  for (const n of names) {
-    const candidate = p.join(dir, n);
-    if (!CONTROL.test(candidate) && isFile(candidate)) {
-      return candidate;
+  const f: ClaudeFs = { isFile: isFile ?? realClaudeFs.isFile, dirs: dirs ?? (isFile ? () => [] : realClaudeFs.dirs) };
+  const self = p.basename(extensionPath.replace(/[\\/]+$/, ""));
+  if (!versionOf(self)) {
+    return claudeIn(extensionPath, platform, f);   // not an installed extension's folder (a development copy): only it
+  }
+  const parent = p.dirname(extensionPath.replace(/[\\/]+$/, ""));
+  const obsolete = obsoleteNames(parent, f);
+  const names = [self, ...f.dirs(parent).filter((n) => n.toLowerCase() !== self.toLowerCase() && !obsolete.has(n.toLowerCase()))];
+  const forHere = (n: string) => (n.toLowerCase().endsWith(`-${platform}-${arch}`.toLowerCase()) ? 0 : 1);
+  const ranked = names
+    .map((n) => ({ n, v: versionOf(n) }))
+    .filter((x): x is { n: string; v: number[] } => x.v !== undefined)
+    .sort((a, b) => newerFirst(a.v, b.v) || forHere(a.n) - forHere(b.n) || (a.n === self ? -1 : b.n === self ? 1 : a.n.localeCompare(b.n)));
+  for (const c of ranked) {
+    const hit = claudeIn(p.join(parent, c.n), platform, f);
+    if (hit) {
+      return hit;
     }
   }
   return undefined;
+}
+
+/**
+ * Whether the a4sx CLI finds `claude` by itself when A4SX_CLAUDE isn't set: on PATH (absolute entries; on Windows
+ * `claude.exe`/`claude.cmd`), or where Claude Code's installers put it (the CLI's _claude_known_paths).
+ */
+export function claudeFindable(env: NodeJS.ProcessEnv, home: string, platform: NodeJS.Platform = process.platform, isFile: (p: string) => boolean = fileExists): boolean {
+  const p = platform === "win32" ? path.win32 : path.posix;
+  const sep = platform === "win32" ? ";" : ":";
+  const names = platform === "win32" ? ["claude.exe", "claude.cmd", "claude.bat", "claude.com"] : ["claude"];
+  const pathVar = (platform === "win32" ? env.Path ?? env.PATH ?? env.path : env.PATH) ?? "";
+  const dirs = pathVar.split(sep).map((d) => (platform === "win32" ? d.trim().replace(/^"|"$/g, "") : d)).filter((d) => d && p.isAbsolute(d));
+  const known = platform === "win32"
+    ? [p.join(env.USERPROFILE || home, ".local", "bin", "claude.exe"), ...(env.APPDATA ? [p.join(env.APPDATA, "npm", "claude.cmd")] : [])]
+    : [p.join(home, ".local", "bin", "claude"), p.join(home, ".claude", "local", "claude")];
+  return [...dirs.flatMap((d) => names.map((n) => p.join(d, n))), ...known].some((c) => !CONTROL.test(c) && isFile(c));
 }
 
 function fileExists(p: string): boolean {
