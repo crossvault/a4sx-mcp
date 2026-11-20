@@ -873,7 +873,7 @@ describe("Cells: actions", () => {
     const dir = tmpdir();
     const bin = path.join(dir, "resources", "native-binary");
     fs.mkdirSync(bin, { recursive: true });
-    fs.writeFileSync(path.join(bin, process.platform === "win32" ? "claude.exe" : "claude"), "");
+    fs.writeFileSync(path.join(bin, process.platform === "win32" ? "claude.exe" : "claude"), "", { mode: 0o755 });
     calls.extensions.add("anthropic.claude-code");
     calls.extensionPaths.set("anthropic.claude-code", dir);
     const h = harness({ state: fakeMemento({ [CONSENT_KEY]: [require("../../cellCommands").machineKey()] }), env: {} });

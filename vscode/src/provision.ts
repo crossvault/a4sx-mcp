@@ -440,8 +440,24 @@ export interface ClaudeFs {
   dirs(p: string): string[];
 }
 
+/** A file, and on macOS/Linux one this user may run. */
+function programExists(p: string): boolean {
+  if (!fileExists(p)) {
+    return false;
+  }
+  if (process.platform === "win32") {
+    return true;
+  }
+  try {
+    fs.accessSync(p, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const realClaudeFs: ClaudeFs = {
-  isFile: fileExists,
+  isFile: programExists,
   dirs: (p) => {
     try {
       return fs.readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
@@ -525,8 +541,8 @@ function obsoleteNames(parent: string, f: ClaudeFs): Set<string> {
  * checked to be a file, in the newest installed version of the extension: VS Code updates an extension into a new
  * folder (`anthropic.claude-code-<version>-<platform>`) and removes the old one, while a window that ran before the
  * update still names the old folder as the extension's path. So the `anthropic.claude-code-*` folders next to it
- * count too, newest version first (this machine's architecture first on a tie), except those VS Code's `.obsolete`
- * lists for removal. In each, the known layouts first, then a bounded search. undefined: none found.
+ * count too: this machine's platform only, its architecture first, then the newest version, except those VS Code's
+ * `.obsolete` lists for removal. In each, the known layouts first, then a bounded search. undefined: none found.
  */
 export function bundledClaude(
   extensionPath: string | undefined, platform: NodeJS.Platform = process.platform, isFile?: (p: string) => boolean, dirs?: (p: string) => string[], arch: string = process.arch,
@@ -543,11 +559,14 @@ export function bundledClaude(
   const parent = p.dirname(extensionPath.replace(/[\\/]+$/, ""));
   const obsolete = obsoleteNames(parent, f);
   const names = [self, ...f.dirs(parent).filter((n) => n.toLowerCase() !== self.toLowerCase() && !obsolete.has(n.toLowerCase()))];
-  const forHere = (n: string) => (n.toLowerCase().endsWith(`-${platform}-${arch}`.toLowerCase()) ? 0 : 1);
+  // A build for another platform never counts; this machine's architecture comes before a newer build for another one
+  // (an x64 build runs on arm64 Windows and macOS, so it still counts after them).
+  const suffix = (n: string) => (CLAUDE_EXT_DIR.exec(n)?.[2] ?? "").toLowerCase();
+  const forHere = (n: string) => (suffix(n) === `-${platform}-${arch}`.toLowerCase() ? 0 : 1);
   const ranked = names
     .map((n) => ({ n, v: versionOf(n) }))
-    .filter((x): x is { n: string; v: number[] } => x.v !== undefined)
-    .sort((a, b) => newerFirst(a.v, b.v) || forHere(a.n) - forHere(b.n) || (a.n === self ? -1 : b.n === self ? 1 : a.n.localeCompare(b.n)));
+    .filter((x): x is { n: string; v: number[] } => x.v !== undefined && (x.n === self || !suffix(x.n) || suffix(x.n).startsWith(`-${platform}-`)))
+    .sort((a, b) => forHere(a.n) - forHere(b.n) || newerFirst(a.v, b.v) || (a.n === self ? -1 : b.n === self ? 1 : a.n.localeCompare(b.n)));
   for (const c of ranked) {
     const hit = claudeIn(p.join(parent, c.n), platform, f);
     if (hit) {

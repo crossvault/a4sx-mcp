@@ -11,8 +11,9 @@ import * as path from "path";
 import { calls, fakeMemento, resetCalls } from "../fakeVscode";
 import { cellLaunchArgs, CELLS_LIST_ARGS, LocalCell } from "../../cells";
 import {
-  CELL_CLAUDE_TEXTS, CELL_FOLDERS_KEY, CELL_START_TEXTS, CellCommandDeps, claudeInstallCommand, CONSENT_KEY, machineKey, newCell, startCell,
+  CELL_CLAUDE_TEXTS, CELL_FOLDERS_KEY, CELL_START_TEXTS, CellCommandDeps, claudeInstallCommand, CONSENT_KEY, machineKey, newCell, samePath, START_ANYWAY_KEY, startCell,
 } from "../../cellCommands";
+import { runAsCell } from "../../runAsCell";
 import { cellStartPlan, lastPromptFolder, parseCellLastSession, readCellLastSession } from "../../cellResume";
 import { CellsProvider, CliOutput, LocalCellItem, MeshGroupItem } from "../../cellsView";
 import { projectDirName } from "../../nativeSeed";
@@ -34,7 +35,7 @@ function tmpdir(): string {
 
 function write(file: string, text = ""): string {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, text);
+  fs.writeFileSync(file, text, { mode: 0o755 });   // a claude stand-in must be runnable
   return file;
 }
 
@@ -346,5 +347,97 @@ describe("0.9.2 bug 3: Start runs in the cell's folder, never the home folder", 
     assert.deepStrictEqual(calls.terminals[0].sent, [q(["launch", "--cell", NAME, "--mesh-reduced-isolation", "--new-session"])], "the CLI doesn't ask again");
     assert.strictEqual(calls.terminals[0].options.cwd, w.folder);
     assert.deepStrictEqual(calls.infos, [CELL_START_TEXTS.movedStarted(NAME, "83ce93e5", gone, w.folder)]);
+  });
+});
+
+describe("0.9.2 review: a home-folder record, other platforms' builds, Windows paths, Run as cell", () => {
+  beforeEach(resetCalls);
+
+  /** A world whose conversation ran in the home folder (what 0.9.1's Start left behind with no folder open). */
+  function homeWorld(): World {
+    const w = world();
+    w.home = w.folder;
+    record(w, { [IID]: { sid: SID, cwd: w.folder } });
+    overlayTranscript(w);
+    return w;
+  }
+
+  it("a conversation recorded in the home folder is never continued there without asking; Cancel starts nothing", async () => {
+    const w = homeWorld();
+    const { deps: d } = deps(w);
+    assert.strictEqual(await startCell(d, await cellItem(d)), undefined);
+    assert.deepStrictEqual(calls.modals.map((m) => [m.kind, m.message, m.items]),
+      [["warning", CELL_START_TEXTS.homeTitle(NAME, w.folder), [CELL_START_TEXTS.homeContinue, CELL_START_TEXTS.homeChoose]]]);
+    assert.strictEqual(calls.terminals.length, 0);
+  });
+
+  it("home folder: Continue resumes it there; Choose a folder… starts a new conversation in the folder chosen", async () => {
+    const w = homeWorld();
+    const { deps: d } = deps(w);
+    calls.modalChoices.push(CELL_START_TEXTS.homeContinue);
+    await startCell(d, await cellItem(d));
+    assert.deepStrictEqual(calls.terminals[0].sent, [q(["launch", "--cell", NAME, "--mesh-reduced-isolation", "--", "--resume", SID])]);
+    assert.strictEqual(calls.terminals[0].options.cwd, w.folder);
+    const other = tmpdir();
+    calls.modalChoices.push(CELL_START_TEXTS.homeChoose);
+    calls.nextOpenDialog = [vscodeFake.Uri.file(other)];
+    await startCell(d, await cellItem(d));
+    assert.deepStrictEqual(calls.terminals[1].sent, [q(["launch", "--cell", NAME, "--mesh-reduced-isolation", "--new-session"])]);
+    assert.strictEqual(calls.terminals[1].options.cwd, other);
+    assert.strictEqual(calls.terminals[1].options.message, undefined);
+    assert.strictEqual(calls.infos[1], CELL_START_TEXTS.homeLeft(NAME, "83ce93e5", other));
+  });
+
+  it("Start anyway is remembered on this computer: the not-found message isn't shown again", async () => {
+    const { deps: d } = deps(world(), { env: { PATH: "" } });
+    calls.modalChoices.push(CELL_CLAUDE_TEXTS.startAnyway);
+    await newCell(d);
+    assert.strictEqual(d.state.get(START_ANYWAY_KEY), machineKey());
+    await newCell(d);
+    assert.strictEqual(calls.modals.length, 1);
+    assert.strictEqual(calls.terminals.length, 2);
+  });
+
+  it("a build for another platform never counts; this machine's architecture before a newer build for another", () => {
+    const root = tmpdir();
+    const mine = path.join(root, "anthropic.claude-code-2.1.325-win32-x64");
+    write(path.join(mine, "resources", "native-binary", "claude.exe"));
+    write(path.join(root, "anthropic.claude-code-2.1.330-linux-x64", "resources", "native-binary", "claude.exe"));
+    write(path.join(root, "anthropic.claude-code-2.1.329-win32-arm64", "resources", "native-binary", "claude.exe"));
+    const isFile = (p: string) => fs.existsSync(p.replace(/\\/g, "/"));
+    const dirs = (p: string) => { try { return fs.readdirSync(p.replace(/\\/g, "/")); } catch { return []; } };
+    assert.strictEqual(bundledClaude(mine, "win32", isFile, dirs, "x64"), path.win32.join(mine, "resources", "native-binary", "claude.exe"));
+    assert.strictEqual(bundledClaude(mine, "win32", isFile, dirs, "arm64"), path.win32.join(root, "anthropic.claude-code-2.1.329-win32-arm64", "resources", "native-binary", "claude.exe"));
+  });
+
+  it("macOS/Linux: a claude that isn't executable doesn't count", function () {
+    if (process.platform === "win32") {
+      this.skip();
+    }
+    const dir = path.join(tmpdir(), `anthropic.claude-code-2.1.325-${process.platform}-${process.arch}`);
+    const f = write(path.join(dir, "resources", "native-binary", "claude"));
+    fs.chmodSync(f, 0o644);
+    assert.strictEqual(bundledClaude(dir), undefined);
+    fs.chmodSync(f, 0o755);
+    assert.strictEqual(bundledClaude(dir), f);
+  });
+
+  it("Windows: the CLI's record with a drive-letter folder, its project-folder name, and the same folder spelt differently", () => {
+    const text = JSON.stringify({ v: 1, cells: { [IID]: { sid: SID, cwd: "C:\\Users\\kartan\\projects\\meshtest", at: 1 } } });
+    const last = parseCellLastSession(text, IID, "win32")!;
+    assert.strictEqual(last.cwd, "C:\\Users\\kartan\\projects\\meshtest");
+    assert.strictEqual(projectDirName(last.cwd), "C--Users-kartan-projects-meshtest");
+    assert.ok(samePath("c:\\users\\Kartan\\", "C:/Users/kartan", "win32"));
+    assert.ok(!samePath("/home/Me", "/home/me", "linux"));
+    assert.strictEqual(cellStartPlan(undefined, "/nowhere", { name: NAME, instanceId: IID }, "win32").kind, "none");
+  });
+
+  it("Run as cell goes through the same Claude Code check: a user A4SX_CLAUDE that names nothing starts nothing", async () => {
+    const { deps: d } = deps(world(), { env: { A4SX_CLAUDE: path.join(tmpdir(), "gone", EXE) } });
+    calls.pickQueue.push(0, [0]);   // the cell; Keep my sign-in
+    const t = await runAsCell(d, { id: "ses_1", findLocal: async () => ({ sessionId: SID, cwd: tmpdir() }) });
+    assert.strictEqual(t, undefined);
+    assert.strictEqual(calls.terminals.length, 0);
+    assert.deepStrictEqual(calls.modals.map((m) => m.message), [CELL_CLAUDE_TEXTS.badUserEnv(path.join(path.dirname(d.env!.A4SX_CLAUDE!), EXE))]);
   });
 });
