@@ -257,7 +257,7 @@ export function parseCellsJson(stdout: string): LocalCell[] | undefined {
 export const CELLS_LIST_ARGS: readonly string[] = ["mesh", "cells", "--json"];
 export const REDUCED_FLAG = "--mesh-reduced-isolation";
 /**
- * 0.9.3: Start and New cell pass no --mesh-reduced-isolation. That flag accepts reduced isolation for one start only
+ * 0.9.3: no cell start of the extension passes --mesh-reduced-isolation. That flag accepts reduced isolation for one start only
  * and stores nothing, so a cell started from here never had its answer stored, and the agent host's later start of it
  * (no terminal) was refused. Without the flag the CLI (0.32.0+) asks its own question in the terminal, once per cell
  * per computer, and stores the answer.
@@ -334,7 +334,7 @@ const CLAUDE_SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 /** The two toggles of "Run as cell in terminal". */
 export interface LaunchOptions {
-  /** "Keep my sign-in (reduced isolation)": --mesh-reduced-isolation. */
+  /** --mesh-reduced-isolation. 0.9.3: never set by the extension (the CLI asks and stores the answer per cell). */
   reduced: boolean;
   /** "Deliver messages from mesh peers without asking": --auto-allow-ipc-messages. */
   autoAllow: boolean;

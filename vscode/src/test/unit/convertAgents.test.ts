@@ -33,7 +33,7 @@ function harness(cells: unknown[] = [CELL_ROW]): { deps: CellCommandDeps; runs: 
   const run = async (_cli: string, args: readonly string[]): Promise<CliOutput> => {
     const key = args.join(" ");
     runs.push(key);
-    return key === "--version" ? out("a4sx 0.25.0  (server 0.718.0)") : key === "mesh cells --json" ? out({ v: 1, default: null, cells }) : out("");
+    return key === "--version" ? out("a4sx 0.40.3  (server 0.718.0)") : key === "mesh cells --json" ? out({ v: 1, default: null, cells }) : out("");
   };
   const resolve = () => ({ kind: "found" as const, path: CLI });
   const provider = new CellsProvider({ resolve, run, server: () => BASE, onState: () => undefined });
@@ -139,7 +139,7 @@ describe("Convert an Agents-window session to a cell: the command", () => {
     p.session(cwd, SID, "sdk-ts", "Refactor the parser", [{ type: "ai-title", aiTitle: "Parser refactor" }]);
     p.session(p.cwd("beta"), SID2, "cli", "a terminal session");
     calls.modalAnswers.set(AGENTS_TEXTS.confirm, AGENTS_TEXTS.confirmYes);
-    calls.pickQueue.push(0, 1, [0]);   // the session; New cell… (after the cell "build"); the options as offered
+    calls.pickQueue.push(0, 1, []);   // the session; New cell… (after the cell "build"); the options as offered
     const h = harness();
     const t = await convertAgentSessionToCell(h.deps, { projectsDir: p.dir });
     assert.ok(t);
@@ -152,7 +152,7 @@ describe("Convert an Agents-window session to a cell: the command", () => {
     assert.strictEqual(calls.quickPicks[1].items[1].label, RUN_AS_CELL_TEXTS.newCell);
     assert.strictEqual(calls.terminals[0].options.name, CELL_CMD_TEXTS.newCellTerminal);
     assert.strictEqual(calls.terminals[0].options.cwd, cwd);
-    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--new-cell' '--mesh-reduced-isolation' '--' '--resume' '${SID}'\n`]);
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--new-cell' '--' '--resume' '${SID}'\n`]);
     await flush();
     assert.ok(calls.infos.includes(AGENTS_TEXTS.started));
   });
@@ -161,11 +161,11 @@ describe("Convert an Agents-window session to a cell: the command", () => {
     const cwd = p.cwd("alpha");
     p.session(cwd, SID, "sdk-ts", "Refactor the parser");
     calls.modalAnswers.set(AGENTS_TEXTS.confirm, AGENTS_TEXTS.confirmYes);
-    calls.pickQueue.push(0, 0, [0]);   // the session; the cell "build"; the options
+    calls.pickQueue.push(0, 0, []);   // the session; the cell "build"; the options
     assert.ok(await convertAgentSessionToCell(harness().deps, { projectsDir: p.dir }));
     assert.strictEqual(calls.terminals[0].options.name, CELL_CMD_TEXTS.cellTerminal("build"));
     assert.strictEqual(calls.terminals[0].options.cwd, cwd);
-    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--cell' 'build' '--mesh-reduced-isolation' '--' '--resume' '${SID}'\n`]);
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--cell' 'build' '--' '--resume' '${SID}'\n`]);
   });
 
   it("Cancel on the confirm, or Esc on the pick, starts nothing and runs no CLI; Choose another… goes back to the list", async () => {
@@ -179,7 +179,7 @@ describe("Convert an Agents-window session to a cell: the command", () => {
     assert.strictEqual(calls.terminals.length, 0);
     resetCalls();
     calls.modalChoices.push(CONVERT_TEXTS.chooseAnother, AGENTS_TEXTS.confirmYes);
-    calls.pickQueue.push(0, 1, 1, [0]);   // SID2 (newest), Choose another…, SID, New cell…, options
+    calls.pickQueue.push(0, 1, 1, []);   // SID2 (newest), Choose another…, SID, New cell…, options
     assert.ok(await convertAgentSessionToCell(h.deps, { projectsDir: p.dir }));
     assert.match(calls.modals[0].detail!, /Session: 1a2b3c4d /);
     assert.match(calls.modals[1].detail!, /Session: 0f1e2d3c /);
@@ -218,7 +218,7 @@ describe("Convert an Agents-window session to a cell: the command", () => {
     p.session(p.cwd("beta"), SID, "cli", "another transcript with the same id");
     resetCalls();
     calls.modalAnswers.set(AGENTS_TEXTS.confirm, AGENTS_TEXTS.confirmYes);
-    calls.pickQueue.push(0, 1, [0]);
+    calls.pickQueue.push(0, 1, []);
     assert.ok(await convertAgentSessionToCell(h.deps, { projectsDir: p.dir }));
     assert.strictEqual(calls.terminals[0].options.cwd, a, "resumed where the confirmed transcript is, not in the newer copy's folder");
     assert.match(calls.terminals[0].sent[0], new RegExp(`'--resume' '${SID}'\\n$`));
@@ -234,10 +234,10 @@ describe("Convert an Agents-window session to a cell: the command", () => {
     const cwd = p.cwd("we'ird; $(touch x) `y`");
     p.session(cwd, SID, "sdk-ts", "'; rm -rf ~ #", [{ type: "custom-title", customTitle: "$(reboot)'\"" }]);
     calls.modalAnswers.set(AGENTS_TEXTS.confirm, AGENTS_TEXTS.confirmYes);
-    calls.pickQueue.push(0, 1, [0]);
+    calls.pickQueue.push(0, 1, []);
     assert.ok(await convertAgentSessionToCell(harness().deps, { projectsDir: p.dir }));
     assert.strictEqual(calls.quickPicks[0].items[0].label, "$(reboot)'\"");
-    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--new-cell' '--mesh-reduced-isolation' '--' '--resume' '${SID}'\n`]);
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--new-cell' '--' '--resume' '${SID}'\n`]);
     assert.strictEqual(calls.terminals[0].options.cwd, cwd);
   });
 });
@@ -256,14 +256,14 @@ describe("Convert into a cell… on a Claude Code tab", () => {
     p.session(cwd, SID, "claude-vscode", "tab work", [{ type: "ai-title", aiTitle: "Alpha work" }]);
     const tab = { label: "Alpha work", input: { viewType: `mainThreadWebview-${CLAUDE_PANEL}` } };
     calls.tabGroups = [{ tabs: [tab], activeTab: tab }];
-    calls.pickQueue.push(0, [0]);
+    calls.pickQueue.push(0, []);
     let meshAsked = false;
     assert.ok(await convertTabToCell(harness().deps, [], { projectsDir: p.dir, pickCell: true, listMeshes: async () => { meshAsked = true; return { kind: "ok", meshes: [] }; } }));
     assert.strictEqual(meshAsked, false);
     assert.deepStrictEqual(calls.modals.filter((m) => m.message === CONVERT_TEXTS.confirm), [], "the cell pick names the session: no separate confirm");
     assert.strictEqual(calls.quickPicks[0].options.title, CONVERT_TEXTS.intoCellTitle("Alpha work", SID.slice(0, 8)));
     assert.match(calls.quickPicks[0].options.placeHolder, new RegExp(`^Session ${SID.slice(0, 8)} in .*alpha, changed .*Choose the cell`));
-    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--cell' 'build' '--mesh-reduced-isolation' '--' '--resume' '${SID}'\n`]);
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--cell' 'build' '--' '--resume' '${SID}'\n`]);
     assert.strictEqual(calls.terminals[0].options.cwd, cwd);
     // Esc on the cell pick starts nothing.
     resetCalls();

@@ -15,7 +15,7 @@ import {
   serverOrigin, showText,
 } from "../../cells";
 import {
-  CELL_CMD_TEXTS, CellCommandDeps, cliDetail, CONSENT_KEY, consentReducedIsolation, dailyUpdate, forgetCell, installCli, LAST_UPDATE_KEY, machineKey, newCell,
+  CELL_CMD_TEXTS, CellCommandDeps, cliDetail, CONSENT_KEY, dailyUpdate, forgetCell, installCli, LAST_UPDATE_KEY, machineKey, newCell,
   openCellOnWeb, ownCliCheck, repairOnce, repairOwnCli, setDefaultCell, startCell,
 } from "../../cellCommands";
 import { IN_SESSION_MESSAGE } from "../../cliJson";
@@ -849,15 +849,6 @@ describe("Cells: actions", () => {
     await startCell(h.deps, list[0]);
     assert.deepStrictEqual(calls.terminals[1].sent, [`'/opt/a4sx bin/a4sx' 'launch' '--cell' 'build' '--mesh' '${MESH}'\n`]);
     assert.strictEqual(state.data_.get(CONSENT_KEY), undefined, "nothing is accepted in the extension");
-  });
-
-  it("the machine-wide consent dialog (Run as cell only): once per machine; another machine is asked again", async () => {
-    const state = fakeMemento();
-    calls.modalChoices.push(CELL_CMD_TEXTS.consentAccept);
-    assert.ok(await consentReducedIsolation(state as any, "machine-a"));
-    assert.ok(await consentReducedIsolation(state as any, "machine-a"));
-    assert.ok(!(await consentReducedIsolation(state as any, "machine-b")));
-    assert.strictEqual(calls.modals.length, 2);
   });
 
   it("the terminal gets A4SX_CLAUDE = the Claude Code extension's bundled claude, and nothing else", async () => {

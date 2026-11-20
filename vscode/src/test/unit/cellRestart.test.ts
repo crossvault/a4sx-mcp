@@ -436,7 +436,7 @@ describe("0.9.2 review: a home-folder record, other platforms' builds, Windows p
 
   it("Run as cell goes through the same Claude Code check: a user A4SX_CLAUDE that names nothing starts nothing", async () => {
     const { deps: d } = deps(world(), { env: { A4SX_CLAUDE: path.join(tmpdir(), "gone", EXE) } });
-    calls.pickQueue.push(0, [0]);   // the cell; Keep my sign-in
+    calls.pickQueue.push(0, []);   // the cell; the option off
     const t = await runAsCell(d, { id: "ses_1", findLocal: async () => ({ sessionId: SID, cwd: tmpdir() }) });
     assert.strictEqual(t, undefined);
     assert.strictEqual(calls.terminals.length, 0);

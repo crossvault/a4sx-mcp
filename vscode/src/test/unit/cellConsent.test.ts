@@ -78,6 +78,30 @@ describe("0.9.3: the reduced-isolation question is the CLI's, stored per cell", 
     assert.strictEqual(await copyCellLaunch(h.deps, await cellItem(h.deps)), `'${CLI}' 'launch' '--cell' 'kartanwk8-cell01'`);
   });
 
+  it("New cell in PowerShell and cmd: no flag", async () => {
+    for (const [shell, want] of [
+      ["C:\\Program Files\\PowerShell\\7\\pwsh.exe", `& '${CLI}' 'launch' '--new-cell'\n`],
+      ["C:\\WINDOWS\\System32\\cmd.exe", `"${CLI}" "launch" "--new-cell"\n`],
+    ]) {
+      resetCalls();
+      calls.shell = shell;
+      const h = harness("0.40.3");
+      await newCell(h.deps);
+      assert.deepStrictEqual(calls.terminals[0].sent, [want], shell);
+    }
+  });
+
+  it("an update that finished meanwhile is seen: the version is read again before saying it's too old", async () => {
+    let version = "0.31.11";
+    const h = harness("0.31.11");
+    const run = h.deps.run;
+    h.deps.run = async (cli, args, t) => (args.join(" ") === "--version" ? { code: 0, stdout: `a4sx ${version}\n`, stderr: "" } : run(cli, args, t));
+    (h.deps.provider as any).versions = new (require("../../cellsView").CliVersions)(h.deps.run);
+    assert.strictEqual(await cliAsksConsent(h.deps, CLI), false);
+    version = "0.40.3";
+    assert.strictEqual(await cliAsksConsent(h.deps, CLI), true);
+  });
+
   it("a CLI before 0.32.0 can't store the answer: said with the fix, Update a4sx CLI runs `a4sx update`; nothing starts", async () => {
     const h = harness("0.31.11");
     calls.nextErrorChoice = CELL_CMD_TEXTS.updateCli;

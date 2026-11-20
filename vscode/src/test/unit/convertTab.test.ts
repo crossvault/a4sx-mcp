@@ -43,7 +43,7 @@ function harness(state = fakeMemento({ [CONSENT_KEY]: [machineKey()] }), resolut
   const run = async (_cli: string, args: readonly string[]): Promise<CliOutput> => {
     const key = args.join(" ");
     runs.push(key);
-    return key === "--version" ? out("a4sx 0.25.0  (server 0.718.0)") : key === "mesh cells --json" ? out({ v: 1, default: null, cells }) : out("");
+    return key === "--version" ? out("a4sx 0.40.3  (server 0.718.0)") : key === "mesh cells --json" ? out({ v: 1, default: null, cells }) : out("");
   };
   const resolve = () => resolution;
   const provider = new CellsProvider({ resolve, run, server: () => BASE, onState: () => undefined });
@@ -424,7 +424,7 @@ describe("Convert to cell: the command", () => {
     const tab = claudeTab("Alpha work");
     calls.tabGroups = [{ tabs: [fileTab("a.ts"), tab], activeTab: tab }];
     const h = harness();
-    calls.pickQueue.push(0, [0]);   // the first mesh; the options as offered (Keep my sign-in on)
+    calls.pickQueue.push(0, []);   // the first mesh; the options as offered (Keep my sign-in on)
     calls.inputQueue.push("alpha-work");
     const t = await convertTabToCell(h.deps, [undefined, { groupId: 1, editorIndex: 1 }], { projectsDir: p.dir, listMeshes: listing });
     assert.ok(t);
@@ -444,7 +444,7 @@ describe("Convert to cell: the command", () => {
     assert.notStrictEqual(calls.inputs[0].value, os.hostname().toLowerCase());
     assert.strictEqual(calls.terminals[0].options.name, CELL_CMD_TEXTS.newCellTerminal);
     assert.strictEqual(calls.terminals[0].options.cwd, cwd);
-    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--new-cell' '--as' 'alpha-work' '--mesh' '${MESH}' '--mesh-reduced-isolation' '--' '--resume' '${SID}'\n`]);
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--new-cell' '--as' 'alpha-work' '--mesh' '${MESH}' '--' '--resume' '${SID}'\n`]);
     assert.ok(h.deps.terminals.has(t!));
     // The tab stays; closing it is offered and not done unasked.
     await flush();
@@ -456,11 +456,11 @@ describe("Convert to cell: the command", () => {
     p.session(p.cwd("alpha"), SID, [{ type: "ai-title", aiTitle: "Alpha work" }]);
     const tab = claudeTab("Alpha work");
     calls.tabGroups = [{ tabs: [tab], activeTab: tab }];
-    calls.pickQueue.push(2, [0]);   // Choose the mesh in the browser
+    calls.pickQueue.push(2, []);   // Choose the mesh in the browser
     calls.inputQueue.push("  ");
     assert.ok(await convertTabToCell(harness().deps, [], { projectsDir: p.dir, listMeshes: listing }));
     assert.strictEqual(calls.inputs[0].title, CONVERT_TEXTS.nameTitle(undefined));
-    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--new-cell' '--mesh-reduced-isolation' '--' '--resume' '${SID}'\n`]);
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--new-cell' '--' '--resume' '${SID}'\n`]);
   });
 
   it("the name box checks the name: empty is fine, a bad name or a name stored here is refused with the rule", () => {
@@ -528,7 +528,7 @@ describe("Convert to cell: the command", () => {
     p.session(p.cwd("beta"), SID2, [{ type: "ai-title", aiTitle: "Alpha work" }]);
     const tab = claudeTab("Alpha work");
     calls.tabGroups = [{ tabs: [tab], activeTab: tab }];
-    calls.pickQueue.push(3, 1, 0, [0]);   // Not this session?; the second row (Other work); the first mesh; options
+    calls.pickQueue.push(3, 1, 0, []);   // Not this session?; the second row (Other work); the first mesh; options
     calls.inputQueue.push("");
     assert.ok(await convertTabToCell(harness().deps, [], { projectsDir: p.dir, listMeshes: listing }));
     assert.deepStrictEqual(labels(), [CONVERT_TEXTS.meshTitle("Alpha work", SID2.slice(0, 8)), CONVERT_TEXTS.pickSessionTitle, CONVERT_TEXTS.meshTitle("Other work", SID.slice(0, 8)), RUN_AS_CELL_TEXTS.optionsTitle]);
@@ -540,7 +540,7 @@ describe("Convert to cell: the command", () => {
     p.session(p.cwd("alpha"), SID, [{ type: "ai-title", aiTitle: "Alpha work" }]);
     const tab = claudeTab("Alpha work");
     calls.tabGroups = [{ tabs: [tab], activeTab: tab }];
-    calls.pickQueue.push(0, [0]);
+    calls.pickQueue.push(0, []);
     calls.inputQueue.push("");
     calls.nextInfoChoice = CONVERT_TEXTS.closeTab;
     assert.ok(await convertTabToCell(harness().deps, [], { projectsDir: p.dir, listMeshes: listing }));
@@ -548,22 +548,18 @@ describe("Convert to cell: the command", () => {
     assert.deepStrictEqual(calls.closedTabs, [tab]);
   });
 
-  it("reduced isolation is not waved through: without the stored consent its dialog is shown, and Cancel starts nothing", async () => {
+  it("0.9.3: reduced isolation is the CLI's question: no flag, no dialog of the extension's, nothing accepted here", async () => {
     p.session(p.cwd("alpha"), SID, [{ type: "ai-title", aiTitle: "Alpha work" }]);
     const tab = claudeTab("Alpha work");
     calls.tabGroups = [{ tabs: [tab], activeTab: tab }];
-    calls.pickQueue.push(2, [0]);
-    calls.inputQueue.push("");
-    assert.strictEqual(await convertTabToCell(harness(fakeMemento()).deps, [], { projectsDir: p.dir, listMeshes: listing }), undefined);
-    assert.deepStrictEqual(calls.modals.map((m) => [m.kind, m.message, m.items]), [["warning", CELL_CMD_TEXTS.consentTitle, [CELL_CMD_TEXTS.consentAccept]]]);
-    assert.strictEqual(calls.terminals.length, 0);
-    assert.deepStrictEqual(calls.infoPrompts, []);
-    // Keep my sign-in off: no flag, no consent dialog.
     calls.pickQueue.push(2, []);
     calls.inputQueue.push("");
-    assert.ok(await convertTabToCell(harness(fakeMemento()).deps, [], { projectsDir: p.dir, listMeshes: listing }));
-    assert.strictEqual(calls.modals.length, 1);
+    const state = fakeMemento();
+    assert.ok(await convertTabToCell(harness(state).deps, [], { projectsDir: p.dir, listMeshes: listing }));
+    assert.deepStrictEqual(calls.modals, []);
     assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--new-cell' '--' '--resume' '${SID}'\n`]);
+    assert.strictEqual(state.data_.get(CONSENT_KEY), undefined);
+    assert.ok(!calls.quickPicks.some((q) => q.items.some((i: any) => i.description === "--mesh-reduced-isolation")), "no option adds the flag");
   });
 
   it("two sessions with the tab's title that nothing tells apart: the session is asked for, the matches first; Esc starts nothing", async () => {
@@ -581,7 +577,7 @@ describe("Convert to cell: the command", () => {
     assert.strictEqual(pick.options.placeHolder, CONVERT_TEXTS.pickDuplicatePlaceholder("Same title", 2));
     assert.deepStrictEqual(pick.items.map((i: any) => [i.label, i.session.sessionId]), [["Same title", SID3], ["Same title", SID], ["Other", SID2]]);
     assert.strictEqual(calls.terminals.length, 0);
-    calls.pickQueue.push(1, 0, [0]);
+    calls.pickQueue.push(1, 0, []);
     calls.inputQueue.push("");
     assert.ok(await convertTabToCell(h.deps, [], { projectsDir: p.dir, listMeshes: listing }));
     assert.strictEqual(calls.terminals[0].options.cwd, a);
@@ -596,7 +592,7 @@ describe("Convert to cell: the command", () => {
     calls.workspaceFolders = [{ name: "work", uri: { scheme: "file", fsPath: w } }];
     const tab = claudeTab("Same title");
     calls.tabGroups = [{ tabs: [tab], activeTab: tab }];
-    calls.pickQueue.push(2, [0]);
+    calls.pickQueue.push(2, []);
     calls.inputQueue.push("");
     assert.ok(await convertTabToCell(harness().deps, [], { projectsDir: p.dir, listMeshes: listing }));
     assert.strictEqual(calls.quickPicks[0].options.title, CONVERT_TEXTS.meshTitle("Same title", SID.slice(0, 8)));
@@ -644,7 +640,7 @@ describe("Convert to cell: the command", () => {
     const b = claudeTab("Beta work");
     const f = fileTab("a.ts");
     calls.tabGroups = [{ tabs: [a, f, b], activeTab: f }];
-    calls.pickQueue.push(1, 2, [0]);
+    calls.pickQueue.push(1, 2, []);
     calls.inputQueue.push("");
     assert.ok(await convertTabToCell(harness().deps, [], { projectsDir: p.dir, listMeshes: listing }));
     assert.strictEqual(calls.quickPicks[0].options.placeHolder, CONVERT_TEXTS.pickTabPlaceholder);

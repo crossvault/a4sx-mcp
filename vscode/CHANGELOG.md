@@ -2,10 +2,10 @@
 
 ## 0.9.3
 
-- **Start in terminal** and **New cell** in the Cells view no longer add `--mesh-reduced-isolation`, and the extension no longer asks its own reduced-isolation question before them. That flag accepts reduced isolation for one start only and stores nothing, so a cell started from here never had your answer stored. A later start of that cell without a terminal, for example the agent host's, was then refused ("nobody has accepted that for this cell on this computer yet"). Now the a4sx CLI asks its own question in the terminal, once per cell and per computer, and stores your answer. The text is the CLI's.
-- This needs a4sx CLI 0.32.0 or newer. With an older CLI, Start and New cell say so and offer **Update a4sx CLI**; nothing starts.
+- **Start in terminal**, **New cell**, **Run as cell in terminal** and the **Convert** actions no longer add `--mesh-reduced-isolation`, and the extension no longer asks its own reduced-isolation question before them. That flag accepts reduced isolation for one start only and stores nothing, so a cell started from here never had your answer stored. A later start of that cell without a terminal, for example the agent host's, was then refused ("nobody has accepted that for this cell on this computer yet"). Now the a4sx CLI asks its own question in the terminal, once per cell and per computer, and stores your answer. The text is the CLI's.
+- This needs a4sx CLI 0.32.0 or newer. With an older CLI, these actions say so and offer **Update a4sx CLI**; nothing starts.
 - **Copy launch command** copies `a4sx launch --cell <name>` without the flag too.
-- **Run as cell in terminal** and the **Convert** actions are unchanged: **Keep my sign-in (reduced isolation)** still adds `--mesh-reduced-isolation` for that start, after the extension's dialog.
+- The **Keep my sign-in (reduced isolation)** option of Run as cell and Convert is gone, and so is the warning for a session that is only in your library. The CLI's yes keeps your sign-ins in the cell, as that flag did, and on a computer where the sandbox works the flag never changed the isolation. The one option left is **Deliver messages from mesh peers without asking**.
 
 ## 0.9.2
 

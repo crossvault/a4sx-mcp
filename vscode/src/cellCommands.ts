@@ -26,6 +26,10 @@ import { openCommandTerminal, State } from "./resume";
 import { readTail, transcriptTitle } from "./tabSession";
 import { commandLine, programName, shellKind } from "./terminalCommand";
 
+/**
+ * Before 0.9.3: where the extension's own reduced-isolation consent was kept, per machine. Never read since: that
+ * consent was only good for one start, and the CLI asks per cell now (cliAsksConsent).
+ */
 export const CONSENT_KEY = "a4sx.cellReducedIsolationConsent";
 export const LAST_UPDATE_KEY = "a4sx.cliLastUpdate";
 /** 0.9.2: the folder each stored cell was last started in from here, by instance id (the folder picker's default). */
@@ -42,14 +46,6 @@ export const CELL_CMD_TEXTS = {
   cellTerminal: (name: string) => `a4sx: cell ${name}`,
   updateTerminal: "a4sx: update",
   pythonTerminal: "a4sx: install Python",
-  consentTitle: "Start cells with reduced isolation on this computer?",
-  consentDetail:
-    "Where this computer can't sandbox your agent, a cell runs as your own user (\"reduced isolation\"). Then your agent " +
-    "could act as this cell in its mesh and skip the cell's outgoing checks, and it can read and use the a4sx sign-ins " +
-    "and keys saved on this computer, and its Claude Code sign-in. Every other session still checks everything it receives. Continue only if you " +
-    "trust the agent on this computer.\n\nWhere the sandbox works, the cell runs in it and none of this applies. " +
-    "You're asked once on this computer.",
-  consentAccept: "Accept and start",
   consentCliTooOld: (v: string) =>
     `This a4sx CLI (${v}) can't remember for a cell that you accepted reduced isolation, so a cell started from here ` +
     `would be refused when it starts again without a terminal (by the agent host, for one). Nothing was started. Update ` +
@@ -204,7 +200,13 @@ export function machineKey(): string {
  * (the CLI then says itself what it needs).
  */
 export async function cliAsksConsent(deps: CellCommandDeps, cli: string): Promise<boolean> {
-  const v = await deps.provider.versions.version(cli);
+  let v = await deps.provider.versions.version(cli);
+  if (v !== undefined && !versionAtLeast(v, MIN_CELL_CONSENT_CLI)) {
+    deps.provider.versions.clear();   // asked once more: an update may have finished since the version was read
+    v = await deps.provider.versions.version(cli);
+  }
+  // Deliberately on an unknown version too: a CLI that doesn't answer --version still gets the start, and an old one
+  // then refuses with its own message.
   if (v === undefined || versionAtLeast(v, MIN_CELL_CONSENT_CLI)) {
     return true;
   }
@@ -212,24 +214,6 @@ export async function cliAsksConsent(deps: CellCommandDeps, cli: string): Promis
     await updateCliInTerminal(deps);
   }
   return false;
-}
-
-/**
- * Asks once per machine before the first start with --mesh-reduced-isolation; true when accepted. Only Run as cell
- * and the Convert actions still pass that flag ("Keep my sign-in"); Start and New cell leave the question to the CLI.
- */
-export async function consentReducedIsolation(state: State, key: string = machineKey()): Promise<boolean> {
-  const seen = state.get<unknown>(CONSENT_KEY);
-  const list = Array.isArray(seen) ? seen.filter((x): x is string => typeof x === "string") : [];
-  if (list.includes(key)) {
-    return true;
-  }
-  const choice = await vscode.window.showWarningMessage(CELL_CMD_TEXTS.consentTitle, { modal: true, detail: CELL_CMD_TEXTS.consentDetail }, CELL_CMD_TEXTS.consentAccept);
-  if (choice !== CELL_CMD_TEXTS.consentAccept) {
-    return false;
-  }
-  await state.update(CONSENT_KEY, [...list, key].slice(-20));
-  return true;
 }
 
 function plainFile(p: string): boolean {
