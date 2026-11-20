@@ -11,7 +11,7 @@
 import * as vscode from "vscode";
 import { CLI_NAME } from "./cli";
 import { LaunchOptions, LocalCell, newCellRunArgs, ResumeTarget, runAsCellArgs, startableCell } from "./cells";
-import { CELL_CMD_TEXTS, CellCommandDeps, cellTerminalEnv, consentReducedIsolation, ensureCli } from "./cellCommands";
+import { CELL_CMD_TEXTS, CellCommandDeps, cellClaudeEnv, consentReducedIsolation, ensureCli } from "./cellCommands";
 import { CELL_TEXTS, CliRunner, CMD_UPDATE_CLI } from "./cellsView";
 import { CONFIG_SHOW_ARGS, configAutoAllow, versionAtLeast } from "./cliJson";
 import { LocalSession } from "./localSession";
@@ -204,7 +204,11 @@ export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession
     return undefined;
   }
   const name = picked.choice.kind === "cell" ? CELL_CMD_TEXTS.cellTerminal(picked.choice.cell.name) : CELL_CMD_TEXTS.newCellTerminal;
-  const terminal = openCommandTerminal(name, cli, CLI_NAME, args, cwd, cellTerminalEnv(deps.platform));
+  const claude = await cellClaudeEnv(deps);
+  if (!claude) {
+    return undefined;
+  }
+  const terminal = openCommandTerminal(name, cli, CLI_NAME, args, cwd, claude.env, undefined, true);
   deps.terminals.add(terminal);
   if (claudeSignInHint(picked.choice, load.legacy === true, await deps.provider.versions.version(cli), options)) {
     void vscode.window.showInformationMessage(t.claudeSignIn);   // not awaited: it never blocks the start

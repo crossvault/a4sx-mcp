@@ -131,11 +131,18 @@ export function openCommandTerminal(
   name: string, found: string, programBase: string, args: readonly string[], cwd?: string | vscode.Uri, env?: Record<string, string>,
   /** Written to the terminal before the command's output; never sent to the shell or the process. */
   message?: string,
+  /**
+   * 0.9.2: VS Code doesn't revive the terminal after a restart. A cell's terminal is: a revived one would keep the
+   * env and folder of its first start (an A4SX_CLAUDE that a Claude Code update since removed, for one).
+   */
+  transient?: boolean,
 ): vscode.Terminal {
   const kind = shellKind(vscode.env.shell);
   const line = kind && commandLine(programName(found, programBase), args, kind);
   // `env` holds nothing secret (the Cells view passes only A4SX_CLAUDE, a path).
-  const extra = { ...(cwd === undefined ? {} : { cwd }), ...(env ? { env } : {}), ...(message ? { message } : {}) };
+  const extra = {
+    ...(cwd === undefined ? {} : { cwd }), ...(env ? { env } : {}), ...(message ? { message } : {}), ...(transient ? { isTransient: true } : {}),
+  };
   if (line) {
     const terminal = vscode.window.createTerminal({ name, ...extra });
     terminal.sendText(line, true);

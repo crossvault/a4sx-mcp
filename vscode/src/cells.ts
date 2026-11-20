@@ -272,12 +272,21 @@ export function startableCell(cell: LocalCell): boolean {
   return cell.meshId !== undefined;
 }
 
-/** `launch --cell NAME [--mesh ID] --mesh-reduced-isolation`; undefined for a standalone or bad cell. */
-export function cellLaunchArgs(cell: LocalCell, all: readonly LocalCell[]): string[] | undefined {
-  if (!valid(cell) || !startableCell(cell)) {
+/** CLI 0.31.10: a stored cell starts a new conversation instead of its last one. */
+export const NEW_SESSION_FLAG = "--new-session";
+
+/**
+ * `launch --cell NAME [--mesh ID] --mesh-reduced-isolation [--new-session | -- --resume SESSION]`; undefined for a
+ * standalone or bad cell, or a session id that isn't a Claude Code session id. 0.9.2: `session` is the cell's last
+ * conversation to continue, or "new" when it can't be continued (its folder is gone: without the flag the CLI would
+ * ask in the terminal whether to start a new one).
+ */
+export function cellLaunchArgs(cell: LocalCell, all: readonly LocalCell[], session?: string): string[] | undefined {
+  if (!valid(cell) || !startableCell(cell) || (session !== undefined && session !== "new" && !CLAUDE_SESSION.test(session))) {
     return undefined;
   }
-  return ["launch", "--cell", cell.name, ...(nameShared(cell, all) ? ["--mesh", cell.meshId!] : []), REDUCED_FLAG];
+  const tail = session === undefined ? [] : session === "new" ? [NEW_SESSION_FLAG] : ["--", "--resume", session];
+  return ["launch", "--cell", cell.name, ...(nameShared(cell, all) ? ["--mesh", cell.meshId!] : []), REDUCED_FLAG, ...tail];
 }
 
 function pickArgs(cell: LocalCell, all: readonly LocalCell[]): string[] | undefined {

@@ -432,6 +432,15 @@ const fake = {
 // the extension refuses every CLI call. The tests of that refusal set these themselves.
 delete process.env.A4SX_HARNESS;
 delete process.env.A4SX_MESH_SESSION;
+// 0.9.2: a cell's start checks that Claude Code can be found (cellClaudeEnv). Nor must the tests depend on whether
+// claude is installed where they run: A4SX_CLAUDE names a file standing in for it. Tests of that check pass their own env.
+{
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = require("fs"), os = require("os"), path = require("path");
+  const stand = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "a4sx-fake-claude-")), process.platform === "win32" ? "claude.exe" : "claude");
+  fs.writeFileSync(stand, "", { mode: 0o755 });
+  process.env.A4SX_CLAUDE = stand;
+}
 
 const mod = Module as unknown as { _load: (request: string, ...rest: unknown[]) => unknown };
 const origLoad = mod._load;
