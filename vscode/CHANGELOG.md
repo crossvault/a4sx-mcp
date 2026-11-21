@@ -2,7 +2,7 @@
 
 ## 0.9.4
 
-- **A cell of another account no longer reads "registry revoked".** Signed in to one account, with cells of another, the Cells view called working cells revoked. With a4sx CLI 0.59.6 such a cell reads **not in the signed-in account**, and, after `a4sx mesh cells --refresh`, **another account's**. Only a cell whose own key the server refuses reads **registry revoked**.
+- **A cell of another account no longer reads "registry revoked".** Signed in to one account, with cells of another, the Cells view called working cells revoked. With a4sx CLI 0.59.7 such a cell reads **not in the signed-in account**. With an older CLI it still reads **registry revoked**, and its tooltip now says that a cell that still starts belongs to another of your accounts, rather than suggesting you remove it.
 - **Cells comes first.** The a4sx side bar now starts with Cells and Meshes. My sessions and Marketplace start collapsed; Launch profiles stays open. This applies to a fresh install, because VS Code keeps the layout you already have.
 
 ## 0.9.3

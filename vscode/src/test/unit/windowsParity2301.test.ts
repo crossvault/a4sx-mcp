@@ -31,6 +31,18 @@ describe("#2301 E3: a cell the signed-in account doesn't list", () => {
     }
     const gone = parseCellsAnswer(JSON.stringify({ v: 1, default: null, cells: [row("revoked")] }))!.cells[0];
     assert.ok(localCellDescription(gone, BASE).includes("registry revoked"));
+    // review: a CLI before 0.59.7 says "revoked" for another account's working cell too: no advice to remove it
+    const tip = localCellTooltip(gone, BASE);
+    assert.ok(!/forget|remove|make a new cell/i.test(tip), tip);
+    assert.ok(tip.includes("If it still starts and connects, it belongs to another of your accounts"), tip);
+  });
+
+  it("the texts, verbatim, with no literal backticks", () => {
+    assert.strictEqual(REGISTRY_TEXTS.description.not_in_account, "not in the signed-in account");
+    assert.strictEqual(REGISTRY_TEXTS.description.other_account, "another account's (its key works)");
+    for (const s of REGISTRY_STATES) {
+      assert.ok(!REGISTRY_TEXTS.tooltip[s].includes("`"), s);
+    }
   });
 
   it("a state from a newer CLI is unknown, as before", () => {

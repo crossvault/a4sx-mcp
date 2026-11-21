@@ -90,7 +90,7 @@ function isObject(v: unknown): v is Record<string, unknown> {
 // --- `a4sx mesh cells --json` -------------------------------------------------------------------------
 
 export const LOCAL_STATES = ["stored", "running"] as const;
-// CLI 0.59.6 (#2301 E3): not_in_account (the signed-in account's list lacks the cell: maybe another account's, and
+// CLI 0.59.7 (#2301 E3): not_in_account (the signed-in account's list lacks the cell: maybe another account's, and
 // working), other_account (--refresh: its own key works), revoked (--refresh: the server refuses its key)
 export const REGISTRY_STATES = ["reserved", "active", "not_in_account", "other_account", "revoked", "unknown"] as const;
 export const PATHS = ["same-host", "lan", "direct", "relay"] as const;
