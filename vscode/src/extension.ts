@@ -13,12 +13,13 @@ import { CLAUDE_EXTENSION_ID, claudeResumeUri } from "./claudeResume";
 import { CLI_NAME, findClaude, findCli, CliLookup, LookupEnv } from "./cli";
 import { cellsListDir, showText } from "./cells";
 import {
-  CellCommandDeps, copyCellLaunch, dailyUpdate, forgetCell, installCli, newCell, openCellOnWeb, openCellPolicy, ownCliCheck, ownCliUsable, renameCell, repairOwnCli, setCellProfile, setDefaultCell, startCell, stopCell,
+  CellCommandDeps, copyCellLaunch, dailyUpdate, forgetCell, installCli, newCell, openCellOnWeb, openCellPolicy, ownCliCheck, ownCliUsable, renameCell, repairOwnCli, setCellProfile, setDefaultCell, startCell, startCellHere, stopCell,
   updateCliInTerminal,
 } from "./cellCommands";
 import {
   CellsLoad, CellsProvider, CELLS_EMPTY, CELLS_NO_CLI, CliOutput, CliResolution, CliRunner, CMD_COPY_CELL_LAUNCH, CMD_DEFAULT_CELL, CMD_FORGET_CELL, CMD_INSTALL_CLI,
-  CMD_NEW_CELL, CMD_OPEN_CELL, CMD_OPEN_CELL_POLICY, CMD_REFRESH_CELLS, CMD_RENAME_CELL, CMD_SET_CELL_PROFILE, CMD_START_CELL, CMD_STOP_CELL, CMD_UPDATE_CLI, LocalCellItem, MeshGroupItem,
+  CMD_NEW_CELL, CMD_OPEN_CELL, CMD_OPEN_CELL_POLICY, CMD_REFRESH_CELLS, CMD_RENAME_CELL, CMD_SET_CELL_PROFILE, CMD_START_CELL, CMD_START_CELL_HERE, CMD_STOP_CELL, CMD_UPDATE_CLI, LocalCellItem, MeshGroupItem,
+  RemoteCellItem,
   VIEW_CELLS,
 } from "./cellsView";
 import { IN_SESSION_MESSAGE, insideMeshSession } from "./cliJson";
@@ -88,7 +89,7 @@ export const CMD_DUPLICATE_PROFILE = "a4sx.duplicateProfile";
 export const CMD_SET_DEFAULT_PROFILE = "a4sx.setDefaultProfile";
 export { CMD_OPEN_LISTING, CMD_CREATE_MESH, CMD_OPEN_MESH, CMD_OPEN_MESHES, CMD_REDEEM_INVITE, CMD_REFRESH_MESHES, CMD_START_IN_MESH };
 export {
-  CMD_REFRESH_CELLS, CMD_NEW_CELL, CMD_START_CELL, CMD_DEFAULT_CELL, CMD_FORGET_CELL, CMD_OPEN_CELL, CMD_INSTALL_CLI, CMD_UPDATE_CLI, CMD_STOP_CELL, CMD_RENAME_CELL,
+  CMD_REFRESH_CELLS, CMD_NEW_CELL, CMD_START_CELL, CMD_START_CELL_HERE, CMD_DEFAULT_CELL, CMD_FORGET_CELL, CMD_OPEN_CELL, CMD_INSTALL_CLI, CMD_UPDATE_CLI, CMD_STOP_CELL, CMD_RENAME_CELL,
   CMD_COPY_CELL_LAUNCH, CMD_SET_CELL_PROFILE, CMD_OPEN_CELL_POLICY, VIEW_CELLS,
 };
 export const VIEW_SESSIONS = "a4sx.sessions";
@@ -1110,6 +1111,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_REFRESH_CELLS, () => { cells.versions.clear(); return cells.refresh(); }),
     vscode.commands.registerCommand(CMD_NEW_CELL, () => newCell(cellDeps)),
     vscode.commands.registerCommand(CMD_START_CELL, (item?: LocalCellItem) => startCell(cellDeps, item)),
+    vscode.commands.registerCommand(CMD_START_CELL_HERE, (item?: RemoteCellItem) => startCellHere(cellDeps, item)),
     vscode.commands.registerCommand(CMD_DEFAULT_CELL, (item?: LocalCellItem) => setDefaultCell(cellDeps, item)),
     vscode.commands.registerCommand(CMD_FORGET_CELL, (item?: LocalCellItem) => forgetCell(cellDeps, item)),
     vscode.commands.registerCommand(CMD_OPEN_CELL, (item?: LocalCellItem | MeshGroupItem) => openCellOnWeb(cellDeps, item)),

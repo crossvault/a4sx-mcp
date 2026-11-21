@@ -225,6 +225,12 @@
         "icon": "$(play)"
       },
       {
+        "command": "a4sx.startCellHere",
+        "title": "Start on this computer",
+        "category": "a4sx",
+        "icon": "$(play)"
+      },
+      {
         "command": "a4sx.setDefaultCell",
         "title": "Set as default",
         "category": "a4sx",
@@ -500,6 +506,16 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "a4sx.startCellHere",
+          "when": "view == a4sx.cells && viewItem == a4sx.remoteCell.own",
+          "group": "inline@1"
+        },
+        {
+          "command": "a4sx.startCellHere",
+          "when": "view == a4sx.cells && viewItem == a4sx.remoteCell.own",
+          "group": "1_cell@1"
+        },
         {
           "command": "a4sx.resumeSession",
           "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/",
@@ -807,6 +823,10 @@
         },
         {
           "command": "a4sx.startCell",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.startCellHere",
           "when": "false"
         },
         {

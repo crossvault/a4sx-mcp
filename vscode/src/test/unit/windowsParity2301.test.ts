@@ -63,3 +63,69 @@ describe("#2301 E7: Cells first", () => {
     assert.strictEqual(vis["a4sx.cells"], "visible");
   });
 });
+
+// ---- #2301 E1: Start on this computer, for your own cell on another machine -----------------------------------------
+import * as os from "os";
+import { calls, fakeMemento, resetCalls } from "../fakeVscode";
+import { startHereArgs } from "../../cells";
+import { CELL_CMD_TEXTS, CellCommandDeps, startCellHere } from "../../cellCommands";
+import { CellsProvider, CliOutput, RemoteCellItem } from "../../cellsView";
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const vscodeFake = require("vscode");
+const MESH = "msh_0123456789abcdef0123456789abcdef";
+const CLI = "/opt/a4sx/a4sx";
+
+function startHereHarness(version = "0.59.7") {
+  const runs: string[] = [];
+  const run = async (_cli: string, args: readonly string[]): Promise<CliOutput> => {
+    runs.push(args.join(" "));
+    if (args.join(" ") === "--version") {
+      return { code: 0, stdout: `a4sx ${version}  (server 0.760.0)\n`, stderr: "" };
+    }
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "a4sx-2301-"));
+  const provider = new CellsProvider({ resolve: () => ({ kind: "found", path: CLI }), run, server: () => BASE, onState: () => undefined });
+  const deps: CellCommandDeps = {
+    state: fakeMemento() as any, cliDir: undefined, provider, resolve: () => ({ kind: "found", path: CLI }), run,
+    server: () => BASE, defaultServer: BASE, folder: async () => "/w/proj",
+    fetch: async () => { throw new Error("no network in tests"); }, python: async () => ({ code: 1, stdout: "" }), terminals: new Set(),
+    stateDir: tmp(), claudeProjects: tmp(), home: tmp(),
+  };
+  calls.nextOpenDialog = [vscodeFake.Uri.file("/w/proj")];
+  return { deps, runs };
+}
+
+describe("#2301 E1: Start on this computer", () => {
+  beforeEach(resetCalls);
+
+  it("your own cell elsewhere: `a4sx launch --cell NAME --mesh MESH` in a terminal; the CLI decides and says why", async () => {
+    const h = startHereHarness();
+    const item = new RemoteCellItem(MESH, { instanceId: "ins_D1", name: "desk-agent", own: true, tags: [] });
+    assert.strictEqual(item.contextValue, "a4sx.remoteCell.own");
+    const t = await startCellHere(h.deps, item);
+    assert.ok(t);
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--cell' 'desk-agent' '--mesh' '${MESH}'\n`]);
+    assert.ok(!h.runs.some((r) => r.startsWith("launch")), "never started without a terminal");
+    assert.ok(calls.infos.some((m: string) => m.startsWith("Starting «desk-agent» on this computer")), JSON.stringify(calls.infos));
+  });
+
+  it("another person's cell has no such action, and starts nothing", async () => {
+    const h = startHereHarness();
+    const item = new RemoteCellItem(MESH, { instanceId: "ins_L1", name: "laptop-agent", own: false, tags: [] });
+    assert.strictEqual(item.contextValue, "a4sx.remoteCell");
+    assert.strictEqual(await startCellHere(h.deps, item), undefined);
+    assert.strictEqual(calls.terminals.length, 0);
+  });
+
+  it("a name or mesh id the CLI doesn't take starts nothing and says so", async () => {
+    const h = startHereHarness();
+    assert.strictEqual(startHereArgs("Bad Name", MESH), undefined);
+    assert.strictEqual(startHereArgs("ok", "msh_x; rm"), undefined);
+    const item = new RemoteCellItem(MESH, { instanceId: "ins_D1", name: "bad name", own: true, tags: [] });
+    assert.strictEqual(await startCellHere(h.deps, item), undefined);
+    assert.strictEqual(calls.terminals.length, 0);
+    assert.ok(calls.errors.some((e) => e.message === CELL_CMD_TEXTS.startHereBad), JSON.stringify(calls.errors));
+  });
+});

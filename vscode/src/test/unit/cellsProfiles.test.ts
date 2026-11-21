@@ -403,11 +403,11 @@ describe("Cells view: grouped by mesh, with the other machines' cells", () => {
     assert.deepStrictEqual(team.map((i) => [i.label, i.description, i.contextValue]), [
       ["build", "default · profile work · running · registry active · path lan", "a4sx.localCell.default.running"],
       ["docs", "stored · registry reserved", "a4sx.localCell"],
-      ["desk-agent", "yours, on another machine · offline · sandbox", "a4sx.remoteCell"],
+      ["desk-agent", "yours, on another machine · offline · sandbox", "a4sx.remoteCell.own"],   // #2301 E1
       ["laptop-agent", "on another machine · online · uid", "a4sx.remoteCell"],
     ]);
     assert.ok(team[2] instanceof RemoteCellItem && team[3] instanceof RemoteCellItem);
-    assert.match(String(team[2].tooltip), /^Cell: desk-agent\nYours, on another machine: read-only here\./);
+    assert.match(String(team[2].tooltip), /^Cell: desk-agent\nYours, on another machine\. Start on this computer moves it here/);
     assert.match(String(team[3].tooltip), /^Cell: laptop-agent\nOn another machine: read-only here\./);
     assert.ok(!team.some((i) => i instanceof RemoteCellItem && i.peer.instanceId === "ins_A1"), "your cell stored here is listed once, as local");
     assert.match(String(team[0].tooltip), /On this computer: running \(pid 4242\)\nRegistry: active\nPath: lan/);
@@ -434,7 +434,10 @@ describe("Cells view: grouped by mesh, with the other machines' cells", () => {
       "a4sx.copyCellLaunch": [true, true, false, true, true],
     });
     assert.ok(menu.some((m: any) => m.command === "a4sx.openCellOnWeb" && m.when === "view == a4sx.cells && viewItem == a4sx.cellMesh"));
-    assert.ok(!menu.some((m: any) => m.when.includes("remoteCell")), "the other machines' cells have no actions");
+    // #2301 E1: only your own cells on another machine have an action: Start on this computer
+    const remote = menu.filter((m: any) => m.when.includes("remoteCell"));
+    assert.ok(remote.length > 0 && remote.every((m: any) => m.command === "a4sx.startCellHere"
+      && m.when === "view == a4sx.cells && viewItem == a4sx.remoteCell.own"), "another person's cell has no actions");
     assert.strictEqual(pkg.contributes.commands.find((c: any) => c.command === "a4sx.openCellOnWeb").title, "Open mesh in browser");
   });
 
