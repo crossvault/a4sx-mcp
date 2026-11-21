@@ -128,7 +128,7 @@ export const AGENT_HOST_TEXTS = {
   stop: "Stop agent host",
   stopTooltip: "Runs `a4sx agent-host stop`: the same stop as Ctrl+C in the host's terminal. It tells the Agents window first, then ends the cells it started.",
   stopping: "Stopping the a4sx agent host (it tells the Agents window first and ends the cells it started)…",
-  stopDone: "The a4sx agent host stopped. The Agents window can't reach your cells until you start it again.",
+  stopDone: "a4sx agent host stopped. Start it again to use your cells in the Agents window.",
   stopNeedsUpdate: "This a4sx CLI can't stop the agent host from here (that needs CLI 0.59.15 or newer). Update a4sx, or stop it with Ctrl+C in its terminal \"a4sx: agent host\"; nothing was stopped.",
   stopWhat: "stop the agent host",
   stopNoAnswer: "`a4sx agent-host stop` didn't finish within 45 seconds. If it got as far as asking, the agent host may still stop; This computer shows when it has, and Ctrl+C in its terminal \"a4sx: agent host\" stops it at once.",

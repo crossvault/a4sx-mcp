@@ -93,6 +93,11 @@ describe("#2326: Stop agent host", () => {
     assert.deepStrictEqual(calls.errors.map((e) => e.message), [AGENT_HOST_TEXTS.stopNoAnswer]);
   });
 
+  it("cell01: the done toast's first sentence is short (VS Code cuts a toast at about 60 characters)", () => {
+    assert.strictEqual(AGENT_HOST_TEXTS.stopDone, "a4sx agent host stopped. Start it again to use your cells in the Agents window.");
+    assert.ok(AGENT_HOST_TEXTS.stopDone.split(". ")[0].length <= 30);
+  });
+
   it("the command is contributed with its title", () => {
     const cmd = pkg.contributes.commands.find((c: any) => c.command === "a4sx.stopAgentHost");
     assert.deepStrictEqual([cmd.title, cmd.category], ["Stop agent host", "a4sx"]);
