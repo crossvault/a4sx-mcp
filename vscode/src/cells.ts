@@ -444,7 +444,7 @@ export function localCellDescription(cell: LocalCell, defaultServer: string, gro
     cell.registryState ? REGISTRY_TEXTS.description[cell.registryState] : undefined,
     cell.path ? `path ${cell.path}` : undefined,
     shownTags(cell).join(" ") || undefined,
-    cellPolicySummary(cell),
+    // cell01: the row was cut at the default width; the traffic preset is in the tooltip (and the mesh's row)
     cell.needsApproval ? "waits for an admin" : undefined,
     cell.duplicate ? "stored twice" : undefined,
   ].filter(Boolean).join(" · ");

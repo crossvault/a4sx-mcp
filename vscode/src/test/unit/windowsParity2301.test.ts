@@ -132,7 +132,7 @@ describe("#2301 E1: Start on this computer", () => {
 });
 
 // ---- #2301 E2: This computer (the agent host) ------------------------------------------------------------------------
-import { AGENT_HOST_SETUP_ARGS, AGENT_HOST_TEXTS, isOpen, parseAgentHostStatus } from "../../agentHostStatus";
+import { AGENT_HOST_SETUP_ARGS, AGENT_HOST_TEXTS, directLaunch, isOpen, parseAgentHostStatus } from "../../agentHostStatus";
 import { CELLS_LIST_ARGS } from "../../cells";
 import { LocalCellItem, MeshGroupItem, ThisComputerItem, thisComputerChildren } from "../../cellsView";
 
@@ -163,7 +163,10 @@ describe("#2301 E2: This computer", () => {
     }))!);
     // review: not set up and stopped: only Set up (it starts the host too), never two terminals
     assert.deepStrictEqual(down.map((i) => i.label), [AGENT_HOST_TEXTS.stopped, AGENT_HOST_TEXTS.setup,
-      "Last error (2026-11-21T16:00:00Z): port 8765 is taken"]);
+      "Last error: port 8765 is taken"]);
+    assert.strictEqual(down[2].tooltip, "Last error of the agent host (2026-11-21T16:00:00Z): port 8765 is taken");
+    const long = "x".repeat(250);
+    assert.strictEqual(AGENT_HOST_TEXTS.lastError(long).length, "Last error: ".length + 48, "cell01: short at the default width");
     assert.strictEqual(down[1].command!.command, "a4sx.setupAgentsWindow");
     const setUpStopped = thisComputerChildren(parseAgentHostStatus(JSON.stringify({
       running: false, address: null, open: [], vscode: { editors: { stable: "ok" } }, last_error: null }))!);
@@ -226,5 +229,28 @@ describe("#2301 E2: This computer", () => {
     const top = await p.getChildren();
     const rows = await p.getChildren(top[0]);
     assert.deepStrictEqual(rows.map((i) => i.label), [AGENT_HOST_TEXTS.unknown]);
+  });
+});
+
+
+describe("cell01 on Windows: Ctrl+C on the agent host started from here asks nothing", () => {
+  it("the a4sx.cmd launcher is started as its python and script (no batch job to terminate)", () => {
+    const files: Record<string, string> = { "C:\\Users\\me\\bin\\a4sx.cmd": '@"C:\\Python312\\python.exe" "C:\\Users\\me\\a4sx\\amdx.py" %*\r\n' };
+    const exists = (p: string) => p === "C:\\Python312\\python.exe" || p === "C:\\Users\\me\\a4sx\\amdx.py";
+    assert.deepStrictEqual(directLaunch("C:\\Users\\me\\bin\\a4sx.cmd", (p) => files[p], exists, "win32"),
+      { exe: "C:\\Python312\\python.exe", pre: ["C:\\Users\\me\\a4sx\\amdx.py"] });
+    assert.strictEqual(directLaunch("C:\\Users\\me\\bin\\a4sx.cmd", (p) => files[p], () => false, "win32"), undefined, "gone: the launcher");
+    assert.strictEqual(directLaunch("/usr/local/bin/a4sx", () => "", () => true, "linux"), undefined);
+    assert.strictEqual(directLaunch("C:\\a.cmd", () => "@echo off\r\nrem something else", () => true, "win32"), undefined);
+  });
+
+  it("after Start agent host, the status is read again a few times", async () => {
+    const p = new CellsProvider({ resolve: () => ({ kind: "found", path: CLI }), run: async () => ({ code: 0, stdout: "", stderr: "" }),
+      server: () => BASE, onState: () => undefined });
+    let fired = 0;
+    p.onDidChangeTreeData(() => fired++);
+    p.rereadHostSoon([1, 2]);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.strictEqual(fired, 2);
   });
 });

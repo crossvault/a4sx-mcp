@@ -69,6 +69,24 @@ export function isOpen(s: { open: { name: string; mesh: string }[] } | undefined
     || (o.mesh === "standalone" && !cell.meshId)));
 }
 
+/**
+ * cell01 (Windows): Ctrl+C on a host started through the a4sx.cmd launcher asks "Terminate batch job (Y/N)?". The
+ * launcher the CLI writes is one line, `@"<python>" "<script>" %*`: started as python with the script instead,
+ * Ctrl+C just stops the host. undefined when `cli` is no such launcher (then the CLI itself is started).
+ */
+export function directLaunch(cli: string, read: (p: string) => string | undefined, exists: (p: string) => boolean,
+  platform: NodeJS.Platform = process.platform): { exe: string; pre: string[] } | undefined {
+  if (platform !== "win32" || !/\.(cmd|bat)$/i.test(cli)) {
+    return undefined;
+  }
+  const text = read(cli);
+  const m = text ? /^@"([^"\r\n]+)"\s+"([^"\r\n]+)"\s+%\*\s*$/.exec(text.trim()) : null;
+  if (!m || !/^[A-Za-z]:\\/.test(m[1]) || !/^[A-Za-z]:\\/.test(m[2]) || !exists(m[1]) || !exists(m[2])) {
+    return undefined;
+  }
+  return { exe: m[1], pre: [m[2]] };
+}
+
 /** True when the CLI has no `agent-host status` (argparse's "invalid choice"). */
 export function lacksAgentHost(stderr: string): boolean {
   return /invalid choice|unrecognized arguments/.test(stderr);
@@ -93,7 +111,9 @@ export const AGENT_HOST_TEXTS = {
   setup: "Set up the Agents window",
   setupTooltip: "Runs `a4sx agent-host setup-vscode` in a terminal: it points VS Code's Agents window at the agent host on this computer, says what it changed, and starts the agent host there when it isn't running.",
   openMark: "open in the Agents window",
-  lastError: (text: string, at?: string) => `Last error${at ? ` (${at})` : ""}: ${text}`,
+  // cell01: the row is cut at the default width: a short label, the whole text in its tooltip
+  lastError: (text: string) => `Last error: ${text.length > 48 ? `${text.slice(0, 47)}…` : text}`,
+  lastErrorTooltip: (text: string, at?: string) => `Last error of the agent host${at ? ` (${at})` : ""}: ${text}`,
   startTerminal: "a4sx: agent host",
   setupTerminal: "a4sx: set up the Agents window",
 };

@@ -53,7 +53,7 @@ describe("Cells: tags and the policy summary (0.7.0, a4sx #1861)", () => {
     assert.deepStrictEqual(c.tags, ["tag:ci", "tag:gpu"]);
     assert.deepStrictEqual(c.policy, { basis: "preset", policyRev: 7, canTalkTo: 3, reachableFrom: 3, url: URL_OK });
     assert.strictEqual(cellPolicySummary(c), "traffic: Open · can talk to 3");
-    assert.strictEqual(localCellDescription(c, BASE, true), "stored · registry active · path lan · tag:ci tag:gpu · traffic: Open · can talk to 3");
+    assert.strictEqual(localCellDescription(c, BASE, true), "stored · registry active · path lan · tag:ci tag:gpu");   // #2301 (cell01): the preset is in the tooltip, not the row
     const tip = localCellTooltip(c, BASE).split("\n");
     assert.ok(tip.includes("Tags: tag:ci, tag:gpu"));
     assert.ok(tip.includes("traffic: Open · can talk to 3"));
@@ -165,7 +165,7 @@ describe("Cells: tags and the policy summary (0.7.0, a4sx #1861)", () => {
     }));
     assert.deepStrictEqual(shownTags(c), ["tag:ci", "tag:a4sx-ok", "tag:gpu"]);
     const desc = localCellDescription(c, BASE, true);
-    assert.strictEqual(desc, "stored · registry active · path lan · tag:ci tag:a4sx-ok tag:gpu · traffic: Open · can talk to 3");
+    assert.strictEqual(desc, "stored · registry active · path lan · tag:ci tag:a4sx-ok tag:gpu");
     assert.ok(!/[<>[\]$‮]/.test(desc + localCellTooltip(c, BASE)));
   });
 
@@ -176,8 +176,8 @@ describe("Cells: tags and the policy summary (0.7.0, a4sx #1861)", () => {
       row27({ name: "old", instance_id: "ins_O1" }),
     ] });
     assert.deepStrictEqual(items.map((i) => [i.label, i.description, i.contextValue]), [
-      ["build", "default · stored · registry active · path lan · tag:ci tag:gpu · traffic: Open · can talk to 3", "a4sx.localCell.default.policy"],
-      ["docs", "stored · registry active · path lan · traffic: Own cells", "a4sx.localCell.policy"],
+      ["build", "default · stored · registry active · path lan · tag:ci tag:gpu", "a4sx.localCell.default.policy"],
+      ["docs", "stored · registry active · path lan", "a4sx.localCell.policy"],
       ["old", "stored · registry active · path lan", "a4sx.localCell"],
     ]);
     assert.ok(items.every((i) => typeof i.tooltip === "string"));

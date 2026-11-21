@@ -177,7 +177,9 @@ export function thisComputerChildren(host: AgentHostStatus): vscode.TreeItem[] {
     out.push(setup);
   }
   if (host.lastError) {
-    out.push(new MessageItem(AGENT_HOST_TEXTS.lastError(host.lastError.text, host.lastError.at), "warning"));
+    const err = new MessageItem(AGENT_HOST_TEXTS.lastError(host.lastError.text), "warning");
+    err.tooltip = AGENT_HOST_TEXTS.lastErrorTooltip(host.lastError.text, host.lastError.at);
+    out.push(err);
   }
   return out;
 }
@@ -326,6 +328,19 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
         // #2301 E2: the agent host, above the meshes (with no cells, the welcome text stays)
         return load.cells.length ? [new ThisComputerItem(), ...groups] : groups;
       }
+    }
+  }
+
+  /**
+   * cell01: after Start agent host (or Set up), the status is read again a few times, so This computer shows the host
+   * running without a manual Refresh. Each re-read replaces the last one; nothing else is read again.
+   */
+  rereadHostSoon(delays: readonly number[] = [3_000, 8_000, 15_000]): void {
+    for (const ms of delays) {
+      setTimeout(() => {
+        this.host = undefined;
+        this.changed.fire();
+      }, ms).unref?.();
     }
   }
 
