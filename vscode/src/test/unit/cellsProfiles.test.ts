@@ -636,7 +636,7 @@ describe("Run as cell in terminal", () => {
 
   it("the menu item on My sessions, hidden from the palette", () => {
     const m = pkg.contributes.menus["view/item/context"].find((x: any) => x.command === "a4sx.runAsCell");
-    assert.deepStrictEqual([m.when, m.group], ["view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/", "1_session@3"]);
+    assert.deepStrictEqual([m.when, m.group], ["view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?(\\.cli)?$/", "1_session@3"]);
     assert.strictEqual(pkg.contributes.commands.find((c: any) => c.command === "a4sx.runAsCell").title, "Run as cell in terminal");
     for (const id of ["a4sx.runAsCell", "a4sx.stopCell", "a4sx.renameCell", "a4sx.copyCellLaunch", "a4sx.duplicateProfile", "a4sx.setDefaultProfile"]) {
       assert.ok(pkg.contributes.menus.commandPalette.some((x: any) => x.command === id && x.when === "false"), id);

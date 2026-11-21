@@ -500,7 +500,9 @@ describe("manifest", () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "package.json"), "utf8"));
 
   it("Resume in Claude Code sits next to Resume in terminal and is hidden from the palette", () => {
-    const menu = pkg.contributes.menus["view/item/context"].filter((m: any) => m.when === "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/");
+    // #2309: rows listed through the a4sx CLI (".cli") get every action but Resume in Claude Code
+    const menu = pkg.contributes.menus["view/item/context"].filter((m: any) => m.when === "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/"
+      || m.when === "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?(\\.cli)?$/");
     const group = (cmd: string, prefix: string) => menu.find((m: any) => m.command === cmd && m.group.startsWith(prefix))?.group;
     assert.strictEqual(group(ext.CMD_RESUME, "inline"), "inline@1");
     assert.strictEqual(group(ext.CMD_RESUME_CLAUDE, "inline"), "inline@2");

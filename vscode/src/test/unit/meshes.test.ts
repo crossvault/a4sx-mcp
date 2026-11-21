@@ -8,7 +8,7 @@ import * as path from "path";
 import { calls, fakeMemento, fakeSecrets, resetCalls } from "../fakeVscode";
 import * as ext from "../../extension";
 import * as api from "../../api";
-import { LoginRequest, SECRET_KEY } from "../../auth";
+import { LoginRequest, MESH_SECRET_KEY, SECRET_KEY } from "../../auth";
 import {
   BACKOFF_CAP_MS, cellDescription, isMine, isolationText, oneLine, osText, safeScope, startable, statusText, cellTooltip, detect, isTierCWindows, lastSeenText, listMeshes, listMyCells, Machine, MAX_PAGES, Mesh,
   MESH_TEXTS, MeshLoader, meshesPageUrl, meshInviteUrl, meshLaunchArgs, meshPageUrl, meshTree, parseCell, parseMachine, parseMesh, POLL_MS,
@@ -405,10 +405,16 @@ describe("meshes: feature detection", () => {
     await flush();
     assert.strictEqual(logins.length, 1);
     assert.strictEqual(logins[0].adding, "mesh:read");
-    assert.deepStrictEqual([...logins[0].scopes].sort(), ["library:organize", "library:read", "mesh:read", "profiles:read"]);
+    // #2309: a key with mesh:read alone (the server refuses mesh scopes mixed with others), stored apart
+    assert.deepStrictEqual([...logins[0].scopes], ["mesh:read"]);
     await sb.meshes.refresh();
     assert.deepStrictEqual((await sb.meshes.getChildren()).map((i) => i.label), ["Alpha team", "Beta", "Empty mesh", "Old project"]);
     assert.strictEqual(net.seen.at(-1)!.headers.Authorization, `Bearer ${NEW_TOKEN}`, "the new key is used after the step-up");
+    // #2309: the sign-in itself stays as it was (never replaced, never revoked); the mesh key is stored apart
+    const { ctx } = { ctx: (disposeLater as any) };
+    assert.strictEqual(JSON.parse(ctx.secrets.store_.get(SECRET_KEY)).token, TOKEN);
+    assert.strictEqual(JSON.parse(ctx.secrets.store_.get(MESH_SECRET_KEY)).token, NEW_TOKEN);
+    assert.ok(!net.seen.some((r) => new URL(r.url).pathname === "/library/keys/self/revoke"), "the sign-in isn't revoked");
     nothingLeaked();
   });
 
@@ -1168,5 +1174,74 @@ describe("meshes: manifest", () => {
   it("user-facing strings say a4sx only", () => {
     const text = JSON.stringify(pkg.contributes) + JSON.stringify(MESH_TEXTS);
     assert.ok(!/agent-mdx|amdx|polaris/i.test(text));
+  });
+});
+
+
+describe("#2309: the mesh-only key", () => {
+  beforeEach(resetCalls);
+  const meshKey = (forId = "t1") => JSON.stringify({ token: "mesh_tok", server: BASE, id: "m1", scopes: ["mesh:read"], forId });
+  const revokes = (net: any) => net.seen.filter((r: any) => new URL(r.url).pathname === "/library/keys/self/revoke");
+
+  it("a refused mesh-read sign-in (a server without mesh scopes) says meshes aren't available there", async () => {
+    await activateWith({ "GET /meshes": [SCOPE_DENIED] }, ["library:read"]);
+    ext.runtime.login = async () => { throw new api.ApiError("bad-scopes", "x"); };
+    await calls.commands.get(ext.CMD_ALLOW_SCOPE)!("mesh:read");
+    await flush();
+    assert.ok(calls.errors.some((e) => e.message === MESH_TEXTS.notSupported), JSON.stringify(calls.errors));
+  });
+
+  it("a 401 for the mesh key forgets only it and says so; the sign-in stays", async () => {
+    const { ctx, sb } = await activateWith({ "GET /meshes": [ok(MESHES), { status: 401, body: { error: { code: "not_logged_in" } } }, SCOPE_DENIED] },
+      ["library:read"]);
+    await ctx.secrets.store(MESH_SECRET_KEY, meshKey());
+    await sb.meshes.refresh();
+    await flush();
+    assert.strictEqual(ctx.secrets.store_.get(MESH_SECRET_KEY), undefined);
+    assert.ok(ctx.secrets.store_.get(SECRET_KEY), "the sign-in stays");
+    assert.ok(calls.warnings.includes(MESH_TEXTS.meshKeyEnded), JSON.stringify(calls.warnings));
+  });
+
+  it("the mesh key never outlives its sign-in: forgotten (and revoked) with it, and never another account's", async () => {
+    const REV = { status: 200, body: { status: "revoked" } };
+    const { ctx, sb, net } = await activateWith({ "GET /meshes": [ok(MESHES), ok(MESHES), ok(MESHES)], "POST /library/keys/self/revoke": [REV, REV, REV] },
+      ["library:read"]);
+    await ctx.secrets.store(MESH_SECRET_KEY, meshKey());
+    await sb.auth.clear();                                   // a 401 elsewhere, or an expired sign-in
+    assert.strictEqual(ctx.secrets.store_.get(MESH_SECRET_KEY), undefined);
+    assert.strictEqual(revokes(net).length, 1, "the mesh key is revoked on the server");
+    // a new sign-in (another id): an old mesh key isn't used, and is dropped
+    await ctx.secrets.store(SECRET_KEY, JSON.stringify({ token: "other", server: BASE, id: "t9", scopes: ["library:read"] }));
+    await ctx.secrets.store(MESH_SECRET_KEY, meshKey("t1"));
+    assert.strictEqual(await sb.auth.meshToken(), "other");
+    assert.strictEqual(ctx.secrets.store_.get(MESH_SECRET_KEY), undefined);
+  });
+
+  it("sign-out revokes both keys and forgets both", async () => {
+    const REV = { status: 200, body: { status: "revoked" } };
+    const { ctx, sb, net } = await activateWith({ "GET /meshes": [ok(MESHES)], "POST /library/keys/self/revoke": [REV, REV] }, ["library:read"]);
+    await ctx.secrets.store(MESH_SECRET_KEY, meshKey());
+    await sb.auth.signOut();
+    assert.strictEqual(ctx.secrets.store_.get(MESH_SECRET_KEY), undefined);
+    assert.strictEqual(ctx.secrets.store_.get(SECRET_KEY), undefined);
+    assert.deepStrictEqual(revokes(net).map((r: any) => r.headers.Authorization).sort(), [`Bearer ${TOKEN}`, "Bearer mesh_tok"].sort());
+  });
+
+  it("a profiles step-up (a new sign-in id) keeps the mesh key: same token, never revoked", async () => {
+    const REV = { status: 200, body: { status: "revoked" } };
+    const { ctx, sb, net } = await activateWith({ "GET /meshes": [ok(MESHES), ok(MESHES)], "POST /library/keys/self/revoke": [REV, REV] },
+      ["library:read"]);
+    await ctx.secrets.store(MESH_SECRET_KEY, meshKey("t1"));
+    await sb.auth.stepUp("profiles:write");                  // the fake login returns id "t2"
+    assert.strictEqual(JSON.parse(ctx.secrets.store_.get(MESH_SECRET_KEY)!).forId, "t2");
+    assert.strictEqual(await sb.auth.meshToken(), "mesh_tok");
+    assert.ok(!revokes(net).some((r: any) => r.headers.Authorization === "Bearer mesh_tok"), "the mesh key isn't revoked");
+  });
+
+  it("another server set: the mesh key is ignored, not dropped (only its server could revoke it)", async () => {
+    const { ctx, sb } = await activateWith({ "GET /meshes": [ok(MESHES)] }, ["library:read"]);
+    await ctx.secrets.store(MESH_SECRET_KEY, JSON.stringify({ token: "mesh_tok", server: "https://other.example", id: "m1", scopes: ["mesh:read"], forId: "t1" }));
+    assert.strictEqual(await sb.auth.meshKey(), undefined);
+    assert.ok(ctx.secrets.store_.get(MESH_SECRET_KEY), "kept");
   });
 });

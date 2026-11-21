@@ -70,6 +70,7 @@ export async function offerStepUp(auth: ScopedAuth, scope: string, ask = true): 
       return undefined;
     }
     if (e instanceof ApiError && e.code === "bad-scopes") {
+      // review: with a mesh-only key the one refusal left is a server without mesh scopes, so "not available" is right
       await vscode.window.showErrorMessage(notSupportedFor(scope));
       return undefined;
     }

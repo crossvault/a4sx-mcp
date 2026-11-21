@@ -16,6 +16,7 @@ export const LIST_ARGS = ["list", "--json"] as const;
 export const CLI_LIBRARY_TEXTS = {
   via: "Listed with the a4sx CLI's sign-in on this computer. Sign in here too to save, publish or open a session in Claude Code from VS Code.",
   empty: "Your library has no sessions yet (listed with the a4sx CLI's sign-in on this computer).",
+  viaShort: "(Listed with the a4sx CLI's sign-in.)",
 };
 
 function isObject(v: unknown): v is Record<string, unknown> {

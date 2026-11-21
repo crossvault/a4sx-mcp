@@ -17,6 +17,8 @@ export const MESH_TEXTS = {
   needsSignin: "Viewing your meshes needs a sign-in on the a4sx website first.",
   openInBrowser: "Open in browser",
   allowMeshRead: "Allow mesh read",
+  // review: a 401 for the mesh-only key: the sign-in stays
+  meshKeyEnded: "Your sign-in for mesh read is no longer valid. Choose Allow mesh read to sign in for it again; your other sign-in still works.",
   noMeshes: "You're not in a mesh yet. Create one or redeem an invite in your browser.",
   noCells: "No cells of yours in this mesh yet. Start a session in it.",
   cellsNotYet: "Cells appear here once your server supports it.",

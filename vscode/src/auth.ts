@@ -15,6 +15,11 @@ import {
 export const AUTH_ID = "a4sx";
 export const AUTH_LABEL = "a4sx";
 export const SECRET_KEY = "a4sx.auth";
+/**
+ * #2309: the server never puts mesh scopes into one key with others (accounts.py: "Mesh scopes can't be combined
+ * with other scopes in one key"), so "Allow mesh read" signs in for a key with mesh:read alone, stored here, apart.
+ */
+export const MESH_SECRET_KEY = "a4sx.auth.mesh";
 /** The poll interval of `a4sx login`; tests shorten it. */
 export const timing = { pollMs: 2000 };
 
@@ -94,8 +99,11 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
     private readonly login: (client: Client, req: LoginRequest) => Promise<Stored>,
   ) {}
 
-  private async read(): Promise<Stored | undefined> {
-    const raw = await this.secrets.get(SECRET_KEY);
+  /** review: true while a step-up stores the new sign-in and re-ties the mesh key to it. */
+  private retying = false;
+
+  private async read(key: string = SECRET_KEY): Promise<Stored | undefined> {
+    const raw = await this.secrets.get(key);
     if (!raw) {
       return undefined;
     }
@@ -156,16 +164,104 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
     if (![SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, SCOPE_ORGANIZE, SCOPE_MESH_READ].includes(scope)) {
       throw new ApiError("bad-scopes", MESSAGES.needsScope(scope));
     }
+    if (scope === SCOPE_MESH_READ) {   // #2309: a key of its own (the server refuses mesh scopes mixed with others)
+      return this.signInMesh();
+    }
     const have = (await this.current())?.scopes ?? LOGIN_SCOPES;
     const scopes = [...new Set([...have, scope])];
     const session = await this.signInWith({ scopes, fallback: false, adding: scope });
     return session.accessToken;
   }
 
+  /** #2309: the mesh-only key, if it was issued by the current server and has not expired. */
+  async meshKey(): Promise<Stored | undefined> {
+    const s = await this.read(MESH_SECRET_KEY) as (Stored & { forId?: string }) | undefined;
+    if (!s) {
+      return undefined;
+    }
+    let base: string;
+    try {
+      base = this.client().base;
+    } catch {
+      return undefined;
+    }
+    if (s.server !== base) {
+      return undefined;   // another server set now: ignored, kept (only its own server can revoke it)
+    }
+    const main = await this.current();
+    // review: a mesh key belongs to the sign-in it was made for (another account's, after a new sign-in: never)
+    if (!main || s.forId !== main.id || (s.expiresAt && Date.parse(s.expiresAt) <= Date.now())) {
+      if (!this.retying) {   // review: never dropped while a step-up re-ties it to the new sign-in
+        await this.dropMesh();
+      }
+      return undefined;
+    }
+    return s;
+  }
+
+  /** review: revokes (best-effort) and forgets the mesh-only key. */
+  private async dropMesh(): Promise<void> {
+    const old = await this.read(MESH_SECRET_KEY);
+    if (!old) {
+      return;
+    }
+    await this.secrets.delete(MESH_SECRET_KEY);
+    try {
+      await this.revoke(old);
+    } catch {
+      // best-effort: it is forgotten here either way
+    }
+  }
+
+  /**
+   * #2309: the key the Meshes view uses: the mesh-only key, else the sign-in (an older key that already holds
+   * mesh:read, or one without it: the server's 403 then offers "Allow mesh read").
+   */
+  async meshToken(): Promise<string | undefined> {
+    const main = await this.token();   // no sign-in: no mesh read either (the mesh key goes with it)
+    if (!main) {
+      return undefined;
+    }
+    return (await this.meshKey())?.token ?? main;
+  }
+
+  /** #2309: forgets the mesh-only key (a 401 for it, or sign-out). The sign-in stays. */
+  async clearMesh(): Promise<void> {
+    if (await this.secrets.get(MESH_SECRET_KEY)) {
+      await this.secrets.delete(MESH_SECRET_KEY);   // a 401: the server refused it already, nothing to revoke
+      this.changed.fire({ added: [], removed: [], changed: [] });
+    }
+  }
+
+  private async signInMesh(): Promise<string> {
+    const main = await this.current();
+    if (!main) {
+      throw new ApiError("unauthorized", "Sign in to a4sx first.");
+    }
+    const stored = await this.login(this.client(), { scopes: [SCOPE_MESH_READ], fallback: false, adding: SCOPE_MESH_READ });
+    const old = await this.read(MESH_SECRET_KEY);
+    await this.secrets.store(MESH_SECRET_KEY, JSON.stringify({ ...stored, forId: main.id }));   // tied to the sign-in
+    this.changed.fire({ added: [], removed: [], changed: [] });   // the views read their keys again
+    if (old && old.token !== stored.token && old.server === stored.server) {
+      await this.revoke(old);   // only the replaced mesh key; the sign-in is never touched
+    }
+    return stored.token;
+  }
+
   private async signInWith(req: LoginRequest): Promise<vscode.AuthenticationSession> {
     const stored = await this.login(this.client(), req);
     const old = await this.read();
-    await this.secrets.store(SECRET_KEY, JSON.stringify(stored));
+    this.retying = true;
+    try {
+      await this.secrets.store(SECRET_KEY, JSON.stringify(stored));
+      // review: a step-up (profiles, folders) replaces the sign-in with a new id: its mesh key goes with it
+      const mesh = req.adding && old ? await this.read(MESH_SECRET_KEY) as (Stored & { forId?: string }) | undefined : undefined;
+      if (mesh && old && mesh.forId === old.id) {
+        await this.secrets.store(MESH_SECRET_KEY, JSON.stringify({ ...mesh, forId: stored.id }));
+      }
+    } finally {
+      this.retying = false;
+    }
     const session = this.toSession(stored);
     this.changed.fire({ added: [session], removed: old ? [this.toSession(old)] : [], changed: [] });
     // A step-up replaced the key: the old one is no longer needed. Only after the new one is stored.
@@ -195,6 +291,11 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
    * Resolves to undefined when no key was stored.
    */
   async signOut(): Promise<RevokeResult | undefined> {
+    const mesh = await this.read(MESH_SECRET_KEY);   // #2309: the mesh-only key goes with the sign-in
+    if (mesh) {
+      await this.revoke(mesh);
+      await this.secrets.delete(MESH_SECRET_KEY);
+    }
     const old = await this.read();
     const result = old ? await this.revoke(old) : undefined;
     await this.clear();
@@ -204,6 +305,7 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
   /** Forgets the token on this machine (sign-out, or a 401 from the server). */
   async clear(): Promise<void> {
     const old = await this.read();
+    await this.dropMesh();   // review: the mesh key never outlives the sign-in it belongs to
     await this.secrets.delete(SECRET_KEY);
     if (old) {
       this.changed.fire({ added: [], removed: [this.toSession(old)], changed: [] });

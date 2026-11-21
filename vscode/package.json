@@ -584,7 +584,7 @@
         },
         {
           "command": "a4sx.resumeSession",
-          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/",
+          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?(\\.cli)?$/",
           "group": "inline@1"
         },
         {
@@ -594,12 +594,12 @@
         },
         {
           "command": "a4sx.openSessionOnWeb",
-          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/",
+          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?(\\.cli)?$/",
           "group": "inline@3"
         },
         {
           "command": "a4sx.resumeSession",
-          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/",
+          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?(\\.cli)?$/",
           "group": "1_session@1"
         },
         {
@@ -609,22 +609,22 @@
         },
         {
           "command": "a4sx.runAsCell",
-          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/",
+          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?(\\.cli)?$/",
           "group": "1_session@3"
         },
         {
           "command": "a4sx.openSessionOnWeb",
-          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/",
+          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?(\\.cli)?$/",
           "group": "1_session@4"
         },
         {
           "command": "a4sx.copySessionId",
-          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/",
+          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?(\\.cli)?$/",
           "group": "1_session@5"
         },
         {
           "command": "a4sx.moveToFolder",
-          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?$/ && a4sx.foldersSupported",
+          "when": "view == a4sx.sessions && viewItem =~ /^a4sx\\.session(\\.filed)?(\\.cli)?$/ && a4sx.foldersSupported",
           "group": "2_folder@1"
         },
         {
