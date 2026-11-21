@@ -203,7 +203,9 @@ export const LOGIN_LABEL = "a4sx for VS Code";
 export async function startLogin(c: Client, scopes: readonly string[] = LOGIN_SCOPES): Promise<LoginStart> {
   const { status, data } = await call(c, "/auth/cli/start", {
     method: "POST",
-    body: { token_type: "library", scopes: [...scopes], label: LOGIN_LABEL },
+    // a4sx #2324 (owner box A): the browser pages then name VS Code, not the terminal; a wording hint only (servers
+    // before it ignore the field)
+    body: { token_type: "library", scopes: [...scopes], label: LOGIN_LABEL, client: "vscode" },
   });
   if (status === 400 && errorCode(data) === "bad_scopes") {
     // A server that doesn't offer one of these scopes yet.
