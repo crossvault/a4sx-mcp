@@ -9,14 +9,14 @@ import { CELL_NAME, showText } from "./cells";
 
 export const AGENT_HOST_STATUS_ARGS = ["agent-host", "status", "--json"] as const;
 export const AGENT_HOST_START_ARGS = ["agent-host"] as const;
-export const AGENT_HOST_SETUP_ARGS = ["setup-vscode"] as const;
+export const AGENT_HOST_SETUP_ARGS = ["agent-host", "setup-vscode"] as const;
 
 export interface AgentHostStatus {
   running: boolean;
   /** ws://127.0.0.1:8765/ while it runs. */
   address?: string;
-  /** Cell names open in the Agents window now. */
-  open: string[];
+  /** The cells open in the Agents window now: the CLI writes "name (mesh)", or "name (plain)" for a plain session. */
+  open: { name: string; mesh: string }[];
   /** Per editor (code, code-insiders, …): "ok" or what is wrong; undefined when setup-vscode never ran. */
   editors?: Record<string, string>;
   lastError?: { at?: string; text: string };
@@ -38,7 +38,13 @@ export function parseAgentHostStatus(stdout: string): AgentHostStatus | undefine
     return undefined;
   }
   const address = typeof raw.address === "string" && /^ws:\/\/[A-Za-z0-9.:[\]-]{1,80}\/?$/.test(raw.address) ? raw.address : undefined;
-  const open = Array.isArray(raw.open) ? raw.open.filter((n): n is string => typeof n === "string" && CELL_NAME.test(n)).slice(0, 64) : [];
+  const open: { name: string; mesh: string }[] = [];
+  for (const e of Array.isArray(raw.open) ? raw.open.slice(0, 64) : []) {
+    const m = typeof e === "string" ? /^(\S{1,64}) \((.{1,128})\)$/.exec(e) : null;
+    if (m && CELL_NAME.test(m[1]) && m[2] !== "plain" && showText(m[2], 128) === m[2]) {
+      open.push({ name: m[1], mesh: m[2] });
+    }
+  }
   let editors: Record<string, string> | undefined;
   const vs = isObject(raw.vscode) && isObject(raw.vscode.editors) ? raw.vscode.editors : undefined;
   if (vs) {
@@ -57,6 +63,17 @@ export function parseAgentHostStatus(stdout: string): AgentHostStatus | undefine
     lastError: text ? { at, text } : undefined };
 }
 
+/** Whether `cell` is one of the open ones: its name, and its mesh by name or id (the CLI's "name (mesh)"). */
+export function isOpen(s: { open: { name: string; mesh: string }[] } | undefined, cell: { name: string; meshId?: string; meshName?: string }): boolean {
+  return !!s && s.open.some((o) => o.name === cell.name && (o.mesh === cell.meshName || o.mesh === cell.meshId
+    || (o.mesh === "standalone" && !cell.meshId)));
+}
+
+/** True when the CLI has no `agent-host status` (argparse's "invalid choice"). */
+export function lacksAgentHost(stderr: string): boolean {
+  return /invalid choice|unrecognized arguments/.test(stderr);
+}
+
 /** True when every editor setup-vscode set up still points at the agent host. */
 export function agentsWindowSetUp(s: AgentHostStatus): boolean {
   const states = Object.values(s.editors ?? {});
@@ -65,14 +82,16 @@ export function agentsWindowSetUp(s: AgentHostStatus): boolean {
 
 export const AGENT_HOST_TEXTS = {
   node: "This computer",
-  unknown: "agent host: no answer from `a4sx agent-host status` (update a4sx to see it here)",
+  unknown: "agent host: this a4sx CLI has no `agent-host status`; update a4sx to see it here",
+  notJson: "its answer wasn't the JSON this extension reads",
+  failed: (why: string) => `agent host: \`a4sx agent-host status\` failed: ${why}`,
   running: (address: string) => `agent host running · ${address.replace(/^ws:\/\//, "").replace(/\/$/, "")}`,
   stopped: "agent host not running",
   runningTooltip: (address: string) => `The a4sx agent host runs on this computer at ${address}. VS Code's Agents window reaches your cells through it.`,
   stoppedTooltip: "The a4sx agent host doesn't run on this computer, so VS Code's Agents window can't reach your cells. Start it in a terminal: it runs until you stop it (Ctrl+C) or close that terminal.",
   start: "Start agent host",
   setup: "Set up the Agents window",
-  setupTooltip: "Runs `a4sx setup-vscode` in a terminal: it points VS Code's Agents window at the agent host on this computer, and says what it changed.",
+  setupTooltip: "Runs `a4sx agent-host setup-vscode` in a terminal: it points VS Code's Agents window at the agent host on this computer, says what it changed, and starts the agent host there when it isn't running.",
   openMark: "open in the Agents window",
   lastError: (text: string, at?: string) => `Last error${at ? ` (${at})` : ""}: ${text}`,
   startTerminal: "a4sx: agent host",

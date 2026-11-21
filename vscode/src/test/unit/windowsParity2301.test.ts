@@ -132,22 +132,25 @@ describe("#2301 E1: Start on this computer", () => {
 });
 
 // ---- #2301 E2: This computer (the agent host) ------------------------------------------------------------------------
-import { AGENT_HOST_TEXTS, parseAgentHostStatus } from "../../agentHostStatus";
+import { AGENT_HOST_SETUP_ARGS, AGENT_HOST_TEXTS, isOpen, parseAgentHostStatus } from "../../agentHostStatus";
 import { CELLS_LIST_ARGS } from "../../cells";
 import { LocalCellItem, MeshGroupItem, ThisComputerItem, thisComputerChildren } from "../../cellsView";
 
-const RUNNING = { running: true, proved: true, answering: true, pid: 4242, address: "ws://127.0.0.1:8765/", open: ["build"],
-  vscode: { address: "ws://127.0.0.1:8765", editors: { code: "ok" } }, last_error: null, cells: [] };
+// what `agent-host status --json` prints (review: "name (mesh)" entries, the editor keys stable/insiders/…)
+const RUNNING = { running: true, proved: true, answering: true, pid: 4242, address: "ws://127.0.0.1:8765/",
+  open: ["build (Team mesh)", "notes (plain)"], vscode: { address: "ws://127.0.0.1:8765", editors: { stable: "ok" } },
+  last_error: null, cells: [] };
 
 describe("#2301 E2: This computer", () => {
   beforeEach(resetCalls);
 
   it("reads `agent-host status --json`; anything else is no answer", () => {
     const s = parseAgentHostStatus(JSON.stringify(RUNNING))!;
-    assert.deepStrictEqual(s, { running: true, address: "ws://127.0.0.1:8765/", open: ["build"], editors: { code: "ok" }, lastError: undefined });
+    assert.deepStrictEqual(s, { running: true, address: "ws://127.0.0.1:8765/", open: [{ name: "build", mesh: "Team mesh" }],
+      editors: { stable: "ok" }, lastError: undefined });   // a plain session is no cell row
     assert.strictEqual(parseAgentHostStatus("usage: a4sx …"), undefined);
     assert.strictEqual(parseAgentHostStatus(JSON.stringify({ v: 1 })), undefined);
-    const odd = parseAgentHostStatus(JSON.stringify({ ...RUNNING, address: "ws://x/; rm", open: ["../x", "ok"] }))!;
+    const odd = parseAgentHostStatus(JSON.stringify({ ...RUNNING, address: "ws://x/; rm", open: ["../x (m)", "ok (m)"] }))!;
     assert.strictEqual(odd.running, false, "no usable address: not shown as running");
     assert.deepStrictEqual(odd.open, []);
   });
@@ -158,10 +161,14 @@ describe("#2301 E2: This computer", () => {
     const down = thisComputerChildren(parseAgentHostStatus(JSON.stringify({
       running: false, address: null, open: [], vscode: null, last_error: { at: "2026-11-21T16:00:00Z", text: "port 8765 is taken" },
     }))!);
-    assert.deepStrictEqual(down.map((i) => i.label), [AGENT_HOST_TEXTS.stopped, AGENT_HOST_TEXTS.start, AGENT_HOST_TEXTS.setup,
+    // review: not set up and stopped: only Set up (it starts the host too), never two terminals
+    assert.deepStrictEqual(down.map((i) => i.label), [AGENT_HOST_TEXTS.stopped, AGENT_HOST_TEXTS.setup,
       "Last error (2026-11-21T16:00:00Z): port 8765 is taken"]);
-    assert.strictEqual(down[1].command!.command, "a4sx.startAgentHost");
-    assert.strictEqual(down[2].command!.command, "a4sx.setupAgentsWindow");
+    assert.strictEqual(down[1].command!.command, "a4sx.setupAgentsWindow");
+    const setUpStopped = thisComputerChildren(parseAgentHostStatus(JSON.stringify({
+      running: false, address: null, open: [], vscode: { editors: { stable: "ok" } }, last_error: null }))!);
+    assert.deepStrictEqual(setUpStopped.map((i) => i.label), [AGENT_HOST_TEXTS.stopped, AGENT_HOST_TEXTS.start]);
+    assert.strictEqual(setUpStopped[1].command!.command, "a4sx.startAgentHost");
   });
 
   it("above the meshes when there are cells; its rows read the status once; open cells are marked", async () => {
@@ -186,6 +193,28 @@ describe("#2301 E2: This computer", () => {
     const group = (await p.getChildren()).find((i) => i instanceof MeshGroupItem)!;
     const build = (await p.getChildren(group)).find((i) => i instanceof LocalCellItem)!;
     assert.ok(String(build.description).endsWith("· open in the Agents window"), String(build.description));
+  });
+
+  it("the open mark matches name and mesh: a same-named cell in another mesh isn't marked", () => {
+    const s = parseAgentHostStatus(JSON.stringify(RUNNING))!;
+    assert.ok(isOpen(s, { name: "build", meshName: "Team mesh", meshId: "msh_x" }));
+    assert.ok(!isOpen(s, { name: "build", meshName: "Other", meshId: "msh_y" }));
+    assert.ok(isOpen(parseAgentHostStatus(JSON.stringify({ ...RUNNING, open: ["build (msh_x)"] }))!, { name: "build", meshId: "msh_x" }));
+  });
+
+  it("Set up runs `a4sx agent-host setup-vscode` (review: there is no top-level setup-vscode)", () => {
+    assert.deepStrictEqual([...AGENT_HOST_SETUP_ARGS], ["agent-host", "setup-vscode"]);
+    assert.ok(AGENT_HOST_TEXTS.setupTooltip.includes("a4sx agent-host setup-vscode"));
+  });
+
+  it("a failing `agent-host status`: the CLI's own line, not \"update a4sx\"", async () => {
+    const run = async (_c: string, args: readonly string[]): Promise<CliOutput> =>
+      args.join(" ") === "agent-host status --json" ? { code: 1, stdout: "", stderr: "a4sx: the state folder can't be read\n" }
+        : args.join(" ") === "--version" ? { code: 0, stdout: "a4sx 0.59.7\n", stderr: "" }
+          : { code: 0, stdout: JSON.stringify({ v: 1, default: null, cells: [row("active")] }), stderr: "" };
+    const p = new CellsProvider({ resolve: () => ({ kind: "found", path: CLI }), run, server: () => BASE, onState: () => undefined });
+    const rows = await p.getChildren((await p.getChildren())[0]);
+    assert.deepStrictEqual(rows.map((i) => i.label), [AGENT_HOST_TEXTS.failed("the state folder can't be read")]);
   });
 
   it("an older CLI without `agent-host status`: one row that says so", async () => {
