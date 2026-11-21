@@ -71,6 +71,8 @@ export interface Calls {
   tabGroups: { tabs: any[]; activeTab?: any }[];
   /** Tabs closed through vscode.window.tabGroups.close. */
   closedTabs: any[];
+  /** Status bar items made with createStatusBarItem, in order. */
+  statusBarItems: { id: string; alignment: number; priority?: number; name?: string; text: string; tooltip?: unknown; command?: unknown; shown: boolean; disposed: boolean }[];
 }
 
 export const calls: Calls = {
@@ -116,6 +118,7 @@ export const calls: Calls = {
   viewsVisible: false,
   tabGroups: [],
   closedTabs: [],
+  statusBarItems: [],
 };
 
 export function resetCalls(): void {
@@ -161,6 +164,7 @@ export function resetCalls(): void {
   calls.viewsVisible = false;
   calls.tabGroups = [];
   calls.closedTabs.length = 0;
+  calls.statusBarItems.length = 0;
 }
 
 function isModal(options: unknown): boolean {
@@ -260,6 +264,7 @@ const fake = {
   ProgressLocation: { Notification: 15, Window: 10 },
   QuickPickItemKind: { Separator: -1, Default: 0 },
   ExtensionKind: { UI: 1, Workspace: 2 },
+  StatusBarAlignment: { Left: 1, Right: 2 },
   commands: {
     registerCommand(id: string, fn: (...args: unknown[]) => unknown) {
       calls.commands.set(id, fn);
@@ -374,6 +379,12 @@ const fake = {
         },
       };
       return task({ report: (v: { message?: string }) => { if (v.message !== undefined) { rec.messages.push(v.message); } } }, token);
+    },
+    createStatusBarItem(id: string, alignment: number, priority?: number) {
+      const item = { id, alignment, priority, name: undefined as string | undefined, text: "", tooltip: undefined as unknown, command: undefined as unknown,
+        shown: false, disposed: false, show() { item.shown = true; }, hide() { item.shown = false; }, dispose() { item.disposed = true; } };
+      calls.statusBarItems.push(item);
+      return item;
     },
     async showOpenDialog(options: unknown) {
       calls.openDialogs.push(options);

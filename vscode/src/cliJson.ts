@@ -196,8 +196,19 @@ export interface RemoteCell {
   own: boolean;
   aid?: string;
   tier?: string;
+  /** The registry's word for the cell ("active", …). */
   state?: string;
+  /** cell01: whether it is connected now, as the CLI says it (`presence`); undefined from a CLI that doesn't. */
+  presence?: Presence;
   tags: string[];
+}
+
+export const PRESENCES = ["online", "offline"] as const;
+export type Presence = (typeof PRESENCES)[number];
+
+/** Connected now or not: the CLI's `presence`; from an older answer, a `state` that says the same. */
+export function peerPresence(p: Pick<RemoteCell, "presence" | "state">): Presence | undefined {
+  return p.presence ?? ((PRESENCES as readonly string[]).includes(p.state ?? "") ? (p.state as Presence) : undefined);
 }
 
 export function peersArgs(meshId: string): string[] | undefined {
@@ -234,6 +245,9 @@ export function parsePeersAnswer(stdout: string, meshId: string): RemoteCell[] |
     }
     if (state) {
       peer.state = state;
+    }
+    if (typeof p.presence === "string" && (PRESENCES as readonly string[]).includes(p.presence)) {
+      peer.presence = p.presence as Presence;
     }
     out.push(peer);
   }

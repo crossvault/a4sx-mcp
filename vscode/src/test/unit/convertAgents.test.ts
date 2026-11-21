@@ -196,7 +196,10 @@ describe("Convert an Agents-window session to a cell: the command", () => {
     calls.modalAnswers.set(AGENTS_TEXTS.confirm, AGENTS_TEXTS.confirmYes);
     calls.pickQueue.push(0);
     assert.strictEqual(await convertAgentSessionToCell(h.deps, { projectsDir: p.dir }), undefined);
-    assert.deepStrictEqual(calls.errors.map((e) => e.message), [AGENTS_TEXTS.noSessions, AGENTS_TEXTS.notResumable]);
+    // #2309 (h): no session is the usual case: an information notification, its first sentence short
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [AGENTS_TEXTS.notResumable]);
+    assert.ok(calls.infos.includes(AGENTS_TEXTS.noSessions));
+    assert.ok(AGENTS_TEXTS.noSessions.startsWith("Nothing to convert: no Agents-window session is on this computer"), "the point first, before VS Code cuts it");
     assert.match(AGENTS_TEXTS.noSessions, /nothing was started/);
     assert.match(AGENTS_TEXTS.noSessions, /remote agent host/);
     assert.match(AGENTS_TEXTS.notResumable, /nothing was started/);
