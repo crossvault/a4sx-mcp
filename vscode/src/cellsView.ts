@@ -332,6 +332,18 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
   }
 
   /**
+   * cell01: the host can stop without the view knowing (Ctrl+C in its terminal). While the Cells view is visible and
+   * VS Code has focus, the status (a local `agent-host status --json`, no server call) is read again every
+   * HOST_POLL_MS, and once when the window gets focus. Only This computer's rows and the open marks change.
+   */
+  rereadHostNow(): void {
+    if (this.load?.kind === "ok" && this.load.cells.length && !this.load.legacy) {
+      this.host = undefined;
+      this.changed.fire();
+    }
+  }
+
+  /**
    * cell01: after Start agent host (or Set up), the status is read again a few times, so This computer shows the host
    * running without a manual Refresh. Each re-read replaces the last one; nothing else is read again.
    */
@@ -379,7 +391,9 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
     const local: vscode.TreeItem[] = group.cells.map((c) => {
       const item = new LocalCellItem(c, group.all, server, group.legacy);
       if (isOpen(seen, c)) {   // #2301 E2: open in VS Code's Agents window now (by name and mesh)
-        item.description = [item.description, AGENT_HOST_TEXTS.openMark].filter(Boolean).join(" · ");
+        // cell01: first, so the default width never cuts it; and in the tooltip
+        item.description = [AGENT_HOST_TEXTS.openMark, item.description].filter(Boolean).join(" · ");
+        item.tooltip = `${AGENT_HOST_TEXTS.openTooltip}\n${String(item.tooltip ?? "")}`;
       }
       return item;
     });

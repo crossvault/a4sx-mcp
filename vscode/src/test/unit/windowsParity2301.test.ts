@@ -68,7 +68,8 @@ describe("#2301 E7: Cells first", () => {
 // ---- #2301 E1: Start on this computer, for your own cell on another machine -----------------------------------------
 import * as os from "os";
 import { calls, fakeMemento, resetCalls } from "../fakeVscode";
-import { startHereArgs } from "../../cells";
+import { cellLaunchArgs, startHereArgs } from "../../cells";
+import { hostStatusPoll } from "../../extension";
 import { CELL_CMD_TEXTS, CellCommandDeps, startCellHere } from "../../cellCommands";
 import { CellsProvider, CliOutput, RemoteCellItem } from "../../cellsView";
 
@@ -195,7 +196,9 @@ describe("#2301 E2: This computer", () => {
     assert.strictEqual(runs.filter((r) => r === "agent-host status --json").length, 1, "once per refresh");
     const group = (await p.getChildren()).find((i) => i instanceof MeshGroupItem)!;
     const build = (await p.getChildren(group)).find((i) => i instanceof LocalCellItem)!;
-    assert.ok(String(build.description).endsWith("· open in the Agents window"), String(build.description));
+    // cell01: first (the default width cut it at the end), and in the tooltip
+    assert.ok(String(build.description).startsWith("open in the Agents window · "), String(build.description));
+    assert.ok(String(build.tooltip).startsWith("Open in VS Code's Agents window now.\n"), String(build.tooltip));
   });
 
   it("the open mark matches name and mesh: a same-named cell in another mesh isn't marked", () => {
@@ -255,5 +258,43 @@ describe("cell01 on Windows: Ctrl+C on the agent host started from here asks not
     p.rereadHostSoon([1, 2]);
     await new Promise((r) => setTimeout(r, 20));
     assert.strictEqual(fired, 2);
+  });
+});
+
+describe("cell01 (#2301): --mesh only when another stored cell really has the name", () => {
+  it("a list read again (new objects) doesn't count the cell itself; a same-named cell in another mesh does", () => {
+    const mk = (name: string, meshId: string, instanceId: string) =>
+      ({ name, meshId, instanceId, isDefault: false, tags: [] } as unknown as import("../../cells").LocalCell);
+    const docs = mk("docs", MESH, "ins_A1");
+    const again = [mk("docs", MESH, "ins_A1"), mk("build", MESH, "ins_B1")];
+    assert.deepStrictEqual(cellLaunchArgs(docs, again), ["launch", "--cell", "docs"]);
+    const other = [...again, mk("docs", "msh_fedcba9876543210fedcba9876543210", "ins_C1")];
+    assert.deepStrictEqual(cellLaunchArgs(docs, other), ["launch", "--cell", "docs", "--mesh", MESH]);
+  });
+});
+
+
+describe("cell01 (#2301 E2): the host's status is read again while the view is visible", () => {
+  it("every interval while visible and focused; once on focus; never while hidden or unfocused", async () => {
+    const fake = require("../fakeVscode");
+    let n = 0;
+    let visible = true;
+    const vis: ((e: unknown) => void)[] = [];
+    const view = { get visible() { return visible; }, onDidChangeVisibility: (l: (e: unknown) => void) => { vis.push(l); return { dispose: () => undefined }; } };
+    const poll = hostStatusPoll(view as any, () => n++, 5);
+    await new Promise((r) => setTimeout(r, 22));
+    assert.ok(n >= 2, `read again while visible (${n})`);
+    visible = false;
+    vis.forEach((l) => l({}));
+    const at = n;
+    await new Promise((r) => setTimeout(r, 20));
+    assert.strictEqual(n, at, "not while hidden");
+    visible = true;
+    fake.windowFocus.fire({ focused: true });
+    assert.strictEqual(n, at + 1, "once when the window gets focus");
+    poll.dispose();
+    const done = n;
+    await new Promise((r) => setTimeout(r, 15));
+    assert.strictEqual(n, done, "nothing after dispose");
   });
 });

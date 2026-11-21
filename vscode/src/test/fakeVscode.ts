@@ -246,6 +246,9 @@ class McpHttpServerDefinition {
   constructor(public label: string, public uri: Uri, public headers: Record<string, string> = {}, public version?: string) {}
 }
 
+/** #2301 E2: the window's focus changes (tests fire it). */
+export const windowFocus = new EventEmitter<{ focused: boolean }>();
+
 const fake = {
   Uri,
   EventEmitter,
@@ -336,6 +339,9 @@ const fake = {
       calls.inputs.push(options);
       return calls.inputQueue.length ? calls.inputQueue.shift() : calls.nextInput;
     },
+    /** #2301 E2: the window's focus (tests: windowFocus.fire({ focused })). */
+    state: { focused: true },
+    onDidChangeWindowState: windowFocus.event,
     registerTreeDataProvider(id: string, provider: unknown) {
       calls.treeProviders.set(id, provider);
       return { dispose: () => calls.treeProviders.delete(id) };
