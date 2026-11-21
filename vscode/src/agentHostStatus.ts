@@ -113,6 +113,7 @@ export const AGENT_HOST_TEXTS = {
   setup: "Set up the Agents window",
   setupTooltip: "Runs `a4sx agent-host setup-vscode` in a terminal: it points VS Code's Agents window at the agent host on this computer, says what it changed, and starts the agent host there when it isn't running.",
   openMark: "open in the Agents window",
+  openTooltip: "Open in VS Code's Agents window now.",
   // cell01: the row is cut at the default width: a short label, the whole text in its tooltip
   lastError: (text: string) => `Last error: ${text.length > 48 ? `${text.slice(0, 47)}…` : text}`,
   lastErrorTooltip: (text: string, at?: string) => `Last error of the agent host${at ? ` (${at})` : ""}: ${text}`,

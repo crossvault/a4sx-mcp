@@ -909,6 +909,38 @@ export { CMD_CELL_MESSAGES, CMD_CELL_EXPLAIN, CMD_CELL_SAVE, CMD_CELL_FROM_SAVED
 /** The output channel the cell-row actions print what the a4sx CLI answered into (made on first use). */
 export const OUTPUT_CHANNEL = "a4sx";
 
+/** How often This computer's status is read again while the Cells view is visible and focused (cell01, #2301 E2). */
+export const HOST_POLL_MS = 30_000;
+
+/**
+ * Calls `reread` every HOST_POLL_MS while `view` is visible and the window focused, and once when the window gets
+ * focus with the view visible. Each call is one local `a4sx agent-host status --json`; nothing asks a server.
+ */
+export function hostStatusPoll(view: { visible: boolean; onDidChangeVisibility: vscode.Event<unknown> }, reread: () => void,
+  ms: number = HOST_POLL_MS): vscode.Disposable {
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const sync = () => {
+    const on = view.visible && vscode.window.state.focused;
+    if (on && !timer) {
+      timer = setInterval(reread, ms);
+    } else if (!on && timer) {
+      clearInterval(timer);
+      timer = undefined;
+    }
+  };
+  const subs = [
+    view.onDidChangeVisibility(() => sync()),
+    vscode.window.onDidChangeWindowState((st) => {
+      if (st.focused && view.visible) {
+        reread();
+      }
+      sync();
+    }),
+  ];
+  sync();
+  return { dispose: () => { if (timer) { clearInterval(timer); } subs.forEach((d) => d.dispose()); } };
+}
+
 export const CELL_FOLDER_PICK = "Choose the folder to start the cell in";
 
 /** Where a cell's terminal starts: the workspace folder (a pick when several), the default without one; null = cancelled. */
@@ -1047,6 +1079,9 @@ export function activate(context: vscode.ExtensionContext): void {
   };
   ownCliDeps = cellDeps;
   const cellsView = vscode.window.createTreeView(VIEW_CELLS, { treeDataProvider: cells });
+  // cell01 (#2301 E2): the agent host can stop in its terminal (Ctrl+C) without the view knowing: its status is
+  // read again while the Cells view is visible and VS Code has focus, and when the window gets focus again
+  context.subscriptions.push(hostStatusPoll(cellsView, () => cells.rereadHostNow()));
   const refreshCells = () => void cells.refresh();
   /** Refresh after an update or a settings change: the CLI's version is asked again too. */
   const refreshAll = () => {
