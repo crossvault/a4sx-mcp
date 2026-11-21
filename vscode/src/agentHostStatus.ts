@@ -20,6 +20,8 @@ export interface AgentHostStatus {
   /** Per editor (code, code-insiders, …): "ok" or what is wrong; undefined when setup-vscode never ran. */
   editors?: Record<string, string>;
   lastError?: { at?: string; text: string };
+  /** CLI 0.40.1+: false while the host process runs but didn't answer the CLI's probe in time (null/absent: unknown). */
+  answering?: boolean;
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -60,7 +62,7 @@ export function parseAgentHostStatus(stdout: string): AgentHostStatus | undefine
   const at = e ? showText(e.at, 40) : undefined;
   const running = raw.running && !!address;   // running without an address it can name: not shown as running
   return { running, address: running ? address : undefined, open: running ? open : [], editors,
-    lastError: text ? { at, text } : undefined };
+    lastError: text ? { at, text } : undefined, ...(running && typeof raw.answering === "boolean" ? { answering: raw.answering } : {}) };
 }
 
 /** Whether `cell` is one of the open ones: its name, and its mesh by name or id (the CLI's "name (mesh)"). */

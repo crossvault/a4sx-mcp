@@ -19,11 +19,11 @@
 // Every CLI call is an argv array; what is read back is only shown, never run.
 import * as vscode from "vscode";
 import { SessionRow } from "./api";
-import { CELL_CMD_TEXTS, CellCommandDeps, cliErrorText, ensureCli } from "./cellCommands";
+import { CELL_CMD_TEXTS, CellCommandDeps, cliErrorText, ensureCli, setupAgentsWindow, startAgentHost } from "./cellCommands";
 import { cellStartPlan } from "./cellResume";
 import { CELL_NAME, cellsListDir, CLI_MESH_ID, INSTANCE_ID, LocalCell, showText, startableCell } from "./cells";
-import { AGENT_HOST_STATUS_ARGS, AGENT_HOST_TEXTS, agentsWindowSetUp, isOpen, lacksAgentHost, parseAgentHostStatus } from "./agentHostStatus";
-import { CMD_SETUP_AGENTS_WINDOW, CMD_START_AGENT_HOST, CMD_STOP_CELL, LocalCellItem, RemoteCellItem } from "./cellsView";
+import { AgentHostStatus, AGENT_HOST_STATUS_ARGS, AGENT_HOST_TEXTS, agentsWindowSetUp, isOpen, lacksAgentHost, parseAgentHostStatus } from "./agentHostStatus";
+import { CMD_STOP_CELL, LocalCellItem, RemoteCellItem } from "./cellsView";
 import { CLI_NAME } from "./cli";
 import { findLocalSession, librarySlug } from "./localSession";
 import { claudeProjectsDir } from "./nativeSeed";
@@ -82,19 +82,26 @@ export const CELL_ACTION_TEXTS = {
   agentsStandalone: (name: string) => `The cell «${name}» isn't in a mesh yet, so the agent host doesn't serve it.`,
   agentsNoStatus: "This a4sx CLI can't say whether its agent host runs (it has no agent-host status command). Update a4sx, then try again.",
   agentsStatusWhat: "read the agent host's status",
-  agentsHostOff: (name: string) =>
-    `The a4sx agent host isn't running on this computer, so the Agents window can't reach «${name}». Start it, then choose Open in Agents window again.`,
   agentsNotSetUp: "VS Code's Agents window isn't set up for the a4sx agent host on this computer yet. Set it up, then choose Open in Agents window again.",
   agentsNotOpened: "VS Code didn't open the link to the Agents window.",
   // review: a cell running in a terminal here can't also run in the Agents window (one launch per cell)
   agentsRunningElsewhere: (name: string) =>
     `«${name}» is running in a terminal on this computer, so the Agents window can't start it too. Stop it there, then choose Open in Agents window again.`,
   stopIt: "Stop it",
+  agentsStarting: (name: string) => `Starting the a4sx agent host, then opening «${name}» in the Agents window…`,
+  agentsHostEnded: (why: string) =>
+    `The a4sx agent host stopped before it answered (${why}), so the Agents window wasn't opened. Its terminal "a4sx: agent host" has the details; choose Open in Agents window again once that is fixed.`,
+  agentsHostExited: (code: number | undefined) => (code === undefined ? "its terminal ended" : `its terminal ended with exit code ${code}`),
+  agentsWaitCancelled: "Stopped waiting, so the Agents window wasn't opened. The agent host keeps starting in its terminal \"a4sx: agent host\"; choose Open in Agents window again once it runs.",
+  agentsHostSlow: (s: number) =>
+    `The a4sx agent host didn't answer within ${s} seconds, so the Agents window wasn't opened. Its terminal "a4sx: agent host" says why; choose Open in Agents window again once it runs.`,
 };
 
 export interface CellActionDeps extends CellCommandDeps {
   /** Shows text the CLI printed (the extension's output channel): a heading and the lines under it. */
   show(title: string, text: string): void;
+  /** Tests: how long Open in Agents window waits for an agent host it started, and how often it asks. */
+  agentsWait?: { ms: number; pollMs: number };
 }
 
 /** `mesh deliveries <instance id> --mesh <mesh id> --last N`; undefined for an id the CLI doesn't take. */
@@ -345,10 +352,49 @@ export function agentsWindowLink(uriScheme: string, instanceId: string): string 
     ? `${uriScheme}://agents/agent-host-session/ahp-session/a4sx-cell-${instanceId}` : undefined;
 }
 
+/** vscode.TerminalExitReason.User / .Shutdown (VS Code 1.90+), as numbers: the test double has no such enum. */
+const TERMINAL_CLOSED_BY_USER = 3;
+const TERMINAL_SHUTDOWN = 1;
+
+/** cell01: how long "Open in Agents window" waits for an agent host it started (cold, it answered in about 8 s). */
+export const AGENTS_WAIT_MS = 30_000;
+const AGENTS_POLL_MS = 1_000;
+
+/**
+ * The agent host's status once it runs and answers (a local `agent-host status --json` each second); `{ failed }`
+ * when the status shows an error from after the wait began while the host doesn't run (it stopped: the shell of its
+ * terminal stays open, so the terminal never says so); undefined after `ms`, or as soon as `gone()` says to stop
+ * (cancelled, or the terminal closed). Review: a host that runs but didn't answer the probe yet isn't ready; each
+ * status call gets only the time that is left.
+ */
+export async function waitForHost(deps: CellActionDeps, cli: string, ms: number, pollMs = AGENTS_POLL_MS,
+  gone: () => boolean = () => false): Promise<AgentHostStatus | { failed: string } | undefined> {
+  const began = Date.now();
+  const until = began + ms;
+  while (Date.now() < until && !gone()) {
+    await new Promise((r) => setTimeout(r, Math.min(pollMs, Math.max(0, until - Date.now()))));
+    const left = until - Date.now();
+    if (left < 200 || gone()) {
+      break;
+    }
+    const out = await deps.run(cli, AGENT_HOST_STATUS_ARGS, Math.min(10_000, left));
+    const s = out.code === 0 ? parseAgentHostStatus(out.stdout) : undefined;
+    if (s?.running && s.answering !== false) {
+      return s;
+    }
+    const at = s && !s.running && s.lastError?.at ? Date.parse(s.lastError.at) : NaN;
+    if (s?.lastError && at >= began - 1000) {   // the same computer's clock; the CLI's times are whole seconds
+      return { failed: s.lastError.text };
+    }
+  }
+  return undefined;
+}
+
 /**
  * Open in Agents window: the cell's session in VS Code's Agents window, through that window's own link. The agent host
- * must run and the Agents window must be set up for it: when not, this says so and offers the one step that is
- * missing (Start agent host, Set up the Agents window), and opens nothing. The agent host starts the cell when its
+ * must run and the Agents window must be set up for it. Not set up: this says so, offers Set up the Agents window and
+ * opens nothing. Host stopped (cell01, #2309): one action: it starts the host, waits until it answers (at most
+ * AGENTS_WAIT_MS), then opens the cell; when it doesn't answer, says so and opens nothing. The agent host starts the cell when its
  * session opens, and asks there when the cell still needs your OK on this computer. Resolves true when the link opened.
  */
 export async function openCellInAgentsWindow(deps: CellActionDeps, item: LocalCellItem | undefined): Promise<boolean> {
@@ -371,7 +417,7 @@ export async function openCellInAgentsWindow(deps: CellActionDeps, item: LocalCe
     return false;
   }
   const out = await deps.run(cli, AGENT_HOST_STATUS_ARGS, 15_000);   // this computer's own file, no server call
-  const host = out.code === 0 ? parseAgentHostStatus(out.stdout) : undefined;
+  let host = out.code === 0 ? parseAgentHostStatus(out.stdout) : undefined;
   if (!host) {
     // review: an a4sx without `agent-host status` fails with argparse's invalid choice: that is the "update" case
     await vscode.window.showErrorMessage(out.code !== 0 && lacksAgentHost(out.stderr) ? t.agentsNoStatus
@@ -386,15 +432,45 @@ export async function openCellInAgentsWindow(deps: CellActionDeps, item: LocalCe
   }
   if (!agentsWindowSetUp(host, vscode.env.uriScheme)) {
     if ((await vscode.window.showInformationMessage(t.agentsNotSetUp, AGENT_HOST_TEXTS.setup)) === AGENT_HOST_TEXTS.setup) {
-      await vscode.commands.executeCommand(CMD_SETUP_AGENTS_WINDOW);
+      await setupAgentsWindow(deps);   // cell01: called directly, not through a command a notification may drop
     }
     return false;
   }
   if (!host.running) {
-    if ((await vscode.window.showInformationMessage(t.agentsHostOff(cell.name), AGENT_HOST_TEXTS.start)) === AGENT_HOST_TEXTS.start) {
-      await vscode.commands.executeCommand(CMD_START_AGENT_HOST);
+    // cell01 (#2309): one action: the host is started here, and the cell opens once it answers
+    const got = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: t.agentsStarting(cell.name), cancellable: true },
+      async (_p, token) => {
+        const term = await startAgentHost(deps);
+        if (!term) {
+          return "none" as const;   // no CLI to start it with: ensureCli said why, nothing to wait for
+        }
+        const up = await waitForHost(deps, cli, deps.agentsWait?.ms ?? AGENTS_WAIT_MS, deps.agentsWait?.pollMs,
+          () => token.isCancellationRequested || term.exitStatus !== undefined);
+        const exit = term.exitStatus;
+        // review: closed by you (or VS Code shutting down) is said by nothing; a host that ran as the terminal's own
+        // process (a shell VS Code doesn't know) and ended closes it too: that is said, with its exit code
+        return up ?? (token.isCancellationRequested ? "cancelled" as const : exit === undefined ? undefined
+          : exit.reason === TERMINAL_CLOSED_BY_USER || exit.reason === TERMINAL_SHUTDOWN ? "closed" as const
+            : { failed: t.agentsHostExited(exit.code) });
+      });
+    if (got === "none" || got === "closed") {
+      return false;   // no CLI (ensureCli said why), or you closed the host's terminal yourself
     }
-    return false;
+    if (got === "cancelled") {
+      await vscode.window.showInformationMessage(t.agentsWaitCancelled);
+      return false;
+    }
+    if (got && "failed" in got) {
+      await vscode.window.showErrorMessage(t.agentsHostEnded(got.failed));
+      return false;
+    }
+    const up = got;
+    if (!up) {
+      await vscode.window.showErrorMessage(t.agentsHostSlow(Math.round((deps.agentsWait?.ms ?? AGENTS_WAIT_MS) / 1000)));
+      return false;
+    }
+    host = up;
   }
   if (!(await vscode.env.openExternal(vscode.Uri.parse(link)))) {
     await vscode.window.showErrorMessage(t.agentsNotOpened);

@@ -7,10 +7,10 @@ import * as assert from "assert";
 import * as fs from "fs";
 import * as path from "path";
 import { calls, fakeMemento, resetCalls } from "../fakeVscode";
-import { agentsWindowLink, CELL_ACTION_TEXTS, CellActionDeps, CMD_CELL_OPEN_AGENTS, openCellInAgentsWindow } from "../../cellActions";
+import { AGENTS_WAIT_MS, agentsWindowLink, CELL_ACTION_TEXTS, waitForHost, CellActionDeps, CMD_CELL_OPEN_AGENTS, openCellInAgentsWindow } from "../../cellActions";
 import { AGENT_HOST_TEXTS, agentsWindowSetUp } from "../../agentHostStatus";
 import { CELL_CMD_TEXTS } from "../../cellCommands";
-import { CellsProvider, CliOutput, CMD_SETUP_AGENTS_WINDOW, CMD_START_AGENT_HOST, LocalCellItem } from "../../cellsView";
+import { CellsProvider, CliOutput, LocalCellItem } from "../../cellsView";
 import { parseCellsAnswer } from "../../cliJson";
 
 const BASE = "https://session-exchange.com";
@@ -21,13 +21,15 @@ const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "p
 const status = (o: Record<string, unknown>) => JSON.stringify({ running: true, proved: true, answering: true, pid: 4242, address: "ws://127.0.0.1:8799/",
   open: [], vscode: { address: "ws://127.0.0.1:8799", editors: { stable: "ok" } }, last_error: null, cells: [], ...o });
 
-function harness(statusOut: CliOutput, meshId: string | null = MESH, localState = "stored") {
+function harness(statusOuts: CliOutput | CliOutput[], meshId: string | null = MESH, localState = "stored") {
   const runs: string[] = [];
   const cellsJson = JSON.stringify({ v: 1, default: "build", cells: [{ name: "build", mesh_id: meshId, mesh_name: meshId ? "Team mesh" : null, instance_id: INS, profile: null,
     local: { state: localState, pid: null }, registry: { state: "active" }, path: null, mesh_policy: null, tags: [] }] });
   const run = async (_cli: string, args: readonly string[]): Promise<CliOutput> => {
     const line = args.join(" ");
     runs.push(line);
+    // a list: one answer per status call, the last one kept (the host starting up)
+    const statusOut = Array.isArray(statusOuts) ? (statusOuts.length > 1 ? statusOuts.shift()! : statusOuts[0]) : statusOuts;
     return line === "agent-host status --json" ? statusOut : { code: 0, stdout: line === "mesh cells --json" ? cellsJson : "", stderr: "" };
   };
   const provider = new CellsProvider({ resolve: () => ({ kind: "found", path: CLI }), run, server: () => BASE, onState: () => undefined });
@@ -35,7 +37,7 @@ function harness(statusOut: CliOutput, meshId: string | null = MESH, localState 
     state: fakeMemento() as any, cliDir: undefined, provider, resolve: () => ({ kind: "found", path: CLI }), run,
     server: () => BASE, defaultServer: BASE, folder: async () => "/w/proj",
     fetch: async () => { throw new Error("no network in tests"); }, python: async () => ({ code: 1, stdout: "" }), terminals: new Set(),
-    show: () => undefined,
+    show: () => undefined, agentsWait: { ms: 600, pollMs: 20 },
   };
   const cells = parseCellsAnswer(cellsJson)!.cells;
   return { deps, runs, item: new LocalCellItem(cells[0], cells, BASE) };
@@ -60,23 +62,110 @@ describe("#2301: Open in Agents window", () => {
     assert.strictEqual(calls.terminals.length, 0);
   });
 
-  it("agent host not running: says so and offers Start agent host; nothing opens", async () => {
+  it("agent host not running: one action: it starts the host, waits until it answers, then opens the cell (cell01, #2309)", async () => {
+    const off = { code: 0, stdout: status({ running: false, address: null }), stderr: "" };
+    const h = harness([off, off, off, { code: 0, stdout: status({}), stderr: "" }]);
+    assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), true);
+    assert.deepStrictEqual(calls.infoPrompts, [], "no second click: nothing to choose");
+    assert.deepStrictEqual(calls.progress.map((p) => p.title), ["Starting the a4sx agent host, then opening «build» in the Agents window…"]);
+    assert.deepStrictEqual(calls.terminals.map((t) => t.options.name), [AGENT_HOST_TEXTS.startTerminal], "started here, not through a command");
+    assert.deepStrictEqual(calls.executed, []);
+    assert.deepStrictEqual(h.runs, Array(4).fill("agent-host status --json"), "asked until it ran, then no more");
+    assert.deepStrictEqual(calls.opened, [`vscode://agents/agent-host-session/ahp-session/a4sx-cell-${INS}`]);
+  });
+
+  it("agent host started but not answering in time: says so with where to look; nothing opens", async () => {
     const h = harness({ code: 0, stdout: status({ running: false, address: null }), stderr: "" });
-    calls.nextInfoChoice = AGENT_HOST_TEXTS.start;
     assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), false);
-    assert.deepStrictEqual(calls.infoPrompts, [{ message: "The a4sx agent host isn't running on this computer, so the Agents window can't reach «build». Start it, then choose Open in Agents window again.", items: ["Start agent host"] }]);
-    assert.deepStrictEqual(calls.executed.map((e) => e.id), [CMD_START_AGENT_HOST]);
+    assert.strictEqual(calls.terminals.length, 1);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [CELL_ACTION_TEXTS.agentsHostSlow(1)]);
+    assert.strictEqual(CELL_ACTION_TEXTS.agentsHostSlow(30), "The a4sx agent host didn't answer within 30 seconds, so the Agents window wasn't opened. Its terminal \"a4sx: agent host\" says why; choose Open in Agents window again once it runs.");
+    assert.strictEqual(AGENTS_WAIT_MS, 30_000);
     assert.deepStrictEqual(calls.opened, []);
+    // a failing status while it starts is waited through, not shown
+    const flaky = harness([{ code: 0, stdout: status({ running: false, address: null }), stderr: "" }, { code: 1, stdout: "", stderr: "busy" }, { code: 0, stdout: status({}), stderr: "" }]);
+    assert.strictEqual(await openCellInAgentsWindow(flaky.deps, flaky.item), true);
+  });
+
+  it("review: a host that runs but didn't answer yet isn't ready; Cancel, a closed terminal, a host that failed, no CLI", async () => {
+    const off = { code: 0, stdout: status({ running: false, address: null }), stderr: "" };
+    const silent = { code: 0, stdout: status({ answering: false }), stderr: "" };
+    const h = harness([off, silent, silent, { code: 0, stdout: status({ answering: true }), stderr: "" }]);
+    assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), true);
+    assert.strictEqual(h.runs.length, 4, "waited through the host that didn't answer yet");
+    resetCalls();
+    calls.cancelProgress = true;   // Cancel on the progress notification
+    const c = harness(off);
+    assert.strictEqual(await openCellInAgentsWindow(c.deps, c.item), false);
+    assert.deepStrictEqual(c.runs, ["agent-host status --json"], "no wait after a cancel");
+    assert.strictEqual(calls.errors.length, 0);
+    assert.deepStrictEqual(calls.infos, [CELL_ACTION_TEXTS.agentsWaitCancelled]);
+    assert.strictEqual(calls.progress[0].options.cancellable, true);
+    resetCalls();
+    const e = harness(off);
+    const vs = require("vscode") as any;
+    const make = vs.window.createTerminal;
+    vs.window.createTerminal = (o: unknown) => ({ ...make(o), exitStatus: { code: undefined, reason: 3 } });   // you closed it
+    try {
+      assert.strictEqual(await openCellInAgentsWindow(e.deps, e.item), false);
+    } finally {
+      vs.window.createTerminal = make;
+    }
+    assert.strictEqual(calls.errors.length, 0, "nothing to say: you closed it");
+    assert.deepStrictEqual(calls.opened, []);
+    resetCalls();
+    // review: a host run as the terminal's own process (a shell VS Code doesn't know) that ended: said, with its code
+    const x = harness(off);
+    vs.window.createTerminal = (o: unknown) => ({ ...make(o), exitStatus: { code: 1, reason: 2 } });
+    try {
+      assert.strictEqual(await openCellInAgentsWindow(x.deps, x.item), false);
+    } finally {
+      vs.window.createTerminal = make;
+    }
+    assert.deepStrictEqual(calls.errors.map((m) => m.message), [CELL_ACTION_TEXTS.agentsHostEnded("its terminal ended with exit code 1")]);
+    resetCalls();
+    // the host stopped with an error (its shell stays open, so only the status says so): said at once, with the error
+    const now = new Date().toISOString();
+    const failed = harness([off, { code: 0, stdout: status({ running: false, address: null, last_error: { at: now, text: "couldn't listen on 127.0.0.1:8765" } }), stderr: "" }]);
+    const t0 = Date.now();
+    assert.strictEqual(await openCellInAgentsWindow(failed.deps, failed.item), false);
+    assert.ok(Date.now() - t0 < 500, "not the whole wait");
+    assert.deepStrictEqual(calls.errors.map((x) => x.message), [CELL_ACTION_TEXTS.agentsHostEnded("couldn't listen on 127.0.0.1:8765")]);
+    assert.strictEqual(CELL_ACTION_TEXTS.agentsHostEnded("x"), "The a4sx agent host stopped before it answered (x), so the Agents window wasn't opened. Its terminal \"a4sx: agent host\" has the details; choose Open in Agents window again once that is fixed.");
+    resetCalls();
+    // an older error (from before this start) is not this start's
+    const old = harness([off, { code: 0, stdout: status({ running: false, address: null, last_error: { at: "2020-01-01T00:00:00Z", text: "old" } }), stderr: "" }]);
+    assert.strictEqual(await openCellInAgentsWindow(old.deps, old.item), false);
+    assert.deepStrictEqual(calls.errors.map((x) => x.message), [CELL_ACTION_TEXTS.agentsHostSlow(1)]);
+    resetCalls();
+    const n = harness(off);
+    let asked = 0;
+    n.deps.resolve = () => (asked++ === 0 ? { kind: "found", path: CLI } : { kind: "no-cli" });   // gone before the start
+    assert.strictEqual(await openCellInAgentsWindow(n.deps, n.item), false);
+    assert.deepStrictEqual(n.runs, ["agent-host status --json"], "nothing to wait for");
+    assert.ok(!calls.errors.some((x) => x.message.startsWith("The a4sx agent host didn't answer")));
+  });
+
+  it("waitForHost: each status call gets only the time that is left", async () => {
+    const h = harness({ code: 0, stdout: status({ running: false, address: null }), stderr: "" });
+    const asks: { at: number; ms: number }[] = [];
+    const run = h.deps.run;
+    h.deps.run = async (cli, args, ms) => { asks.push({ at: Date.now(), ms: ms ?? -1 }); return run(cli, args, ms); };
+    const t0 = Date.now();
+    assert.strictEqual(await waitForHost(h.deps, CLI, 400, 20), undefined);
+    assert.ok(asks.length > 0 && asks.every((a) => a.ms >= 200 && a.at + a.ms <= t0 + 400 + 30), "never past the end");
   });
 
   it("the Agents window not set up: offers Set up the Agents window first, even with the host stopped", async () => {
     const h = harness({ code: 0, stdout: status({ running: false, vscode: null }), stderr: "" });
     assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), false);   // the offer is declined
     assert.deepStrictEqual(calls.infoPrompts, [{ message: CELL_ACTION_TEXTS.agentsNotSetUp, items: [AGENT_HOST_TEXTS.setup] }]);
-    assert.strictEqual(calls.executed.length, 0);
+    assert.strictEqual(calls.terminals.length, 0);
     calls.nextInfoChoice = AGENT_HOST_TEXTS.setup;
     await openCellInAgentsWindow(h.deps, h.item);
-    assert.deepStrictEqual(calls.executed.map((e) => e.id), [CMD_SETUP_AGENTS_WINDOW]);
+    // cell01 (#2309): the first click works: set up here, not through a command a notification may drop
+    assert.deepStrictEqual(calls.terminals.map((t) => t.options.name), [AGENT_HOST_TEXTS.setupTerminal]);
+    assert.deepStrictEqual(calls.executed, []);
     assert.deepStrictEqual(calls.opened, []);
   });
 
