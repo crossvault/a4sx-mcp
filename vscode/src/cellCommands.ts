@@ -94,7 +94,7 @@ export const CELL_CMD_TEXTS = {
   // #2309 F1: a cell the agent host runs is stopped through the host (CLI 0.59.16); an older CLI can't
   MIN_HOST_CELL_STOP_CLI: "0.59.16",
   stopHostOld: (name: string, v: string) =>
-    `«${name}» runs in the agent host, and your a4sx CLI ${v} can't stop a cell there (that needs 0.59.16 or newer). Close its session in VS Code's Agents window to end it; nothing was stopped.`,
+    `Needs a4sx 0.59.16 to stop a cell in the agent host: «${name}» runs there and your a4sx CLI is ${v}. Close its session in VS Code's Agents window to end it; nothing was stopped.`,
   renameTitle: (name: string) => `Rename the cell «${name}»`,
   renamePrompt: "New name: lowercase letters, digits and -",
   renameInvalid: "Use up to 48 lowercase letters, digits and -, starting and ending with a letter or digit.",
@@ -843,10 +843,6 @@ export async function stopCell(deps: CellCommandDeps, item: LocalCellItem | unde
   if (!args) {
     return false;
   }
-  const choice = await vscode.window.showWarningMessage(CELL_CMD_TEXTS.stopTitle(item.cell.name), { modal: true, detail: CELL_CMD_TEXTS.stopDetail }, CELL_CMD_TEXTS.stop);
-  if (choice !== CELL_CMD_TEXTS.stop) {
-    return false;
-  }
   const cli = await ensureCli(deps);
   if (!cli) {
     return false;
@@ -855,9 +851,14 @@ export async function stopCell(deps: CellCommandDeps, item: LocalCellItem | unde
   if (host && isOpen(host, item.cell)) {   // F1: in the agent host, only a CLI that stops it through the host
     const v = await deps.provider.versions.version(cli);
     if (v !== undefined && !versionAtLeast(v, CELL_CMD_TEXTS.MIN_HOST_CELL_STOP_CLI)) {
+      // cell01: no question for something that can't be done; only the explanation
       await vscode.window.showErrorMessage(CELL_CMD_TEXTS.stopHostOld(item.cell.name, v));
       return false;
     }
+  }
+  const choice = await vscode.window.showWarningMessage(CELL_CMD_TEXTS.stopTitle(item.cell.name), { modal: true, detail: CELL_CMD_TEXTS.stopDetail }, CELL_CMD_TEXTS.stop);
+  if (choice !== CELL_CMD_TEXTS.stop) {
+    return false;
   }
   const out = await deps.run(cli, args, 30_000);
   if (out.code !== 0) {   // F1: a failed stop changes nothing shown (no re-read: the row stays as it was)
