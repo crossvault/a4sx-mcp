@@ -14,6 +14,7 @@ import { MessageItem } from "./sessionsView";
 export const VIEW_CELLS = "a4sx.cells";
 export const CMD_REFRESH_CELLS = "a4sx.refreshCells";
 export const CMD_NEW_CELL = "a4sx.newCell";
+export const CMD_START_CELL_HERE = "a4sx.startCellHere";
 export const CMD_START_CELL = "a4sx.startCell";
 export const CMD_DEFAULT_CELL = "a4sx.setDefaultCell";
 export const CMD_FORGET_CELL = "a4sx.forgetCell";
@@ -44,7 +45,7 @@ export const CELL_TEXTS = {
   yoursOnAnotherMachine: "yours, on another machine",
   peersFailed: "Could not read the cells on other machines.",
   remoteTooltip: "On another machine: read-only here.",
-  yoursRemoteTooltip: "Yours, on another machine: read-only here.",
+  yoursRemoteTooltip: "Yours, on another machine. Start on this computer moves it here once it no longer runs there.",
 };
 
 /** The view's states: what getChildren shows. */
@@ -103,6 +104,8 @@ export interface CellsDeps {
 export const CELL_CONTEXT = "a4sx.localCell";
 export const MESH_GROUP_CONTEXT = "a4sx.cellMesh";
 export const REMOTE_CELL_CONTEXT = "a4sx.remoteCell";
+/** #2301 E1: one of your own cells on another computer: it can be started here. */
+export const REMOTE_OWN_CELL_CONTEXT = "a4sx.remoteCell.own";
 
 /**
  * The item's contextValue: a4sx.localCell[.standalone][.default][.running][.legacy][.policy]. `.policy` (0.7.0): the
@@ -147,7 +150,7 @@ export class RemoteCellItem extends vscode.TreeItem {
       `Cell: ${peer.name}`, peer.own ? CELL_TEXTS.yoursRemoteTooltip : CELL_TEXTS.remoteTooltip, ...(peer.aid ? [`Address: ${peer.aid}`] : []), ...(peer.state ? [`State: ${peer.state}`] : []),
       ...(peer.tier ? [`Isolation: ${peer.tier}`] : []), `ID: ${peer.instanceId}`,
     ].join("\n");
-    this.contextValue = REMOTE_CELL_CONTEXT;
+    this.contextValue = peer.own ? REMOTE_OWN_CELL_CONTEXT : REMOTE_CELL_CONTEXT;
     this.iconPath = new vscode.ThemeIcon(peer.own ? "vm-active" : "vm");
   }
 }

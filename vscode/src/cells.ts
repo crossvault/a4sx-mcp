@@ -298,6 +298,15 @@ export function cellLaunchArgs(cell: LocalCell, all: readonly LocalCell[], sessi
   return ["launch", "--cell", cell.name, ...(nameShared(cell, all) ? ["--mesh", cell.meshId!] : []), ...tail];
 }
 
+/**
+ * #2301 E1: start one of your own cells that runs (or ran) on another computer here: `a4sx launch --cell NAME --mesh
+ * MESH` (CLI 0.55+, server 0.752.0: it refuses while the cell still runs elsewhere, else moves it here). undefined
+ * when the name or the mesh id isn't one the CLI takes.
+ */
+export function startHereArgs(name: string, meshId: string): string[] | undefined {
+  return CELL_NAME.test(name) && CLI_MESH_ID.test(meshId) ? ["launch", "--cell", name, "--mesh", meshId] : undefined;
+}
+
 function pickArgs(cell: LocalCell, all: readonly LocalCell[]): string[] | undefined {
   if (!valid(cell)) {
     return undefined;
