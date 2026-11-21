@@ -50,6 +50,7 @@ import {
   CLAUDE_INSTALL_URL, offerCliInstallOnce, offerProfilesStepUp, openClaudeTerminal, openCommandTerminal, PendingAction, pickFolderWhenNoneOpen, ResumeFolder,
   RESUME_TEXTS, sameFolder, seedWithProgress, State, storePending, takePending,
 } from "./resume";
+import { cellsStatusBar } from "./statusBar";
 import { errorText, offerStepUp, STEP_UP, stepUpAllowed } from "./stepUp";
 import { SESSION_ID } from "./terminalCommand";
 
@@ -1082,6 +1083,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // cell01 (#2301 E2): the agent host can stop in its terminal (Ctrl+C) without the view knowing: its status is
   // read again while the Cells view is visible and VS Code has focus, and when the window gets focus again
   context.subscriptions.push(hostStatusPoll(cellsView, () => cells.rereadHostNow()));
+  // cell01 (#2301, the looks): the status bar shows what the Cells view last read; it runs nothing itself
+  context.subscriptions.push(cellsStatusBar(cells));
   const refreshCells = () => void cells.refresh();
   /** Refresh after an update or a settings change: the CLI's version is asked again too. */
   const refreshAll = () => {

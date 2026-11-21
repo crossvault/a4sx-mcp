@@ -18,7 +18,8 @@ import { runAsCell } from "./runAsCell";
 import { slugOf } from "./tabSession";
 
 export const AGENTS_TEXTS = {
-  noSessions: "No Claude session of VS Code's Agents window was found on this computer, so nothing was started. The list reads the sessions the Claude Agent SDK saved under this computer's Claude Code folder (CLAUDE_CONFIG_DIR, or ~/.claude); a session on a remote agent host isn't there. Start or continue the session in the Agents window on this computer, then run this again.",
+  // #2309 (h): the usual case, so an information notification whose first sentence fits before VS Code cuts it
+  noSessions: "Nothing to convert: no Agents-window session is on this computer, so nothing was started. The list reads the sessions the Claude Agent SDK saved under this computer's Claude Code folder (CLAUDE_CONFIG_DIR, or ~/.claude); a session on a remote agent host isn't there. Start or continue the session in the Agents window on this computer, then run this again.",
   pickTitle: "Convert an Agents-window session to a cell",
   pickPlaceholder: "Choose the session. Listed: Claude sessions started through the Claude Agent SDK on this computer, the Agents window's among them, newest first",
   untitled: "(no title yet)",
@@ -54,7 +55,7 @@ export async function pickAgentSession(projectsDir: string | undefined): Promise
   const t = AGENTS_TEXTS;
   const sessions = await agentSdkSessions(projectsDir);
   if (sessions.length === 0) {
-    await vscode.window.showErrorMessage(t.noSessions);
+    void vscode.window.showInformationMessage(t.noSessions);
     return undefined;
   }
   for (;;) {
