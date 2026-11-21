@@ -13,7 +13,7 @@ import { CLAUDE_EXTENSION_ID, claudeResumeUri } from "./claudeResume";
 import { CLI_NAME, findClaude, findCli, CliLookup, LookupEnv } from "./cli";
 import { cellsListDir, showText } from "./cells";
 import {
-  CellActionDeps, cellLastMessages, cellWhyMessage, CMD_CELL_EXPLAIN, CMD_CELL_FROM_SAVED, CMD_CELL_MESSAGES, CMD_CELL_SAVE, saveCellConversation, startCellFromSaved,
+  CellActionDeps, cellLastMessages, cellWhyMessage, CMD_CELL_EXPLAIN, CMD_CELL_FROM_SAVED, CMD_CELL_MESSAGES, CMD_CELL_OPEN_AGENTS, CMD_CELL_SAVE, openCellInAgentsWindow, saveCellConversation, startCellFromSaved,
 } from "./cellActions";
 import {
   CellCommandDeps, copyCellLaunch, dailyUpdate, forgetCell, installCli, newCell, openCellOnWeb, openCellPolicy, ownCliCheck, ownCliUsable, renameCell, repairOwnCli, setCellProfile, setDefaultCell, setupAgentsWindow, startAgentHost, startCell, startCellHere, stopCell,
@@ -905,7 +905,7 @@ export function librarySessions(auth: { token(): Promise<string | undefined> }):
   };
 }
 
-export { CMD_CELL_MESSAGES, CMD_CELL_EXPLAIN, CMD_CELL_SAVE, CMD_CELL_FROM_SAVED };
+export { CMD_CELL_MESSAGES, CMD_CELL_EXPLAIN, CMD_CELL_SAVE, CMD_CELL_FROM_SAVED, CMD_CELL_OPEN_AGENTS };
 /** The output channel the cell-row actions print what the a4sx CLI answered into (made on first use). */
 export const OUTPUT_CHANNEL = "a4sx";
 
@@ -1191,6 +1191,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_CELL_EXPLAIN, (item?: RemoteCellItem) => cellWhyMessage(actionDeps, item)),
     vscode.commands.registerCommand(CMD_CELL_SAVE, (item?: LocalCellItem) => saveCellConversation(actionDeps, item, { saved: savedEntries(auth) })),
     vscode.commands.registerCommand(CMD_CELL_FROM_SAVED, (item?: LocalCellItem) => startCellFromSaved(actionDeps, item, { sessions: librarySessions(auth) })),
+    vscode.commands.registerCommand(CMD_CELL_OPEN_AGENTS, (item?: LocalCellItem) => openCellInAgentsWindow(actionDeps, item)),
     vscode.commands.registerCommand(CMD_START_AGENT_HOST, () => startAgentHost(cellDeps)),
     vscode.commands.registerCommand(CMD_SETUP_AGENTS_WINDOW, () => setupAgentsWindow(cellDeps)),
     vscode.commands.registerCommand(CMD_DEFAULT_CELL, (item?: LocalCellItem) => setDefaultCell(cellDeps, item)),
