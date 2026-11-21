@@ -113,10 +113,17 @@ describe("#2301 E5: asking about a cell on another machine", () => {
     assert.strictEqual(calls.terminals.length, 0);
   });
 
-  it("Last messages: nothing recorded reads as a sentence; a refusal shows the CLI's own line", async () => {
-    const quiet = harness({ deliveries: { code: 0, stdout: "\n", stderr: "" } });
-    await cellLastMessages(quiet.deps, remote());
-    assert.strictEqual(quiet.shown[0].text, "No messages between your cells on this computer and «desk-agent» are recorded here.");
+  it("Last messages: nothing recorded reads as a sentence (the CLI exits 1 with it); a refusal shows the CLI's own line", async () => {
+    const none = "No messages with «desk-agent» are recorded on this computer. Each running cell here keeps the results of its last messages, and they go when it stops.";
+    // the CLI's MESH_TEXT_DELIVERIES_NONE, as cell01 saw it on Windows with no cell running
+    const quiet = harness({ deliveries: { code: 1, stdout: "", stderr: "a4sx: no delivery results for «ins_D1» on this host: no cell of yours here has exchanged messages with it since its proxy started\n" } });
+    assert.strictEqual(await cellLastMessages(quiet.deps, remote()), true);
+    assert.deepStrictEqual(calls.infos, [none]);
+    assert.strictEqual(calls.errors.length, 0);
+    assert.strictEqual(quiet.shown.length, 0);
+    const empty = harness({ deliveries: { code: 0, stdout: "\n", stderr: "" } });
+    assert.strictEqual(await cellLastMessages(empty.deps, remote()), true);
+    assert.deepStrictEqual(calls.infos, [none, none]);
     const failed = harness({ deliveries: { code: 1, stdout: "", stderr: "a4sx: no cell of «Team mesh» is stored on this host\n" } });
     assert.strictEqual(await cellLastMessages(failed.deps, remote()), false);
     assert.strictEqual(failed.shown.length, 0);

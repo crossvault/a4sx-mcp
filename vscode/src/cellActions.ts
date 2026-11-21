@@ -4,7 +4,8 @@
 // a4sx CLI already has; none adds a request the view makes by itself (nothing here runs on a timer or on a refresh).
 //   on a cell on another machine:
 //     "Last messages"                 a4sx mesh deliveries <instance id> --mesh <mesh id> --last 10
-//                                     (this computer's own delivery records; the CLI asks no server for them)
+//                                     (this computer's own delivery records, kept by its running cells; the CLI asks
+//                                     no server for them, and "no delivery results" is an answer, not a failure)
 //     "Why can or can't I message it" a4sx mesh policy <mesh id> --explain <a cell here> <that cell>
 //   on a cell stored on this computer:
 //     "Save its conversation"         a4sx push <the cell's last transcript> [--into <library entry>], in a terminal.
@@ -35,12 +36,16 @@ export const CMD_CELL_EXPLAIN = "a4sx.cellWhyMessage";
 export const CMD_CELL_SAVE = "a4sx.saveCellConversation";
 export const CMD_CELL_FROM_SAVED = "a4sx.startCellFromSaved";
 
+/** The CLI's MESH_TEXT_DELIVERIES_NONE (it exits non-zero with it): nothing recorded, which is no failure. */
+const NO_DELIVERIES = /^no delivery results for /;
 /** How many results per cell "Last messages" asks for. */
 export const MESSAGES_LAST = 10;
 
 export const CELL_ACTION_TEXTS = {
   messagesTitle: (name: string) => `Last messages with «${name}»`,
-  messagesNone: (name: string) => `No messages between your cells on this computer and «${name}» are recorded here.`,
+  messagesNone: (name: string) =>
+    `No messages with «${name}» are recorded on this computer. Each running cell here keeps the results of its last ` +
+    "messages, and they go when it stops.",
   messagesWhat: "read the last messages",
   badPeer: "This cell can't be asked about from here: its id or its mesh isn't one the a4sx CLI accepts.",
   whyTitle: (from: string, to: string) => `Can «${from}» message «${to}»?`,
@@ -123,12 +128,17 @@ export async function cellLastMessages(deps: CellActionDeps, item: RemoteCellIte
     return false;
   }
   const out = await deps.run(cli, args, 30_000);
+  const name = showText(item.peer.name) ?? item.peer.instanceId;
+  const text = out.code === 0 ? shownOutput(out.stdout) : "";
+  if (out.code !== 0 ? NO_DELIVERIES.test(cliErrorText(out) ?? "") : !text) {
+    void vscode.window.showInformationMessage(t.messagesNone(name));   // the usual case while no cell here runs
+    return true;
+  }
   if (out.code !== 0) {
     await vscode.window.showErrorMessage(CELL_CMD_TEXTS.cliFailed(t.messagesWhat, cliErrorText(out)));
     return false;
   }
-  const name = showText(item.peer.name) ?? item.peer.instanceId;
-  deps.show(t.messagesTitle(name), shownOutput(out.stdout) || t.messagesNone(name));
+  deps.show(t.messagesTitle(name), text);
   return true;
 }
 
