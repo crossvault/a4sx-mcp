@@ -16,6 +16,8 @@ export const VIEW_CELLS = "a4sx.cells";
 export const CMD_REFRESH_CELLS = "a4sx.refreshCells";
 export const CMD_NEW_CELL = "a4sx.newCell";
 export const CMD_START_CELL_HERE = "a4sx.startCellHere";
+/** #2309 review: the one extra cell-list read after a host change. */
+export const CELLS_REREAD_AFTER_MS = 5_000;
 export const CMD_START_AGENT_HOST = "a4sx.startAgentHost";
 export const CMD_SETUP_AGENTS_WINDOW = "a4sx.setupAgentsWindow";
 export const THIS_COMPUTER_CONTEXT = "a4sx.thisComputer";
@@ -457,8 +459,11 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
                 if (!this.hostSeen) {
                   this.hostSeen = s;
                   this.summaryChanged.fire();
+                  this.changed.fire();   // review: the open marks too, whatever redraws first
                 }
               }, () => undefined);
+              // review: the cell may record that it runs a moment after the Agents window opened it: read once more
+              setTimeout(() => void this.refresh(), CELLS_REREAD_AFTER_MS).unref?.();
               this.summaryChanged.fire();
               return s;
             }
