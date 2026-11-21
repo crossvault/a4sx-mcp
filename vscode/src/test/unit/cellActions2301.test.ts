@@ -256,7 +256,7 @@ describe("#2301 E6: Start from a saved session…", () => {
     assert.ok(t, JSON.stringify(calls.errors));
     assert.strictEqual(calls.quickPicks[0].options.title, "Start «docs» from a saved session");
     // Run as cell reads the cells again, so the cell chosen beforehand is named with its mesh (as Convert into an existing cell… does)
-    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--cell' 'docs' '--mesh' '${MESH}' '--a4sx-session=col-lib-aaaaaaaaaaaa'\n`]);
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'launch' '--cell' 'docs' '--a4sx-session=col-lib-aaaaaaaaaaaa'\n`]);
     assert.ok(!h.runs.some((r) => r.startsWith("launch")), "never started without a terminal");
   });
 

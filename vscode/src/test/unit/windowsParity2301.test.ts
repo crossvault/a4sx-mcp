@@ -68,7 +68,7 @@ describe("#2301 E7: Cells first", () => {
 // ---- #2301 E1: Start on this computer, for your own cell on another machine -----------------------------------------
 import * as os from "os";
 import { calls, fakeMemento, resetCalls } from "../fakeVscode";
-import { startHereArgs } from "../../cells";
+import { cellLaunchArgs, startHereArgs } from "../../cells";
 import { CELL_CMD_TEXTS, CellCommandDeps, startCellHere } from "../../cellCommands";
 import { CellsProvider, CliOutput, RemoteCellItem } from "../../cellsView";
 
@@ -255,5 +255,17 @@ describe("cell01 on Windows: Ctrl+C on the agent host started from here asks not
     p.rereadHostSoon([1, 2]);
     await new Promise((r) => setTimeout(r, 20));
     assert.strictEqual(fired, 2);
+  });
+});
+
+describe("cell01 (#2301): --mesh only when another stored cell really has the name", () => {
+  it("a list read again (new objects) doesn't count the cell itself; a same-named cell in another mesh does", () => {
+    const mk = (name: string, meshId: string, instanceId: string) =>
+      ({ name, meshId, instanceId, isDefault: false, tags: [] } as unknown as import("../../cells").LocalCell);
+    const docs = mk("docs", MESH, "ins_A1");
+    const again = [mk("docs", MESH, "ins_A1"), mk("build", MESH, "ins_B1")];
+    assert.deepStrictEqual(cellLaunchArgs(docs, again), ["launch", "--cell", "docs"]);
+    const other = [...again, mk("docs", "msh_fedcba9876543210fedcba9876543210", "ins_C1")];
+    assert.deepStrictEqual(cellLaunchArgs(docs, other), ["launch", "--cell", "docs", "--mesh", MESH]);
   });
 });
