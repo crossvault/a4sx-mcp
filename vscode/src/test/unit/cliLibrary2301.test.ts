@@ -59,3 +59,35 @@ describe("#2301 E4: the library through the a4sx CLI", () => {
     assert.deepStrictEqual(await none.getChildren(), [], "no CLI sign-in: the welcome text offers the sign-in");
   });
 });
+
+
+describe("#36 review", () => {
+  beforeEach(resetCalls);
+
+  it("lists only when the CLI is signed in to the extension's own server", () => {
+    const w = ok({ v: 1, signed_in: true, valid: true, server: "session-exchange.com" });
+    assert.strictEqual(cliSignedIn(w, "https://session-exchange.com/"), true);
+    assert.strictEqual(cliSignedIn(w, "https://staging.session-exchange.com"), false);
+  });
+
+  it("a harness of any other shape is \"other\" (fails closed)", () => {
+    const rows = parseCliLibrary(ok({ v: 1, signed_in: true, sessions: [
+      { id: "a", harness: { id: "x" } }, { id: "b", harness: "Weird!" }, { id: "c", harness: "codex" }, { id: "d" }] }))!;
+    assert.deepStrictEqual(rows.map((r) => r.harness), ["other", "other", "codex", undefined]);
+  });
+
+  it("reads the CLI's list once until Refresh, and never twice at once", async () => {
+    let n = 0;
+    const auth = { token: async () => undefined, clear: async () => undefined } as any;
+    const vias: boolean[] = [];
+    const p = new SessionsProvider(auth, () => ({}) as any, () => undefined, () => undefined,
+      async () => { n++; return parseCliLibrary(ok(LIST)); }, (v) => vias.push(v));
+    await Promise.all([p.getChildren(), p.getChildren()]);
+    await p.getChildren();
+    assert.strictEqual(n, 1);
+    assert.strictEqual(vias[vias.length - 1], true, "a4sx.sessionsViaCli: Refresh and Filter show");
+    p.refresh();
+    await p.getChildren();
+    assert.strictEqual(n, 2);
+  });
+});

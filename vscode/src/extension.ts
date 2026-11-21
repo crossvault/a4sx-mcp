@@ -1027,8 +1027,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // #2301 E4: one sign-in: without the extension's own, the library through the a4sx CLI's (and it says so)
   () => {
     const cli = resolveCellsCli();
-    return cliLibrary(cli.kind === "found" ? cli.path : undefined, runCli);
-  });
+    return cliLibrary(cli.kind === "found" ? cli.path : undefined, runCli, client().base);
+  }, (via) => setContext("a4sx.sessionsViaCli", via));
   // Launch profiles: the a4sx CLI's list when it has `profiles --json` (0.25.0+), else the server's (as before).
   const profiles = new ProfilesProvider(
     auth, client, setProfilesContext,

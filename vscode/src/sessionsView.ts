@@ -187,13 +187,18 @@ export class SessionsProvider implements vscode.TreeDataProvider<vscode.TreeItem
     private readonly onFilter: (filter: string | undefined) => void = () => undefined,
     /** #2301 E4: the library through the a4sx CLI's sign-in, when the extension has none (undefined: no such list). */
     private readonly viaCli?: () => Promise<SessionRow[] | undefined>,
+    /** #2301 E4 review: whether the rows came through the CLI (the a4sx.sessionsViaCli context: Refresh, Filter). */
+    private readonly onViaCli: (via: boolean) => void = () => undefined,
   ) {}
 
   /** #2301 E4: true while the rows came through the a4sx CLI's sign-in. */
   listedViaCli = false;
+  /** review: the CLI's list, read once until Refresh (two process starts and two server calls each time). */
+  private cliRows: Promise<SessionRow[] | undefined> | undefined;
 
   refresh(): void {
     this.rows = undefined;
+    this.cliRows = undefined;
     this.changed.fire();
   }
 
@@ -241,8 +246,12 @@ export class SessionsProvider implements vscode.TreeDataProvider<vscode.TreeItem
       if (!token) {
         this.rows = undefined;
         this.set("signed-out");   // the extension's own sign-in: actions that need it still ask for it
-        const viaCli = this.viaCli ? await this.viaCli() : undefined;
+        if (this.viaCli && !this.cliRows) {
+          this.cliRows = this.viaCli().catch(() => undefined);
+        }
+        const viaCli = this.cliRows ? await this.cliRows : undefined;
         this.listedViaCli = !!viaCli;
+        this.onViaCli(this.listedViaCli);
         if (!viaCli) {
           this.show(undefined);
           return [];   // the welcome text offers the sign-in
@@ -255,6 +264,7 @@ export class SessionsProvider implements vscode.TreeDataProvider<vscode.TreeItem
         return this.nodeItems(buildFolderTree([...viaCli].sort(newestFirst)));
       }
       this.listedViaCli = false;
+      this.onViaCli(false);
       rows = this.rows ?? await listSessions(this.client(), token);
     } catch (e) {
       this.show(undefined);

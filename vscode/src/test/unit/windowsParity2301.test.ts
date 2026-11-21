@@ -361,9 +361,10 @@ describe("#2309 (cell01): a session opened in the Agents window re-reads the cel
     open = [];
     p.rereadHostNow();
     await p.getChildren((await p.getChildren())[0]);
+    await new Promise((r) => setTimeout(r, 5));   // the change's own read lands; the delayed one is still due
     const before = lists();
     p.dispose();
     await new Promise((r) => setTimeout(r, 60));
-    assert.ok(lists() <= before + 1, "no delayed read after dispose");
+    assert.strictEqual(lists(), before, "the delayed read never runs after dispose");
   });
 });
