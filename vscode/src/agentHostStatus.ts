@@ -80,7 +80,9 @@ export function directLaunch(cli: string, read: (p: string) => string | undefine
     return undefined;
   }
   const text = read(cli);
-  const m = text ? /^@"([^"\r\n]+)"\s+"([^"\r\n]+)"\s+%\*\s*$/.exec(text.trim()) : null;
+  // the CLI's launcher (`@"py" "script" %*`) or the extension's own (provision.ts: `@echo off` and `"py" "script" %*`)
+  const body = text?.trim().replace(/^@echo off\s*\r?\n/i, "@");
+  const m = body ? /^@"([^"\r\n]+)"\s+"([^"\r\n]+)"\s+%\*\s*$/.exec(body) : null;
   if (!m || !/^[A-Za-z]:\\/.test(m[1]) || !/^[A-Za-z]:\\/.test(m[2]) || !exists(m[1]) || !exists(m[2])) {
     return undefined;
   }

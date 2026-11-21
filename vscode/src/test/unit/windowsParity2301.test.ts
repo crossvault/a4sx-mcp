@@ -240,6 +240,9 @@ describe("cell01 on Windows: Ctrl+C on the agent host started from here asks not
     assert.deepStrictEqual(directLaunch("C:\\Users\\me\\bin\\a4sx.cmd", (p) => files[p], exists, "win32"),
       { exe: "C:\\Python312\\python.exe", pre: ["C:\\Users\\me\\a4sx\\amdx.py"] });
     assert.strictEqual(directLaunch("C:\\Users\\me\\bin\\a4sx.cmd", (p) => files[p], () => false, "win32"), undefined, "gone: the launcher");
+    const ext = '@echo off\r\n"C:\\Python312\\python.exe" "C:\\Users\\me\\a4sx\\amdx.py" %*\r\n';   // the extension's own (provision.ts)
+    assert.deepStrictEqual(directLaunch("C:\\x\\a4sx.cmd", () => ext, exists, "win32"),
+      { exe: "C:\\Python312\\python.exe", pre: ["C:\\Users\\me\\a4sx\\amdx.py"] });
     assert.strictEqual(directLaunch("/usr/local/bin/a4sx", () => "", () => true, "linux"), undefined);
     assert.strictEqual(directLaunch("C:\\a.cmd", () => "@echo off\r\nrem something else", () => true, "win32"), undefined);
   });
