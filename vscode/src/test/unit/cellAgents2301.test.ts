@@ -8,7 +8,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { calls, fakeMemento, resetCalls } from "../fakeVscode";
 import { agentsWindowLink, CELL_ACTION_TEXTS, CellActionDeps, CMD_CELL_OPEN_AGENTS, openCellInAgentsWindow } from "../../cellActions";
-import { AGENT_HOST_TEXTS } from "../../agentHostStatus";
+import { AGENT_HOST_TEXTS, agentsWindowSetUp } from "../../agentHostStatus";
 import { CELL_CMD_TEXTS } from "../../cellCommands";
 import { CellsProvider, CliOutput, CMD_SETUP_AGENTS_WINDOW, CMD_START_AGENT_HOST, LocalCellItem } from "../../cellsView";
 import { parseCellsAnswer } from "../../cliJson";
@@ -21,10 +21,10 @@ const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "p
 const status = (o: Record<string, unknown>) => JSON.stringify({ running: true, proved: true, answering: true, pid: 4242, address: "ws://127.0.0.1:8799/",
   open: [], vscode: { address: "ws://127.0.0.1:8799", editors: { stable: "ok" } }, last_error: null, cells: [], ...o });
 
-function harness(statusOut: CliOutput, meshId: string | null = MESH) {
+function harness(statusOut: CliOutput, meshId: string | null = MESH, localState = "stored") {
   const runs: string[] = [];
   const cellsJson = JSON.stringify({ v: 1, default: "build", cells: [{ name: "build", mesh_id: meshId, mesh_name: meshId ? "Team mesh" : null, instance_id: INS, profile: null,
-    local: { state: "stored", pid: null }, registry: { state: "active" }, path: null, mesh_policy: null, tags: [] }] });
+    local: { state: localState, pid: null }, registry: { state: "active" }, path: null, mesh_policy: null, tags: [] }] });
   const run = async (_cli: string, args: readonly string[]): Promise<CliOutput> => {
     const line = args.join(" ");
     runs.push(line);
@@ -81,7 +81,8 @@ describe("#2301: Open in Agents window", () => {
   });
 
   it("an older CLI, a failing status, a standalone cell, a link VS Code refuses: said, nothing opens", async () => {
-    const old = harness({ code: 0, stdout: "not json", stderr: "" });
+    // review: an older a4sx fails with argparse's invalid choice (not a 0 exit with bad JSON)
+    const old = harness({ code: 2, stdout: "", stderr: "a4sx: error: argument cmd: invalid choice: 'agent-host'\n" });
     assert.strictEqual(await openCellInAgentsWindow(old.deps, old.item), false);
     assert.strictEqual(calls.errors[0].message, CELL_ACTION_TEXTS.agentsNoStatus);
     const failed = harness({ code: 1, stdout: "", stderr: "a4sx: refusing the a4sx folders\n" });
@@ -106,5 +107,34 @@ describe("#2301: Open in Agents window", () => {
       [true, true, false, false, false]);
     assert.strictEqual(pkg.contributes.commands.find((c: any) => c.command === CMD_CELL_OPEN_AGENTS).title, "Open in Agents window");
     assert.ok(pkg.contributes.menus.commandPalette.some((m: any) => m.command === CMD_CELL_OPEN_AGENTS && m.when === "false"));
+  });
+});
+
+
+describe("#34 review: Open in Agents window edge cases", () => {
+  beforeEach(resetCalls);
+
+  it("a cell running in a terminal here: says so and offers Stop it; nothing opens", async () => {
+    const h = harness({ code: 0, stdout: status({ open: [] }), stderr: "" }, MESH, "running");
+    calls.nextInfoChoice = CELL_ACTION_TEXTS.stopIt;
+    assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), false);
+    assert.deepStrictEqual(calls.opened, []);
+    assert.deepStrictEqual(calls.executed.map((e) => e.id), ["a4sx.stopCell"]);
+  });
+
+  it("the set-up check is this editor's when setup-vscode set it up", () => {
+    const s = { running: true, open: [], editors: { stable: "ok", insiders: "missing" } } as any;
+    assert.strictEqual(agentsWindowSetUp(s, "vscode"), true);
+    assert.strictEqual(agentsWindowSetUp(s, "vscode-insiders"), false);
+    assert.strictEqual(agentsWindowSetUp(s, "vscodium"), false, "not set up for it: all must be ok");
+  });
+
+  it("a hostile status answer can't change the opened link", async () => {
+    const h = harness({ code: 0, stdout: status({ address: "ws://evil.example:1/", open: ["x (y)"] }), stderr: "" });
+    await openCellInAgentsWindow(h.deps, h.item);
+    for (const u of calls.opened) {
+      assert.ok(String(u).includes("://agents/agent-host-session/ahp-session/a4sx-cell-ins_"), String(u));
+      assert.ok(!String(u).includes("evil"), String(u));
+    }
   });
 });

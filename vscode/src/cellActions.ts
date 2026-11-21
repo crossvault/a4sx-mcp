@@ -22,8 +22,8 @@ import { SessionRow } from "./api";
 import { CELL_CMD_TEXTS, CellCommandDeps, cliErrorText, ensureCli } from "./cellCommands";
 import { cellStartPlan } from "./cellResume";
 import { CELL_NAME, cellsListDir, CLI_MESH_ID, INSTANCE_ID, LocalCell, showText, startableCell } from "./cells";
-import { AGENT_HOST_STATUS_ARGS, AGENT_HOST_TEXTS, agentsWindowSetUp, parseAgentHostStatus } from "./agentHostStatus";
-import { CMD_SETUP_AGENTS_WINDOW, CMD_START_AGENT_HOST, LocalCellItem, RemoteCellItem } from "./cellsView";
+import { AGENT_HOST_STATUS_ARGS, AGENT_HOST_TEXTS, agentsWindowSetUp, isOpen, lacksAgentHost, parseAgentHostStatus } from "./agentHostStatus";
+import { CMD_SETUP_AGENTS_WINDOW, CMD_START_AGENT_HOST, CMD_STOP_CELL, LocalCellItem, RemoteCellItem } from "./cellsView";
 import { CLI_NAME } from "./cli";
 import { findLocalSession, librarySlug } from "./localSession";
 import { claudeProjectsDir } from "./nativeSeed";
@@ -86,6 +86,10 @@ export const CELL_ACTION_TEXTS = {
     `The a4sx agent host isn't running on this computer, so the Agents window can't reach «${name}». Start it, then choose Open in Agents window again.`,
   agentsNotSetUp: "VS Code's Agents window isn't set up for the a4sx agent host on this computer yet. Set it up, then choose Open in Agents window again.",
   agentsNotOpened: "VS Code didn't open the link to the Agents window.",
+  // review: a cell running in a terminal here can't also run in the Agents window (one launch per cell)
+  agentsRunningElsewhere: (name: string) =>
+    `«${name}» is running in a terminal on this computer, so the Agents window can't start it too. Stop it there, then choose Open in Agents window again.`,
+  stopIt: "Stop it",
 };
 
 export interface CellActionDeps extends CellCommandDeps {
@@ -369,10 +373,12 @@ export async function openCellInAgentsWindow(deps: CellActionDeps, item: LocalCe
   const out = await deps.run(cli, AGENT_HOST_STATUS_ARGS, 15_000);   // this computer's own file, no server call
   const host = out.code === 0 ? parseAgentHostStatus(out.stdout) : undefined;
   if (!host) {
-    await vscode.window.showErrorMessage(out.code === 0 ? t.agentsNoStatus : CELL_CMD_TEXTS.cliFailed(t.agentsStatusWhat, cliErrorText(out)));
+    // review: an a4sx without `agent-host status` fails with argparse's invalid choice: that is the "update" case
+    await vscode.window.showErrorMessage(out.code !== 0 && lacksAgentHost(out.stderr) ? t.agentsNoStatus
+      : CELL_CMD_TEXTS.cliFailed(t.agentsStatusWhat, out.code === 0 ? AGENT_HOST_TEXTS.notJson : cliErrorText(out)));
     return false;
   }
-  if (!agentsWindowSetUp(host)) {
+  if (!agentsWindowSetUp(host, vscode.env.uriScheme)) {
     if ((await vscode.window.showInformationMessage(t.agentsNotSetUp, AGENT_HOST_TEXTS.setup)) === AGENT_HOST_TEXTS.setup) {
       await vscode.commands.executeCommand(CMD_SETUP_AGENTS_WINDOW);
     }
@@ -381,6 +387,12 @@ export async function openCellInAgentsWindow(deps: CellActionDeps, item: LocalCe
   if (!host.running) {
     if ((await vscode.window.showInformationMessage(t.agentsHostOff(cell.name), AGENT_HOST_TEXTS.start)) === AGENT_HOST_TEXTS.start) {
       await vscode.commands.executeCommand(CMD_START_AGENT_HOST);
+    }
+    return false;
+  }
+  if (cell.localState === "running" && !isOpen(host, cell)) {   // review: the host would refuse it in the window only
+    if ((await vscode.window.showInformationMessage(t.agentsRunningElsewhere(cell.name), t.stopIt)) === t.stopIt) {
+      await vscode.commands.executeCommand(CMD_STOP_CELL, item);
     }
     return false;
   }
