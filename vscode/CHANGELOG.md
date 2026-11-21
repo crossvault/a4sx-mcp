@@ -2,6 +2,7 @@
 
 ## 0.9.4
 
+- **Start one of your own cells here.** A cell of yours that runs, or ran, on another computer ("yours, on another machine") now has **Start on this computer**, inline and in its menu. It asks for a folder, as New cell does, and runs `a4sx launch --cell NAME --mesh MESH` in a terminal. The a4sx CLI decides: while the cell still runs on the other computer it starts nothing and says how to stop it there; otherwise it moves the cell here. This needs a4sx CLI 0.55 or newer and a sign-in in the CLI. Other people's cells still have no actions.
 - **A cell of another account no longer reads "registry revoked".** Signed in to one account, with cells of another, the Cells view called working cells revoked. With a4sx CLI 0.59.7 such a cell reads **not in the signed-in account**. With an older CLI it still reads **registry revoked**, and its tooltip now says that a cell that still starts belongs to another of your accounts, rather than suggesting you remove it.
 - **Cells comes first.** The a4sx side bar now starts with Cells and Meshes. My sessions and Marketplace start collapsed; Launch profiles stays open. This applies to a fresh install, because VS Code keeps the layout you already have.
 

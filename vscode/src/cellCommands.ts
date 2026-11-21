@@ -15,8 +15,9 @@ import {
   CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellProfileArgs, cellRenameArgs, cellsListDir, cellStopArgs, LocalCell, MIN_CELL_CONSENT_CLI, NEW_CELL_ARGS,
   policyUrl,
   showText,
+  startHereArgs,
 } from "./cells";
-import { CellsProvider, CliOutput, CliResolution, CliRunner, lacksCellProfile, LocalCellItem, MeshGroupItem } from "./cellsView";
+import { CellsProvider, CliOutput, CliResolution, CliRunner, lacksCellProfile, LocalCellItem, MeshGroupItem, RemoteCellItem } from "./cellsView";
 import { IN_SESSION_MESSAGE, parseCliError, parseProfilesAnswer, PROFILES_ARGS, versionAtLeast } from "./cliJson";
 import {
   bundledClaude, claudeFindable, downloadCli, Fetch, installedLauncher, launcherNeedsRepair, ProvisionError, repairLauncher, RepairResult, Runner, searchPython, updateArgs, updateDue,
@@ -44,6 +45,11 @@ export const PYTHON_DOWNLOAD_URL = "https://www.python.org/downloads/";
 
 export const CELL_CMD_TEXTS = {
   newCellTerminal: "a4sx: new cell",
+  // #2301 E1
+  startHereTerminal: (name: string) => `a4sx: ${name}`,
+  startHereStarted: (name: string, cwd: string) =>
+    `Starting «${name}» on this computer, in ${cwd}. If it still runs on the other computer, a4sx starts nothing and says in the terminal how to stop it there.`,
+  startHereBad: "This cell's name or mesh isn't one the a4sx CLI takes, so nothing was started.",
   cellTerminal: (name: string) => `a4sx: cell ${name}`,
   updateTerminal: "a4sx: update",
   pythonTerminal: "a4sx: install Python",
@@ -628,6 +634,38 @@ export async function newCell(deps: CellCommandDeps): Promise<vscode.Terminal | 
     return undefined;
   }
   return track(deps, openCommandTerminal(CELL_CMD_TEXTS.newCellTerminal, cli, CLI_NAME, NEW_CELL_ARGS, cwd, claude.env, undefined, true));
+}
+
+/**
+ * #2301 E1: "Start on this computer" for one of your own cells on another computer: `a4sx launch --cell NAME --mesh
+ * MESH` in a terminal, in a folder the person picks (as New cell). The CLI decides: it refuses while the cell runs
+ * elsewhere, else moves it here; its text is shown in the terminal as it is.
+ */
+export async function startCellHere(deps: CellCommandDeps, item: RemoteCellItem | undefined): Promise<vscode.Terminal | undefined> {
+  if (!(item instanceof RemoteCellItem) || !item.peer.own) {
+    return undefined;
+  }
+  const args = startHereArgs(item.peer.name, item.meshId);
+  if (!args) {
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.startHereBad);
+    return undefined;
+  }
+  const cli = await ensureCli(deps);
+  if (!cli || !(await cliAsksConsent(deps, cli))) {
+    return undefined;
+  }
+  const claude = await cellClaudeEnv(deps);
+  if (!claude) {
+    return undefined;
+  }
+  const cwd = await cellStartFolder(deps, await deps.folder());
+  if (cwd === undefined) {
+    return undefined;
+  }
+  const name = item.peer.name;
+  const terminal = track(deps, openCommandTerminal(CELL_CMD_TEXTS.startHereTerminal(name), cli, CLI_NAME, args, cwd, claude.env, undefined, true));
+  void vscode.window.showInformationMessage(CELL_CMD_TEXTS.startHereStarted(name, showText(cwd, 300) ?? cwd));
+  return terminal;
 }
 
 /** The last line the CLI wrote to stderr, made safe to show (its own message, e.g. "no cell named …"). */
