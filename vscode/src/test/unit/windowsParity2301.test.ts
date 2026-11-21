@@ -148,7 +148,7 @@ describe("#2301 E2: This computer", () => {
   it("reads `agent-host status --json`; anything else is no answer", () => {
     const s = parseAgentHostStatus(JSON.stringify(RUNNING))!;
     assert.deepStrictEqual(s, { running: true, address: "ws://127.0.0.1:8765/", open: [{ name: "build", mesh: "Team mesh" }],
-      editors: { stable: "ok" }, lastError: undefined });   // a plain session is no cell row
+      editors: { stable: "ok" }, lastError: undefined, answering: true });   // a plain session is no cell row
     assert.strictEqual(parseAgentHostStatus("usage: a4sx …"), undefined);
     assert.strictEqual(parseAgentHostStatus(JSON.stringify({ v: 1 })), undefined);
     const odd = parseAgentHostStatus(JSON.stringify({ ...RUNNING, address: "ws://x/; rm", open: ["../x (m)", "ok (m)"] }))!;

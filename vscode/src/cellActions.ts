@@ -89,6 +89,7 @@ export const CELL_ACTION_TEXTS = {
     `«${name}» is running in a terminal on this computer, so the Agents window can't start it too. Stop it there, then choose Open in Agents window again.`,
   stopIt: "Stop it",
   agentsStarting: (name: string) => `Starting the a4sx agent host, then opening «${name}» in the Agents window…`,
+  agentsHostEnded: "The a4sx agent host stopped before it answered, so the Agents window wasn't opened. Its terminal \"a4sx: agent host\" says why; choose Open in Agents window again once that is fixed.",
   agentsHostSlow: (s: number) =>
     `The a4sx agent host didn't answer within ${s} seconds, so the Agents window wasn't opened. Its terminal "a4sx: agent host" says why; choose Open in Agents window again once it runs.`,
 };
@@ -352,14 +353,23 @@ export function agentsWindowLink(uriScheme: string, instanceId: string): string 
 export const AGENTS_WAIT_MS = 30_000;
 const AGENTS_POLL_MS = 1_000;
 
-/** The agent host's status once it runs (a local `agent-host status --json` each second), or undefined after `ms`. */
-export async function waitForHost(deps: CellActionDeps, cli: string, ms: number, pollMs = AGENTS_POLL_MS) {
+/**
+ * The agent host's status once it runs and answers (a local `agent-host status --json` each second), or undefined
+ * after `ms`, or as soon as `gone()` says to stop (cancelled, or the host's terminal closed). Review: a host that
+ * runs but didn't answer the probe yet isn't ready; each status call gets only the time that is left.
+ */
+export async function waitForHost(deps: CellActionDeps, cli: string, ms: number, pollMs = AGENTS_POLL_MS,
+  gone: () => boolean = () => false) {
   const until = Date.now() + ms;
-  while (Date.now() < until) {
-    await new Promise((r) => setTimeout(r, pollMs));
-    const out = await deps.run(cli, AGENT_HOST_STATUS_ARGS, 10_000);
+  while (Date.now() < until && !gone()) {
+    await new Promise((r) => setTimeout(r, Math.min(pollMs, Math.max(0, until - Date.now()))));
+    const left = until - Date.now();
+    if (left <= 0 || gone()) {
+      break;
+    }
+    const out = await deps.run(cli, AGENT_HOST_STATUS_ARGS, Math.min(10_000, Math.max(1000, left)));
     const s = out.code === 0 ? parseAgentHostStatus(out.stdout) : undefined;
-    if (s?.running) {
+    if (s?.running && s.answering !== false) {
       return s;
     }
   }
@@ -414,12 +424,25 @@ export async function openCellInAgentsWindow(deps: CellActionDeps, item: LocalCe
   }
   if (!host.running) {
     // cell01 (#2309): one action: the host is started here, and the cell opens once it answers
-    const up = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: t.agentsStarting(cell.name) },
-      async () => {
-        await startAgentHost(deps);
-        return waitForHost(deps, cli, deps.agentsWait?.ms ?? AGENTS_WAIT_MS, deps.agentsWait?.pollMs);
+    const got = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: t.agentsStarting(cell.name), cancellable: true },
+      async (_p, token) => {
+        const term = await startAgentHost(deps);
+        if (!term) {
+          return "none" as const;   // no CLI to start it with: ensureCli said why, nothing to wait for
+        }
+        const up = await waitForHost(deps, cli, deps.agentsWait?.ms ?? AGENTS_WAIT_MS, deps.agentsWait?.pollMs,
+          () => token.isCancellationRequested || term.exitStatus !== undefined);
+        return up ?? (token.isCancellationRequested ? "cancelled" as const : term.exitStatus !== undefined ? "closed" as const : undefined);
       });
+    if (got === "none" || got === "cancelled") {
+      return false;
+    }
+    if (got === "closed") {
+      await vscode.window.showErrorMessage(t.agentsHostEnded);
+      return false;
+    }
+    const up = got;
     if (!up) {
       await vscode.window.showErrorMessage(t.agentsHostSlow(Math.round((deps.agentsWait?.ms ?? AGENTS_WAIT_MS) / 1000)));
       return false;
