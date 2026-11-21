@@ -266,11 +266,12 @@ export class SessionsProvider implements vscode.TreeDataProvider<vscode.TreeItem
         if (this.filter) {   // review: Filter works on the CLI's rows as on the server's
           const q = this.filter;
           const hits = viaCli.filter((r) => matchesFilter(r, q)).sort(newestFirst);
-          this.show(FILTER_MESSAGE(q, hits.length, viaCli.length));
+          // cell01: the CLI line stays visible while a filter is set
+          this.show(`${FILTER_MESSAGE(q, hits.length, viaCli.length)} ${CLI_LIBRARY_TEXTS.viaShort}`);
           if (hits.length === 0) {
             return [new MessageItem(NO_MATCH(q), "filter", { command: "a4sx.clearSessionFilter", title: "Clear filter" })];
           }
-          return hits.map((r) => new SessionItem(r, true));
+          return hits.map((r) => this.mark(new SessionItem(r, true)));
         }
         this.show(CLI_LIBRARY_TEXTS.via);
         return this.nodeItems(buildFolderTree([...viaCli].sort(newestFirst)));
@@ -312,7 +313,18 @@ export class SessionsProvider implements vscode.TreeDataProvider<vscode.TreeItem
 
   /** A folder's contents: its sub-folders first, then its sessions. */
   private nodeItems(node: FolderNode): vscode.TreeItem[] {
-    return [...node.folders.map((f) => new FolderItem(f)), ...node.sessions.map((r) => new SessionItem(r))];
+    return [...node.folders.map((f) => new FolderItem(f)), ...node.sessions.map((r) => this.mark(new SessionItem(r)))];
+  }
+
+  /**
+   * #2309 (cell01): a row listed through the a4sx CLI's sign-in has no "Resume in Claude Code" (that needs the
+   * extension's own sign-in): its context value ends in ".cli", which every other row action allows.
+   */
+  private mark(item: SessionItem): SessionItem {
+    if (this.listedViaCli && item.contextValue) {
+      item.contextValue = `${item.contextValue}.cli`;
+    }
+    return item;
   }
 
   dispose(): void {

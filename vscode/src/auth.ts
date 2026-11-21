@@ -15,6 +15,11 @@ import {
 export const AUTH_ID = "a4sx";
 export const AUTH_LABEL = "a4sx";
 export const SECRET_KEY = "a4sx.auth";
+/**
+ * #2309: the server never puts mesh scopes into one key with others (accounts.py: "Mesh scopes can't be combined
+ * with other scopes in one key"), so "Allow mesh read" signs in for a key with mesh:read alone, stored here, apart.
+ */
+export const MESH_SECRET_KEY = "a4sx.auth.mesh";
 /** The poll interval of `a4sx login`; tests shorten it. */
 export const timing = { pollMs: 2000 };
 
@@ -94,8 +99,8 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
     private readonly login: (client: Client, req: LoginRequest) => Promise<Stored>,
   ) {}
 
-  private async read(): Promise<Stored | undefined> {
-    const raw = await this.secrets.get(SECRET_KEY);
+  private async read(key: string = SECRET_KEY): Promise<Stored | undefined> {
+    const raw = await this.secrets.get(key);
     if (!raw) {
       return undefined;
     }
@@ -156,10 +161,62 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
     if (![SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, SCOPE_ORGANIZE, SCOPE_MESH_READ].includes(scope)) {
       throw new ApiError("bad-scopes", MESSAGES.needsScope(scope));
     }
+    if (scope === SCOPE_MESH_READ) {   // #2309: a key of its own (the server refuses mesh scopes mixed with others)
+      return this.signInMesh();
+    }
     const have = (await this.current())?.scopes ?? LOGIN_SCOPES;
     const scopes = [...new Set([...have, scope])];
     const session = await this.signInWith({ scopes, fallback: false, adding: scope });
     return session.accessToken;
+  }
+
+  /** #2309: the mesh-only key, if it was issued by the current server and has not expired. */
+  async meshKey(): Promise<Stored | undefined> {
+    const s = await this.read(MESH_SECRET_KEY);
+    let base: string;
+    try {
+      base = this.client().base;
+    } catch {
+      return undefined;
+    }
+    if (!s || s.server !== base || (s.expiresAt && Date.parse(s.expiresAt) <= Date.now())) {
+      return undefined;
+    }
+    return s;
+  }
+
+  /**
+   * #2309: the key the Meshes view uses: the mesh-only key, else the sign-in (an older key that already holds
+   * mesh:read, or one without it: the server's 403 then offers "Allow mesh read").
+   */
+  async meshToken(): Promise<string | undefined> {
+    const main = await this.token();   // no sign-in: no mesh read either (the mesh key goes with it)
+    if (!main) {
+      return undefined;
+    }
+    return (await this.meshKey())?.token ?? main;
+  }
+
+  /** #2309: forgets the mesh-only key (a 401 for it, or sign-out). The sign-in stays. */
+  async clearMesh(): Promise<void> {
+    if (await this.secrets.get(MESH_SECRET_KEY)) {
+      await this.secrets.delete(MESH_SECRET_KEY);
+      this.changed.fire({ added: [], removed: [], changed: [] });
+    }
+  }
+
+  private async signInMesh(): Promise<string> {
+    if (!(await this.current())) {
+      throw new ApiError("unauthorized", "Sign in to a4sx first.");
+    }
+    const stored = await this.login(this.client(), { scopes: [SCOPE_MESH_READ], fallback: false, adding: SCOPE_MESH_READ });
+    const old = await this.read(MESH_SECRET_KEY);
+    await this.secrets.store(MESH_SECRET_KEY, JSON.stringify(stored));
+    this.changed.fire({ added: [], removed: [], changed: [] });   // the views read their keys again
+    if (old && old.token !== stored.token && old.server === stored.server) {
+      await this.revoke(old);   // only the replaced mesh key; the sign-in is never touched
+    }
+    return stored.token;
   }
 
   private async signInWith(req: LoginRequest): Promise<vscode.AuthenticationSession> {
@@ -195,6 +252,11 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
    * Resolves to undefined when no key was stored.
    */
   async signOut(): Promise<RevokeResult | undefined> {
+    const mesh = await this.read(MESH_SECRET_KEY);   // #2309: the mesh-only key goes with the sign-in
+    if (mesh) {
+      await this.revoke(mesh);
+      await this.secrets.delete(MESH_SECRET_KEY);
+    }
     const old = await this.read();
     const result = old ? await this.revoke(old) : undefined;
     await this.clear();

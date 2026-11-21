@@ -120,3 +120,26 @@ describe("#36 delta review", () => {
     assert.ok((await p.getChildren()).length >= 1);
   });
 });
+
+
+describe("cell01 on #36", () => {
+  beforeEach(resetCalls);
+
+  it("rows listed through the CLI end in .cli, so Resume in Claude Code isn't offered; the CLI line stays under a filter", async () => {
+    const fs = require("fs");
+    const path = require("path");
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "package.json"), "utf8"));
+    const menus = pkg.contributes.menus["view/item/context"];
+    const claude = menus.filter((m: any) => m.command === "a4sx.resumeInClaude");
+    assert.ok(claude.length && claude.every((m: any) => !m.when.includes("cli")), "Resume in Claude Code never on a .cli row");
+    assert.ok(menus.some((m: any) => m.command === "a4sx.resumeSession" && m.when.includes("(\\.cli)?")));
+    const auth = { token: async () => undefined, clear: async () => undefined } as any;
+    const p = new SessionsProvider(auth, () => ({}) as any, () => undefined, () => undefined, async () => parseCliLibrary(ok(LIST)));
+    const view: { message?: string } = {};
+    p.view = view;
+    p.setFilter("work");
+    const hits = await p.getChildren();   // flat while filtered (the row sits in a folder otherwise)
+    assert.ok(hits.length === 1 && String(hits[0].contextValue).endsWith(".cli"), String(hits[0]?.contextValue));
+    assert.ok(view.message!.endsWith(CLI_LIBRARY_TEXTS.viaShort), view.message);
+  });
+});

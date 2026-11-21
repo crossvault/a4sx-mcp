@@ -70,7 +70,8 @@ export async function offerStepUp(auth: ScopedAuth, scope: string, ask = true): 
       return undefined;
     }
     if (e instanceof ApiError && e.code === "bad-scopes") {
-      await vscode.window.showErrorMessage(notSupportedFor(scope));
+      await vscode.window.showErrorMessage(scope === SCOPE_MESH_READ && e.message && e.message !== MESSAGES.needsScope(scope)
+        ? MESH_TEXTS.meshReadRefused(e.message) : notSupportedFor(scope));
       return undefined;
     }
     await vscode.window.showErrorMessage(errorText(e));

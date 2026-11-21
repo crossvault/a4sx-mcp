@@ -1038,7 +1038,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const market = new MarketplaceProvider(client);
   // Hidden until GET /meshes answers: a server without meshes (404) never shows the view.
   setContext(MESHES_AVAILABLE, false);
-  const meshes = new MeshesProvider(auth, client, (available) => setContext(MESHES_AVAILABLE, available));
+  // #2309: the Meshes view reads with the mesh-only key ("Allow mesh read" signs in for one apart)
+  const meshes = new MeshesProvider({ token: () => auth.meshToken(), clear: async () => ((await auth.meshKey()) ? auth.clearMesh() : auth.clear()) }, client,
+    (available) => setContext(MESHES_AVAILABLE, available));
   const meshesView = vscode.window.createTreeView(VIEW_MESHES, { treeDataProvider: meshes });
   const meshPoller = new VisibilityPoller(() => meshes.tick());
   // Cells: the cells the a4sx CLI stored on this machine, and the extension's own copy of the CLI.

@@ -8,7 +8,7 @@ import * as path from "path";
 import { calls, fakeMemento, fakeSecrets, resetCalls } from "../fakeVscode";
 import * as ext from "../../extension";
 import * as api from "../../api";
-import { LoginRequest, SECRET_KEY } from "../../auth";
+import { LoginRequest, MESH_SECRET_KEY, SECRET_KEY } from "../../auth";
 import {
   BACKOFF_CAP_MS, cellDescription, isMine, isolationText, oneLine, osText, safeScope, startable, statusText, cellTooltip, detect, isTierCWindows, lastSeenText, listMeshes, listMyCells, Machine, MAX_PAGES, Mesh,
   MESH_TEXTS, MeshLoader, meshesPageUrl, meshInviteUrl, meshLaunchArgs, meshPageUrl, meshTree, parseCell, parseMachine, parseMesh, POLL_MS,
@@ -405,10 +405,16 @@ describe("meshes: feature detection", () => {
     await flush();
     assert.strictEqual(logins.length, 1);
     assert.strictEqual(logins[0].adding, "mesh:read");
-    assert.deepStrictEqual([...logins[0].scopes].sort(), ["library:organize", "library:read", "mesh:read", "profiles:read"]);
+    // #2309: a key with mesh:read alone (the server refuses mesh scopes mixed with others), stored apart
+    assert.deepStrictEqual([...logins[0].scopes], ["mesh:read"]);
     await sb.meshes.refresh();
     assert.deepStrictEqual((await sb.meshes.getChildren()).map((i) => i.label), ["Alpha team", "Beta", "Empty mesh", "Old project"]);
     assert.strictEqual(net.seen.at(-1)!.headers.Authorization, `Bearer ${NEW_TOKEN}`, "the new key is used after the step-up");
+    // #2309: the sign-in itself stays as it was (never replaced, never revoked); the mesh key is stored apart
+    const { ctx } = { ctx: (disposeLater as any) };
+    assert.strictEqual(JSON.parse(ctx.secrets.store_.get(SECRET_KEY)).token, TOKEN);
+    assert.strictEqual(JSON.parse(ctx.secrets.store_.get(MESH_SECRET_KEY)).token, NEW_TOKEN);
+    assert.ok(!net.seen.some((r) => new URL(r.url).pathname === "/library/keys/self/revoke"), "the sign-in isn't revoked");
     nothingLeaked();
   });
 
@@ -1168,5 +1174,36 @@ describe("meshes: manifest", () => {
   it("user-facing strings say a4sx only", () => {
     const text = JSON.stringify(pkg.contributes) + JSON.stringify(MESH_TEXTS);
     assert.ok(!/agent-mdx|amdx|polaris/i.test(text));
+  });
+});
+
+
+describe("#2309: the mesh-only key", () => {
+  beforeEach(resetCalls);
+
+  it("a refused mesh-read sign-in says the server's reason, never \"not available on this server\"", async () => {
+    const { sb } = await activateWith({ "GET /meshes": [SCOPE_DENIED] }, ["library:read"]);
+    ext.runtime.login = async () => { throw new api.ApiError("bad-scopes", "this key kind isn't offered here"); };
+    await calls.commands.get(ext.CMD_ALLOW_SCOPE)!("mesh:read");
+    await flush();
+    assert.ok(calls.errors.some((e) => e.message === MESH_TEXTS.meshReadRefused("this key kind isn't offered here")), JSON.stringify(calls.errors));
+    assert.ok(!calls.errors.some((e) => e.message === MESH_TEXTS.notSupported));
+    void sb;
+  });
+
+  it("a 401 for the mesh key forgets only it; sign-out revokes and forgets both", async () => {
+    // after the mesh key is forgotten the view reads again with the sign-in, which lacks mesh:read: the 403
+    const { ctx, sb } = await activateWith({ "GET /meshes": [ok(MESHES), { status: 401, body: { error: { code: "not_logged_in" } } }, SCOPE_DENIED],
+      "POST /library/keys/self/revoke": [{ status: 200, body: { status: "revoked" } }, { status: 200, body: { status: "revoked" } }] },
+      ["library:read"]);
+    await ctx.secrets.store(MESH_SECRET_KEY, JSON.stringify({ token: "mesh_tok", server: BASE, id: "m1", scopes: ["mesh:read"] }));
+    await sb.meshes.refresh();
+    await flush();
+    assert.strictEqual(ctx.secrets.store_.get(MESH_SECRET_KEY), undefined, "the mesh key is forgotten");
+    assert.ok(ctx.secrets.store_.get(SECRET_KEY), "the sign-in stays");
+    await ctx.secrets.store(MESH_SECRET_KEY, JSON.stringify({ token: "mesh_tok", server: BASE, id: "m1", scopes: ["mesh:read"] }));
+    await sb.auth.signOut();
+    assert.strictEqual(ctx.secrets.store_.get(MESH_SECRET_KEY), undefined);
+    assert.strictEqual(ctx.secrets.store_.get(SECRET_KEY), undefined);
   });
 });

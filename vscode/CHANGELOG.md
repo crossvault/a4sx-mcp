@@ -2,6 +2,8 @@
 
 ## 0.9.4
 
+- **Allow mesh read works.** The server never puts mesh permissions into one key with others, so the old sign-in asked for a key it refused and the Meshes view said "Meshes are not available on this a4sx server". Allow mesh read now signs in for a key with mesh read alone and keeps it apart; your sign-in stays as it is. Signing out removes both. A refused mesh sign-in says the server's reason.
+- In My sessions listed through the a4sx CLI, a row has no **Resume in Claude Code** (it needs the sign-in here), and the "listed with the a4sx CLI's sign-in" note stays while a filter is set.
 - **One sign-in.** When you haven't signed in here but the a4sx CLI on this computer is signed in, My sessions lists your library through the CLI (`a4sx whoami --json`, `a4sx list --json`, CLI 0.59.12 or newer) and says so. It lists only when the CLI is signed in to the same server as this extension, reads it once until you press Refresh, and Refresh and Filter work there too. Saving, publishing and opening a session in Claude Code from VS Code still ask you to sign in here; Resume session and Run as cell use the CLI's sign-in.
 - **Convert an Agents-window session to a cell…** with no such session on this computer is the usual case: it now says so in an information notification that starts with the point ("Nothing to convert: no Agents-window session is on this computer, …"), not an error cut after a few words.
 - **The cells follow the Agents window.** When a session opens or closes in the Agents window, or the agent host starts or stops, the Cells view reads the cell list again (once per change), so a cell the agent host started no longer reads "stored" until a Refresh.
