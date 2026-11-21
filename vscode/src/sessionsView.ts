@@ -247,7 +247,10 @@ export class SessionsProvider implements vscode.TreeDataProvider<vscode.TreeItem
         this.rows = undefined;
         this.set("signed-out");   // the extension's own sign-in: actions that need it still ask for it
         if (this.viaCli && !this.cliRows) {
-          this.cliRows = this.viaCli().catch(() => undefined);
+          const read = this.viaCli().catch(() => undefined);
+          this.cliRows = read;
+          // review: only a list is kept; "no list" asks again next time (after `a4sx login` in a terminal)
+          void read.then((r) => { if (!r && this.cliRows === read) { this.cliRows = undefined; } });
         }
         const viaCli = this.cliRows ? await this.cliRows : undefined;
         this.listedViaCli = !!viaCli;
@@ -259,6 +262,15 @@ export class SessionsProvider implements vscode.TreeDataProvider<vscode.TreeItem
         if (viaCli.length === 0) {
           this.show(undefined);
           return [new MessageItem(CLI_LIBRARY_TEXTS.empty, "info")];
+        }
+        if (this.filter) {   // review: Filter works on the CLI's rows as on the server's
+          const q = this.filter;
+          const hits = viaCli.filter((r) => matchesFilter(r, q)).sort(newestFirst);
+          this.show(FILTER_MESSAGE(q, hits.length, viaCli.length));
+          if (hits.length === 0) {
+            return [new MessageItem(NO_MATCH(q), "filter", { command: "a4sx.clearSessionFilter", title: "Clear filter" })];
+          }
+          return hits.map((r) => new SessionItem(r, true));
         }
         this.show(CLI_LIBRARY_TEXTS.via);
         return this.nodeItems(buildFolderTree([...viaCli].sort(newestFirst)));

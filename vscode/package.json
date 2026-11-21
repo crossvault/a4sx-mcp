@@ -825,7 +825,7 @@
         },
         {
           "command": "a4sx.filterSessions",
-          "when": "a4sx.signedIn"
+          "when": "a4sx.signedIn || a4sx.sessionsViaCli"
         },
         {
           "command": "a4sx.clearSessionFilter",

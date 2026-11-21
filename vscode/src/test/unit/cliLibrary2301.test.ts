@@ -91,3 +91,32 @@ describe("#36 review", () => {
     assert.strictEqual(n, 2);
   });
 });
+
+
+describe("#36 delta review", () => {
+  beforeEach(resetCalls);
+
+  it("Filter works on the CLI's rows", async () => {
+    const auth = { token: async () => undefined, clear: async () => undefined } as any;
+    const two = { v: 1, signed_in: true, sessions: [{ id: "col-lib-a", label: "work", title: "Work" }, { id: "col-lib-b", label: "notes", title: "Notes" }] };
+    const p = new SessionsProvider(auth, () => ({}) as any, () => undefined, () => undefined, async () => parseCliLibrary(ok(two)));
+    const view: { message?: string } = {};
+    p.view = view;
+    p.setFilter("notes");
+    const hits = await p.getChildren();
+    assert.strictEqual(hits.length, 1);
+    assert.strictEqual((hits[0] as any).row?.id ?? (hits[0] as any).session?.id, "col-lib-b");
+    assert.ok(view.message && view.message !== CLI_LIBRARY_TEXTS.via, "the filter's message, not the CLI line");
+  });
+
+  it("no list is not kept: after `a4sx login` the next read lists", async () => {
+    const auth = { token: async () => undefined, clear: async () => undefined } as any;
+    let signedIn = false;
+    const p = new SessionsProvider(auth, () => ({}) as any, () => undefined, () => undefined,
+      async () => (signedIn ? parseCliLibrary(ok(LIST)) : undefined));
+    assert.deepStrictEqual(await p.getChildren(), []);
+    await new Promise((r) => setTimeout(r, 0));
+    signedIn = true;
+    assert.ok((await p.getChildren()).length >= 1);
+  });
+});

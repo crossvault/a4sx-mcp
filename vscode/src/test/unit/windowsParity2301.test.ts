@@ -347,13 +347,13 @@ describe("#2309 (cell01): a session opened in the Agents window re-reads the cel
             : { code: 0, stdout: "[]", stderr: "" };
     };
     const p = new CellsProvider({ resolve: () => ({ kind: "found", path: CLI }), run, server: () => BASE, onState: () => undefined });
-    p.rereadAfterMs = 20;
+    p.rereadAfterMs = 40;
     const lists = () => runs.filter((r) => r === "mesh cells --json").length;
     await p.getChildren((await p.getChildren())[0]);
     open = ["build (Team mesh)"];
     p.rereadHostNow();
     await p.getChildren((await p.getChildren())[0]);
-    await new Promise((r) => setTimeout(r, 60));
+    await new Promise((r) => setTimeout(r, 120));
     assert.strictEqual(lists(), 3, "the change's read, then the delayed one");
     const group = (await p.getChildren()).find((i) => i instanceof MeshGroupItem)!;
     const build = (await p.getChildren(group)).find((i) => i instanceof LocalCellItem)!;
@@ -361,10 +361,9 @@ describe("#2309 (cell01): a session opened in the Agents window re-reads the cel
     open = [];
     p.rereadHostNow();
     await p.getChildren((await p.getChildren())[0]);
-    await new Promise((r) => setTimeout(r, 5));   // the change's own read lands; the delayed one is still due
-    const before = lists();
+    const before = lists();   // right after the change's read: the delayed one (40 ms) is still due
     p.dispose();
-    await new Promise((r) => setTimeout(r, 60));
+    await new Promise((r) => setTimeout(r, 120));
     assert.strictEqual(lists(), before, "the delayed read never runs after dispose");
   });
 });
