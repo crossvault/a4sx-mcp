@@ -393,6 +393,29 @@ export function cellStopArgs(cell: LocalCell, all: readonly LocalCell[]): string
   return p && cell.localState === "running" ? ["mesh", "cell", "stop", ...p] : undefined;
 }
 
+/**
+ * #2301 E3: what the registry says about a cell, in words. A cell the signed-in account doesn't list is not alarming:
+ * it may be another account's, and work (cell01 on Windows was signed in to a second account).
+ */
+export const REGISTRY_TEXTS: { description: Record<RegistryState, string>; tooltip: Record<RegistryState, string> } = {
+  description: {
+    reserved: "registry reserved",
+    active: "registry active",
+    not_in_account: "not in the signed-in account",
+    other_account: "another account's",
+    revoked: "registry revoked",
+    unknown: "registry unknown",
+  },
+  tooltip: {
+    reserved: "Registry: reserved",
+    active: "Registry: active",
+    not_in_account: "Registry: the account you're signed in to doesn't list this cell. It may belong to another of your accounts and still work; `a4sx mesh cells --refresh` asks with the cell's own key.",
+    other_account: "Registry: this cell belongs to another account than the one you're signed in to. Its own key works.",
+    revoked: "Registry: revoked. The server refuses this cell's key; forget it here, or make a new cell.",
+    unknown: "Registry: unknown",
+  },
+};
+
 /** The page for a cell on the website: its mesh's page, or the meshes page for a standalone cell. */
 export function cellPageUrl(base: string, cell: LocalCell): string {
   const origin = cell.server ?? base.replace(/\/+$/, "");
@@ -408,7 +431,7 @@ export function localCellDescription(cell: LocalCell, defaultServer: string, gro
     host,
     cell.launchProfile ? CELL_PROFILE_TEXTS.description(cell.profileName ?? cell.launchProfile, cell.routeModel, cell.routeEffort) : undefined,
     cell.localState,
-    cell.registryState ? `registry ${cell.registryState}` : undefined,
+    cell.registryState ? REGISTRY_TEXTS.description[cell.registryState] : undefined,
     cell.path ? `path ${cell.path}` : undefined,
     shownTags(cell).join(" ") || undefined,
     cellPolicySummary(cell),
@@ -426,7 +449,7 @@ export function localCellTooltip(cell: LocalCell, defaultServer: string): string
     ...(cell.operator ? [CELL_PROFILE_TEXTS.operatorLine(cell.operator)] : []),
     ...(cell.routeModel ? [CELL_PROFILE_TEXTS.routeLine(cell.routeModel, cell.routeEffort)] : []),
     ...(cell.localState ? [`On this computer: ${cell.localState}${cell.pid ? ` (pid ${cell.pid})` : ""}`] : []),
-    ...(cell.registryState ? [`Registry: ${cell.registryState}`] : []),
+    ...(cell.registryState ? [REGISTRY_TEXTS.tooltip[cell.registryState]] : []),
     ...(cell.localState ? [`Path: ${cell.path ?? "none"}`] : []),
     ...(shownTags(cell).length ? [CELL_POLICY_TEXTS.tagsLine(shownTags(cell))] : []),
     ...(cellPolicySummary(cell) ? [cellPolicySummary(cell)!] : []),

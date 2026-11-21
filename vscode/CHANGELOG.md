@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.4
+
+- **A cell of another account no longer reads "registry revoked".** Signed in to one account, with cells of another, the Cells view called working cells revoked. With a4sx CLI 0.59.6 such a cell reads **not in the signed-in account**, and, after `a4sx mesh cells --refresh`, **another account's**. Only a cell whose own key the server refuses reads **registry revoked**.
+- **Cells comes first.** The a4sx side bar now starts with Cells and Meshes. My sessions and Marketplace start collapsed; Launch profiles stays open. This applies to a fresh install, because VS Code keeps the layout you already have.
+
 ## 0.9.3
 
 - **Start in terminal**, **New cell**, **Run as cell in terminal** and the **Convert** actions no longer add `--mesh-reduced-isolation`, and the extension no longer asks its own reduced-isolation question before them. That flag accepts reduced isolation for one start only and stores nothing, so a cell started from here never had your answer stored. A later start of that cell without a terminal, for example the agent host's, was then refused ("nobody has accepted that for this cell on this computer yet"). Now the a4sx CLI asks its own question in the terminal, once per cell and per computer, and stores your answer. The text is the CLI's.
