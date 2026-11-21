@@ -7,11 +7,14 @@
 import * as vscode from "vscode";
 import { execFile } from "child_process";
 import * as path from "path";
-import { ApiError, Client, DEFAULT_SERVER, FetchLike, listingWebUrl, listSessions, MESSAGES, normalizeServerUrl, PROFILE_ID, sessionWebUrl } from "./api";
+import { ApiError, Client, DEFAULT_SERVER, FetchLike, listingWebUrl, listSessions, MESSAGES, normalizeServerUrl, PROFILE_ID, SessionRow, sessionWebUrl } from "./api";
 import { A4sxAuthProvider, AUTH_ID, AUTH_LABEL, LoginCancelled, LoginRequest, SECRET_KEY, vscodeLogin } from "./auth";
 import { CLAUDE_EXTENSION_ID, claudeResumeUri } from "./claudeResume";
 import { CLI_NAME, findClaude, findCli, CliLookup, LookupEnv } from "./cli";
 import { cellsListDir, showText } from "./cells";
+import {
+  CellActionDeps, cellLastMessages, cellWhyMessage, CMD_CELL_EXPLAIN, CMD_CELL_FROM_SAVED, CMD_CELL_MESSAGES, CMD_CELL_SAVE, saveCellConversation, startCellFromSaved,
+} from "./cellActions";
 import {
   CellCommandDeps, copyCellLaunch, dailyUpdate, forgetCell, installCli, newCell, openCellOnWeb, openCellPolicy, ownCliCheck, ownCliUsable, renameCell, repairOwnCli, setCellProfile, setDefaultCell, setupAgentsWindow, startAgentHost, startCell, startCellHere, stopCell,
   updateCliInTerminal,
@@ -884,6 +887,60 @@ export function savedEntries(auth: { token(): Promise<string | undefined> }): Sa
   };
 }
 
+/**
+ * a4sx #2301 E6, "Start from a saved session…" on a cell: the library's entries, read from the server like My
+ * sessions. Signed out, or the library can't be read: rejects with LibraryUnreadable, and nothing is started.
+ */
+export function librarySessions(auth: { token(): Promise<string | undefined> }): () => Promise<SessionRow[]> {
+  return async () => {
+    const token = await auth.token();
+    if (!token) {
+      throw new LibraryUnreadable(true);
+    }
+    try {
+      return await listSessions(client(), token);
+    } catch (e) {
+      throw new LibraryUnreadable(e instanceof ApiError && e.code === "unauthorized", errorText(e));
+    }
+  };
+}
+
+export { CMD_CELL_MESSAGES, CMD_CELL_EXPLAIN, CMD_CELL_SAVE, CMD_CELL_FROM_SAVED };
+/** The output channel the cell-row actions print what the a4sx CLI answered into (made on first use). */
+export const OUTPUT_CHANNEL = "a4sx";
+
+/** How often This computer's status is read again while the Cells view is visible and focused (cell01, #2301 E2). */
+export const HOST_POLL_MS = 30_000;
+
+/**
+ * Calls `reread` every HOST_POLL_MS while `view` is visible and the window focused, and once when the window gets
+ * focus with the view visible. Each call is one local `a4sx agent-host status --json`; nothing asks a server.
+ */
+export function hostStatusPoll(view: { visible: boolean; onDidChangeVisibility: vscode.Event<unknown> }, reread: () => void,
+  ms: number = HOST_POLL_MS): vscode.Disposable {
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const sync = () => {
+    const on = view.visible && vscode.window.state.focused;
+    if (on && !timer) {
+      timer = setInterval(reread, ms);
+    } else if (!on && timer) {
+      clearInterval(timer);
+      timer = undefined;
+    }
+  };
+  const subs = [
+    view.onDidChangeVisibility(() => sync()),
+    vscode.window.onDidChangeWindowState((st) => {
+      if (st.focused && view.visible) {
+        reread();
+      }
+      sync();
+    }),
+  ];
+  sync();
+  return { dispose: () => { if (timer) { clearInterval(timer); } subs.forEach((d) => d.dispose()); } };
+}
+
 export const CELL_FOLDER_PICK = "Choose the folder to start the cell in";
 
 /** Where a cell's terminal starts: the workspace folder (a pick when several), the default without one; null = cancelled. */
@@ -1005,8 +1062,26 @@ export function activate(context: vscode.ExtensionContext): void {
     terminals: cellTerminals,
     onRepaired: () => profiles.refresh(),
   };
+  // a4sx #2301 E5/E6: the cell-row actions print the CLI's answers into one output channel, made when first needed
+  let output: vscode.OutputChannel | undefined;
+  const actionDeps: CellActionDeps = {
+    ...cellDeps,
+    show: (title, text) => {
+      if (!output) {
+        output = vscode.window.createOutputChannel(OUTPUT_CHANNEL);
+        context.subscriptions.push(output);
+      }
+      output.appendLine(`== ${title}`);
+      output.appendLine(text);
+      output.appendLine("");
+      output.show(true);
+    },
+  };
   ownCliDeps = cellDeps;
   const cellsView = vscode.window.createTreeView(VIEW_CELLS, { treeDataProvider: cells });
+  // cell01 (#2301 E2): the agent host can stop in its terminal (Ctrl+C) without the view knowing: its status is
+  // read again while the Cells view is visible and VS Code has focus, and when the window gets focus again
+  context.subscriptions.push(hostStatusPoll(cellsView, () => cells.rereadHostNow()));
   const refreshCells = () => void cells.refresh();
   /** Refresh after an update or a settings change: the CLI's version is asked again too. */
   const refreshAll = () => {
@@ -1112,6 +1187,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_NEW_CELL, () => newCell(cellDeps)),
     vscode.commands.registerCommand(CMD_START_CELL, (item?: LocalCellItem) => startCell(cellDeps, item)),
     vscode.commands.registerCommand(CMD_START_CELL_HERE, (item?: RemoteCellItem) => startCellHere(cellDeps, item)),
+    vscode.commands.registerCommand(CMD_CELL_MESSAGES, (item?: RemoteCellItem) => cellLastMessages(actionDeps, item)),
+    vscode.commands.registerCommand(CMD_CELL_EXPLAIN, (item?: RemoteCellItem) => cellWhyMessage(actionDeps, item)),
+    vscode.commands.registerCommand(CMD_CELL_SAVE, (item?: LocalCellItem) => saveCellConversation(actionDeps, item, { saved: savedEntries(auth) })),
+    vscode.commands.registerCommand(CMD_CELL_FROM_SAVED, (item?: LocalCellItem) => startCellFromSaved(actionDeps, item, { sessions: librarySessions(auth) })),
     vscode.commands.registerCommand(CMD_START_AGENT_HOST, () => startAgentHost(cellDeps)),
     vscode.commands.registerCommand(CMD_SETUP_AGENTS_WINDOW, () => setupAgentsWindow(cellDeps)),
     vscode.commands.registerCommand(CMD_DEFAULT_CELL, (item?: LocalCellItem) => setDefaultCell(cellDeps, item)),

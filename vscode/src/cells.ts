@@ -267,9 +267,12 @@ export const NEW_CELL_ARGS: readonly string[] = ["launch", "--new-cell"];
 /** The first CLI that asks the reduced-isolation question itself and stores the answer per cell (#2118 consent_once). */
 export const MIN_CELL_CONSENT_CLI = "0.32.0";
 
-/** True when another stored cell has this name, so the commands need `--mesh` to pick it. */
+/**
+ * Another stored cell has this name. By instance id and mesh, never by object: a list read again (runAsCell's
+ * refresh) holds new objects, so the cell itself counted as "another" and `--mesh` was always added (cell01, #2301).
+ */
 function nameShared(cell: LocalCell, all: readonly LocalCell[]): boolean {
-  return all.some((c) => c !== cell && c.name === cell.name);
+  return all.some((c) => c.name === cell.name && (c.instanceId !== cell.instanceId || (c.meshId ?? "") !== (cell.meshId ?? "")));
 }
 
 function valid(cell: LocalCell): boolean {
