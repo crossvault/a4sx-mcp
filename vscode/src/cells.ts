@@ -91,7 +91,8 @@ export const CELL_PROFILE_TEXTS = {
 /** The mesh policy's name as the summary line shows it (spec §25.11, draft for owner approval). */
 export const CELL_POLICY_TEXTS = {
   labels: { open: "Open", own: "Own cells", closed: "Closed" } as Record<MeshPolicy, string>,
-  summary: (label: string, canTalkTo: number | null) => (canTalkTo === null ? label : `${label} · can talk to ${canTalkTo}`),
+  // #2301 (cell01): "traffic: " says what the bare preset label is; the approved labels themselves are unchanged
+  summary: (label: string, canTalkTo: number | null) => (canTalkTo === null ? `traffic: ${label}` : `traffic: ${label} · can talk to ${canTalkTo}`),
   tagsLine: (tags: readonly string[]) => `Tags: ${tags.join(", ")}`,
   openPolicy: "Open policy in browser",
 };

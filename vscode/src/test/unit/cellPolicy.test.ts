@@ -52,11 +52,11 @@ describe("Cells: tags and the policy summary (0.7.0, a4sx #1861)", () => {
     const c = one(row28());
     assert.deepStrictEqual(c.tags, ["tag:ci", "tag:gpu"]);
     assert.deepStrictEqual(c.policy, { basis: "preset", policyRev: 7, canTalkTo: 3, reachableFrom: 3, url: URL_OK });
-    assert.strictEqual(cellPolicySummary(c), "Open · can talk to 3");
-    assert.strictEqual(localCellDescription(c, BASE, true), "stored · registry active · path lan · tag:ci tag:gpu · Open · can talk to 3");
+    assert.strictEqual(cellPolicySummary(c), "traffic: Open · can talk to 3");
+    assert.strictEqual(localCellDescription(c, BASE, true), "stored · registry active · path lan · tag:ci tag:gpu · traffic: Open · can talk to 3");
     const tip = localCellTooltip(c, BASE).split("\n");
     assert.ok(tip.includes("Tags: tag:ci, tag:gpu"));
-    assert.ok(tip.includes("Open · can talk to 3"));
+    assert.ok(tip.includes("traffic: Open · can talk to 3"));
     assert.strictEqual(cellContext(c), "a4sx.localCell.policy");
   });
 
@@ -87,9 +87,9 @@ describe("Cells: tags and the policy summary (0.7.0, a4sx #1861)", () => {
     ]);
     assert.deepStrictEqual(table, [
       // `policy: null` (a server without access control, …): no bare preset label (review nit 1)
-      ["Open · can talk to 3", "Open", undefined, "Open · can talk to 0"],
-      ["Own cells · can talk to 3", "Own cells", undefined, "Own cells · can talk to 0"],
-      ["Closed · can talk to 3", "Closed", undefined, "Closed · can talk to 0"],
+      ["traffic: Open · can talk to 3", "traffic: Open", undefined, "traffic: Open · can talk to 0"],
+      ["traffic: Own cells · can talk to 3", "traffic: Own cells", undefined, "traffic: Own cells · can talk to 0"],
+      ["traffic: Closed · can talk to 3", "traffic: Closed", undefined, "traffic: Closed · can talk to 0"],
       [undefined, undefined, undefined, undefined],
     ]);
     assert.strictEqual(cellPolicySummary(one(row28({ mesh_policy: "weird" }))), undefined, "an unknown policy is no policy");
@@ -155,7 +155,7 @@ describe("Cells: tags and the policy summary (0.7.0, a4sx #1861)", () => {
     // A refused URL leaves the summary and drops only the action.
     const c = one(row28({ policy: { basis: "preset", policy_rev: 1, can_talk_to: 2, reachable_from: 2, url: `https://evil.example/meshes/m/${MESH}?tab=policy` } }));
     assert.strictEqual(c.policy!.url, undefined);
-    assert.strictEqual(cellPolicySummary(c), "Open · can talk to 2");
+    assert.strictEqual(cellPolicySummary(c), "traffic: Open · can talk to 2");
     assert.strictEqual(cellContext(c), "a4sx.localCell");
   });
 
@@ -165,7 +165,7 @@ describe("Cells: tags and the policy summary (0.7.0, a4sx #1861)", () => {
     }));
     assert.deepStrictEqual(shownTags(c), ["tag:ci", "tag:a4sx-ok", "tag:gpu"]);
     const desc = localCellDescription(c, BASE, true);
-    assert.strictEqual(desc, "stored · registry active · path lan · tag:ci tag:a4sx-ok tag:gpu · Open · can talk to 3");
+    assert.strictEqual(desc, "stored · registry active · path lan · tag:ci tag:a4sx-ok tag:gpu · traffic: Open · can talk to 3");
     assert.ok(!/[<>[\]$‮]/.test(desc + localCellTooltip(c, BASE)));
   });
 
@@ -176,8 +176,8 @@ describe("Cells: tags and the policy summary (0.7.0, a4sx #1861)", () => {
       row27({ name: "old", instance_id: "ins_O1" }),
     ] });
     assert.deepStrictEqual(items.map((i) => [i.label, i.description, i.contextValue]), [
-      ["build", "default · stored · registry active · path lan · tag:ci tag:gpu · Open · can talk to 3", "a4sx.localCell.default.policy"],
-      ["docs", "stored · registry active · path lan · Own cells", "a4sx.localCell.policy"],
+      ["build", "default · stored · registry active · path lan · tag:ci tag:gpu · traffic: Open · can talk to 3", "a4sx.localCell.default.policy"],
+      ["docs", "stored · registry active · path lan · traffic: Own cells", "a4sx.localCell.policy"],
       ["old", "stored · registry active · path lan", "a4sx.localCell"],
     ]);
     assert.ok(items.every((i) => typeof i.tooltip === "string"));
