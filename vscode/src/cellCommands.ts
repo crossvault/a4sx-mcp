@@ -696,7 +696,8 @@ export async function stopAgentHost(deps: CellCommandDeps): Promise<boolean> {
   // coordinator (as the deck's S): ask first when cells run in it; with none, stop without asking
   const now = await deps.run(cli, AGENT_HOST_STATUS_ARGS, 15_000);
   const open = (now.code === 0 ? parseAgentHostStatus(now.stdout)?.open : undefined) ?? [];
-  if (open.length && (await vscode.window.showWarningMessage(AGENT_HOST_TEXTS.stopAsk(open.map((o) => o.name)), { modal: true },
+  const plain = now.code === 0 ? plainOpenCount(now.stdout) : 0;   // review: a plain conversation ends too
+  if ((open.length || plain) && (await vscode.window.showWarningMessage(AGENT_HOST_TEXTS.stopAsk(open.map((o) => o.name), plain), { modal: true },
     AGENT_HOST_TEXTS.stopIt)) !== AGENT_HOST_TEXTS.stopIt) {
     return false;
   }
@@ -712,6 +713,16 @@ export async function stopAgentHost(deps: CellCommandDeps): Promise<boolean> {
     : !why && out.code === null ? AGENT_HOST_TEXTS.stopNoAnswer   // review: the run's own timeout says nothing itself
       : CELL_CMD_TEXTS.cliFailed(AGENT_HOST_TEXTS.stopWhat, why));
   return false;
+}
+
+/** How many plain Agents-window conversations (not cells) the status lists as open: "name (plain)" entries. */
+function plainOpenCount(stdout: string): number {
+  try {
+    const raw = JSON.parse(stdout) as { open?: unknown };
+    return Array.isArray(raw.open) ? raw.open.slice(0, 64).filter((e) => typeof e === "string" && e.endsWith(" (plain)")).length : 0;
+  } catch {
+    return 0;
+  }
 }
 
 /** A launcher file's text (at most 4 KiB), or undefined. */

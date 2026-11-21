@@ -383,7 +383,7 @@ export async function waitForHost(deps: CellActionDeps, cli: string, ms: number,
       return s;
     }
     const at = s && !s.running && s.lastError?.at ? Date.parse(s.lastError.at) : NaN;
-    if (s?.lastError && at >= began - 1000) {   // the same computer's clock; the CLI's times are whole seconds
+    if (s?.lastError && at >= began - 1000) {   // the same computer's clock; 1 s for the time between its write and our start
       return { failed: s.lastError.text };
     }
   }

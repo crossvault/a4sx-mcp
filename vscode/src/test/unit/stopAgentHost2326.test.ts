@@ -49,13 +49,24 @@ describe("#2326: Stop agent host", () => {
     calls.modalChoices.push(undefined);   // Cancel
     assert.strictEqual(await stopAgentHost(h.deps), false);
     assert.deepStrictEqual(calls.modals.map((m) => [m.kind, m.message, m.items]),
-      [["warning", "Stop the a4sx agent host? «build», «docs» end (VS Code is told first).", ["Stop it"]]]);
+      [["warning", "Stop the a4sx agent host? «build», «docs», 1 plain conversation end (VS Code is told first).", ["Stop it"]]]);
     assert.deepStrictEqual(h.runs.map((r) => r.args), ["agent-host status --json"], "nothing stopped");
     resetCalls();
+    assert.strictEqual(AGENT_HOST_TEXTS.stopAsk(["build"]), "Stop the a4sx agent host? «build» ends (VS Code is told first).");
+    assert.strictEqual(AGENT_HOST_TEXTS.stopAsk([], 2), "Stop the a4sx agent host? 2 plain conversations end (VS Code is told first).");
+    assert.strictEqual(AGENT_HOST_TEXTS.stopAsk(["a"], 1), "Stop the a4sx agent host? «a», 1 plain conversation end (VS Code is told first).");
     calls.modalChoices.push(AGENT_HOST_TEXTS.stopIt);
     assert.strictEqual(await stopAgentHost(h.deps), true);
     assert.deepStrictEqual(h.runs.map((r) => r.args).slice(-1), ["agent-host stop"]);
     assert.deepStrictEqual(calls.infos, [AGENT_HOST_TEXTS.stopDone]);
+  });
+
+  it("only plain conversations open: asks too (they end as well)", async () => {
+    const st = { code: 0, stdout: JSON.stringify({ running: true, address: "ws://127.0.0.1:8765/", open: ["chat (plain)"] }), stderr: "" };
+    const h = harness({ code: 0, stdout: "stopped (pid 1)\n", stderr: "" }, st);
+    calls.modalChoices.push(undefined);
+    assert.strictEqual(await stopAgentHost(h.deps), false);
+    assert.deepStrictEqual(calls.modals.map((m) => m.message), ["Stop the a4sx agent host? 1 plain conversation ends (VS Code is told first)."]);
   });
 
   it("not running: says so, not that it stopped", async () => {
