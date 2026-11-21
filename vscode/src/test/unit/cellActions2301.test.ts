@@ -98,9 +98,11 @@ describe("#2301 E5: asking about a cell on another machine", () => {
     assert.strictEqual(deliveriesArgs("ins_D1; rm", MESH), undefined);
     assert.strictEqual(deliveriesArgs("ins_D1", "Team mesh"), undefined);
     assert.strictEqual(deliveriesArgs("ins_D1", MESH, 0), undefined);
-    assert.deepStrictEqual(explainArgs(MESH, "build", "desk-agent"), ["mesh", "policy", MESH, "--explain", "build", "desk-agent"]);
-    assert.strictEqual(explainArgs(MESH, "build", "--cap"), undefined);
-    assert.strictEqual(explainArgs("testmesh", "build", "desk-agent"), undefined);
+    // review: by instance ids (names aren't unique in a mesh; the CLI refuses an ambiguous one)
+    assert.deepStrictEqual(explainArgs(MESH, "ins_A1", "ins_D1"), ["mesh", "policy", MESH, "--explain", "ins_A1", "ins_D1"]);
+    assert.strictEqual(explainArgs(MESH, "build", "desk-agent"), undefined);
+    assert.strictEqual(explainArgs(MESH, "ins_A1", "--cap"), undefined);
+    assert.strictEqual(explainArgs("testmesh", "ins_A1", "ins_D1"), undefined);
   });
 
   it("Last messages: one `mesh deliveries` with the ids, shown as the CLI printed it", async () => {
@@ -131,7 +133,7 @@ describe("#2301 E5: asking about a cell on another machine", () => {
     await h.provider.refresh();
     h.runs.length = 0;
     assert.strictEqual(await cellWhyMessage(h.deps, remote()), true);
-    assert.deepStrictEqual(h.runs, [`mesh policy ${MESH} --explain build desk-agent`]);
+    assert.deepStrictEqual(h.runs, [`mesh policy ${MESH} --explain ins_A1 ins_D1`]);
     assert.deepStrictEqual(calls.infos, ["«build» → «desk-agent»: allowed by the mesh's rules."]);
     assert.strictEqual(calls.quickPicks.length, 0);
     assert.strictEqual(h.shown.length, 0);
@@ -146,7 +148,7 @@ describe("#2301 E5: asking about a cell on another machine", () => {
     assert.strictEqual(await cellWhyMessage(h.deps, remote()), true);
     assert.strictEqual(calls.quickPicks[0].options.title, "Which of your cells here should message «desk-agent»?");
     assert.deepStrictEqual(calls.quickPicks[0].items.map((i: any) => [i.label, i.description]), [["build", "default"], ["docs", undefined]]);
-    assert.strictEqual(h.runs[h.runs.length - 1], `mesh policy ${MESH} --explain docs desk-agent`);
+    assert.strictEqual(h.runs[h.runs.length - 1], `mesh policy ${MESH} --explain ins_A2 ins_D1`);
     assert.deepStrictEqual(h.shown, [{ title: "Can «docs» message «desk-agent»?", text: "«docs» → «desk-agent»: refused.\nThe rule that decides: tag:lead → * one-way" }]);
   });
 
@@ -179,9 +181,9 @@ describe("#2301 E6: Save its conversation…", () => {
     assert.strictEqual(calls.modals[0].message, "Save «docs»'s conversation to your a4sx library?");
     assert.deepStrictEqual(calls.modals[0].items, ["Save scrubbed copy"]);
     assert.strictEqual(calls.modals[0].detail,
-      "The saved copy is scrubbed: before it uploads, the a4sx CLI removes secrets and replaces names, host names and " +
-      "folder paths. The conversation on this computer stays as it is. A cell started later from the saved copy reads " +
-      "the replaced names, not the real ones.");
+      "The saved copy is scrubbed: before it uploads, the a4sx CLI removes secrets and replaces e-mail addresses, host " +
+      "names, IP addresses and your home folder in paths. The conversation on this computer stays as it is. A cell " +
+      "started later from the saved copy reads the replaced values, not the real ones.");
     assert.strictEqual(calls.terminals.length, 0);
     assert.ok(!h.runs.some((r) => r.startsWith("push")), "nothing is uploaded without a terminal the person sees");
   });

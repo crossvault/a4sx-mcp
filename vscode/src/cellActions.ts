@@ -13,8 +13,8 @@
 //                                     found as "Save session to a4sx" finds it (saveTab.ts).
 //     "Start from a saved session…"   pick a library entry, then Run as cell in terminal with this cell preselected
 //                                     (runAsCell.ts): the CLI's own questions are asked in the terminal as always.
-// There is no "Hand off" here on purpose: a scrubbed copy replaces the names of the cell's peers, so a cell continued
-// from it on another computer would address them wrongly. It waits for the CLI's as-is mode (a4sx #2292).
+// There is no "Hand off" here on purpose: a scrubbed copy is not an exact copy, so a cell continued from it on
+// another computer may not read what really happened. It waits for the CLI's as-is mode (a4sx #2292).
 // Every CLI call is an argv array; what is read back is only shown, never run.
 import * as vscode from "vscode";
 import { SessionRow } from "./api";
@@ -54,9 +54,9 @@ export const CELL_ACTION_TEXTS = {
     `«${name}»'s last conversation (session ${short}) can't be found on this computer any more, so it can't be saved.`,
   saveTitle: (name: string) => `Save «${name}»'s conversation to your a4sx library?`,
   saveDetail:
-    "The saved copy is scrubbed: before it uploads, the a4sx CLI removes secrets and replaces names, host names and " +
-    "folder paths. The conversation on this computer stays as it is. A cell started later from the saved copy reads " +
-    "the replaced names, not the real ones.",
+    "The saved copy is scrubbed: before it uploads, the a4sx CLI removes secrets and replaces e-mail addresses, host " +
+    "names, IP addresses and your home folder in paths. The conversation on this computer stays as it is. A cell " +
+    "started later from the saved copy reads the replaced values, not the real ones.",
   save: "Save scrubbed copy",
   saveTerminal: (name: string) => `a4sx: save ${name}`,
   saveBanner: (name: string, short: string, folder: string) =>
@@ -86,9 +86,12 @@ export function deliveriesArgs(instanceId: string, meshId: string, last: number 
   return ["mesh", "deliveries", instanceId, "--mesh", meshId, "--last", String(last)];
 }
 
-/** `mesh policy <mesh id> --explain FROM TO`; undefined for a name or mesh id the CLI doesn't take. */
+/**
+ * `mesh policy <mesh id> --explain FROM TO` by instance ids (review: names aren't unique in a mesh, and the CLI
+ * refuses an ambiguous one); undefined for an id or mesh id the CLI doesn't take.
+ */
 export function explainArgs(meshId: string, from: string, to: string): string[] | undefined {
-  return CLI_MESH_ID.test(meshId) && CELL_NAME.test(from) && CELL_NAME.test(to) ? ["mesh", "policy", meshId, "--explain", from, to] : undefined;
+  return CLI_MESH_ID.test(meshId) && INSTANCE_ID.test(from) && INSTANCE_ID.test(to) ? ["mesh", "policy", meshId, "--explain", from, to] : undefined;
 }
 
 /** What the CLI printed, for showing: control characters dropped (line ends kept), at most `max` characters. */
@@ -150,7 +153,7 @@ export async function cellWhyMessage(deps: CellActionDeps, item: RemoteCellItem 
     }
     from = picked.cell;
   }
-  const args = explainArgs(item.meshId, from.name, item.peer.name);
+  const args = explainArgs(item.meshId, from.instanceId, item.peer.instanceId);
   if (!args) {
     await vscode.window.showErrorMessage(t.badPeer);
     return false;
