@@ -182,9 +182,12 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
     } catch {
       return undefined;
     }
+    if (s.server !== base) {
+      return undefined;   // another server set now: ignored, kept (only its own server can revoke it)
+    }
     const main = await this.current();
     // review: a mesh key belongs to the sign-in it was made for (another account's, after a new sign-in: never)
-    if (!main || s.forId !== main.id || s.server !== base || (s.expiresAt && Date.parse(s.expiresAt) <= Date.now())) {
+    if (!main || s.forId !== main.id || (s.expiresAt && Date.parse(s.expiresAt) <= Date.now())) {
       await this.dropMesh();
       return undefined;
     }
@@ -226,13 +229,13 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
   }
 
   private async signInMesh(): Promise<string> {
-    if (!(await this.current())) {
+    const main = await this.current();
+    if (!main) {
       throw new ApiError("unauthorized", "Sign in to a4sx first.");
     }
-    const main = await this.current();
     const stored = await this.login(this.client(), { scopes: [SCOPE_MESH_READ], fallback: false, adding: SCOPE_MESH_READ });
     const old = await this.read(MESH_SECRET_KEY);
-    await this.secrets.store(MESH_SECRET_KEY, JSON.stringify({ ...stored, forId: main?.id }));   // tied to the sign-in
+    await this.secrets.store(MESH_SECRET_KEY, JSON.stringify({ ...stored, forId: main.id }));   // tied to the sign-in
     this.changed.fire({ added: [], removed: [], changed: [] });   // the views read their keys again
     if (old && old.token !== stored.token && old.server === stored.server) {
       await this.revoke(old);   // only the replaced mesh key; the sign-in is never touched
@@ -244,6 +247,11 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
     const stored = await this.login(this.client(), req);
     const old = await this.read();
     await this.secrets.store(SECRET_KEY, JSON.stringify(stored));
+    // review: a step-up (profiles, folders) replaces the sign-in with a new id: its mesh key goes with it
+    const mesh = req.adding && old ? await this.read(MESH_SECRET_KEY) as (Stored & { forId?: string }) | undefined : undefined;
+    if (mesh && old && mesh.forId === old.id) {
+      await this.secrets.store(MESH_SECRET_KEY, JSON.stringify({ ...mesh, forId: stored.id }));
+    }
     const session = this.toSession(stored);
     this.changed.fire({ added: [session], removed: old ? [this.toSession(old)] : [], changed: [] });
     // A step-up replaced the key: the old one is no longer needed. Only after the new one is stored.

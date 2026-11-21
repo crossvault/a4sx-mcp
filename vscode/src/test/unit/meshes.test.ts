@@ -1224,6 +1224,24 @@ describe("#2309: the mesh-only key", () => {
     await sb.auth.signOut();
     assert.strictEqual(ctx.secrets.store_.get(MESH_SECRET_KEY), undefined);
     assert.strictEqual(ctx.secrets.store_.get(SECRET_KEY), undefined);
-    assert.strictEqual(revokes(net).length, 2);
+    assert.deepStrictEqual(revokes(net).map((r: any) => r.headers.Authorization).sort(), [`Bearer ${TOKEN}`, "Bearer mesh_tok"].sort());
+  });
+
+  it("a profiles step-up (a new sign-in id) keeps the mesh key: same token, never revoked", async () => {
+    const REV = { status: 200, body: { status: "revoked" } };
+    const { ctx, sb, net } = await activateWith({ "GET /meshes": [ok(MESHES), ok(MESHES)], "POST /library/keys/self/revoke": [REV, REV] },
+      ["library:read"]);
+    await ctx.secrets.store(MESH_SECRET_KEY, meshKey("t1"));
+    await sb.auth.stepUp("profiles:write");                  // the fake login returns id "t2"
+    assert.strictEqual(JSON.parse(ctx.secrets.store_.get(MESH_SECRET_KEY)!).forId, "t2");
+    assert.strictEqual(await sb.auth.meshToken(), "mesh_tok");
+    assert.ok(!revokes(net).some((r: any) => r.headers.Authorization === "Bearer mesh_tok"), "the mesh key isn't revoked");
+  });
+
+  it("another server set: the mesh key is ignored, not dropped (only its server could revoke it)", async () => {
+    const { ctx, sb } = await activateWith({ "GET /meshes": [ok(MESHES)] }, ["library:read"]);
+    await ctx.secrets.store(MESH_SECRET_KEY, JSON.stringify({ token: "mesh_tok", server: "https://other.example", id: "m1", scopes: ["mesh:read"], forId: "t1" }));
+    assert.strictEqual(await sb.auth.meshKey(), undefined);
+    assert.ok(ctx.secrets.store_.get(MESH_SECRET_KEY), "kept");
   });
 });
