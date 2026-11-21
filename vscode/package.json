@@ -231,6 +231,30 @@
         "icon": "$(play)"
       },
       {
+        "command": "a4sx.cellLastMessages",
+        "title": "Last messages",
+        "category": "a4sx",
+        "icon": "$(mail)"
+      },
+      {
+        "command": "a4sx.cellWhyMessage",
+        "title": "Why can or can't I message it",
+        "category": "a4sx",
+        "icon": "$(question)"
+      },
+      {
+        "command": "a4sx.saveCellConversation",
+        "title": "Save its conversation…",
+        "category": "a4sx",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "a4sx.startCellFromSaved",
+        "title": "Start from a saved session…",
+        "category": "a4sx",
+        "icon": "$(history)"
+      },
+      {
         "command": "a4sx.startAgentHost",
         "title": "Start agent host",
         "category": "a4sx",
@@ -526,6 +550,26 @@
           "command": "a4sx.startCellHere",
           "when": "view == a4sx.cells && viewItem == a4sx.remoteCell.own",
           "group": "1_cell@1"
+        },
+        {
+          "command": "a4sx.cellLastMessages",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.remoteCell(\\.own)?$/",
+          "group": "1_cell_ask@1"
+        },
+        {
+          "command": "a4sx.cellWhyMessage",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.remoteCell(\\.own)?$/",
+          "group": "1_cell_ask@2"
+        },
+        {
+          "command": "a4sx.saveCellConversation",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?(\\.running)?(\\.policy)?$/",
+          "group": "1_cell_saved@1"
+        },
+        {
+          "command": "a4sx.startCellFromSaved",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?(\\.policy)?$/",
+          "group": "1_cell_saved@2"
         },
         {
           "command": "a4sx.resumeSession",
@@ -838,6 +882,22 @@
         },
         {
           "command": "a4sx.startCellHere",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.cellLastMessages",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.cellWhyMessage",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.saveCellConversation",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.startCellFromSaved",
           "when": "false"
         },
         {

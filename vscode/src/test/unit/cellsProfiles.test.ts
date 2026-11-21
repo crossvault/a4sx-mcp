@@ -436,10 +436,13 @@ describe("Cells view: grouped by mesh, with the other machines' cells", () => {
       "a4sx.copyCellLaunch": [true, true, false, true, true],
     });
     assert.ok(menu.some((m: any) => m.command === "a4sx.openCellOnWeb" && m.when === "view == a4sx.cells && viewItem == a4sx.cellMesh"));
-    // #2301 E1: only your own cells on another machine have an action: Start on this computer
+    // #2301 E1: only your own cells on another machine can be started here; E5: any of them can be asked about
     const remote = menu.filter((m: any) => m.when.includes("remoteCell"));
-    assert.ok(remote.length > 0 && remote.every((m: any) => m.command === "a4sx.startCellHere"
-      && m.when === "view == a4sx.cells && viewItem == a4sx.remoteCell.own"), "another person's cell has no actions");
+    const ask = ["a4sx.cellLastMessages", "a4sx.cellWhyMessage"];
+    assert.ok(remote.length > 0 && remote.filter((m: any) => !ask.includes(m.command)).every((m: any) => m.command === "a4sx.startCellHere"
+      && m.when === "view == a4sx.cells && viewItem == a4sx.remoteCell.own"), "another person's cell can't be started from here");
+    assert.deepStrictEqual(remote.filter((m: any) => ask.includes(m.command)).map((m: any) => [m.command, m.when]),
+      ask.map((c) => [c, "view == a4sx.cells && viewItem =~ /^a4sx\\.remoteCell(\\.own)?$/"]), "the two read-only questions, on every cell elsewhere");
     assert.strictEqual(pkg.contributes.commands.find((c: any) => c.command === "a4sx.openCellOnWeb").title, "Open mesh in browser");
   });
 
