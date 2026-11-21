@@ -79,7 +79,7 @@ describe("#2326: Stop agent host", () => {
     const old = harness({ code: 2, stdout: "", stderr: "a4sx agent-host: error: argument agent_host_cmd: invalid choice: 'stop'\n" });
     assert.strictEqual(await stopAgentHost(old.deps), false);
     assert.deepStrictEqual(calls.errors.map((e) => e.message), [AGENT_HOST_TEXTS.stopNeedsUpdate]);
-    assert.strictEqual(AGENT_HOST_TEXTS.stopNeedsUpdate, "This a4sx CLI can't stop the agent host from here (that needs CLI 0.59.15 or newer). Update a4sx, or stop it with Ctrl+C in its terminal \"a4sx: agent host\"; nothing was stopped.");
+    assert.strictEqual(AGENT_HOST_TEXTS.stopNeedsUpdate, "Update a4sx to stop the agent host from here (needs CLI 0.59.15+). Nothing was stopped; Ctrl+C in its terminal \"a4sx: agent host\" stops it now.");
     resetCalls();
     const refused = harness({ code: 1, stdout: "", stderr: "a4sx: the agent host (pid 42) hasn't stopped within 30 s: it is still ending its cells\n" });
     assert.strictEqual(await stopAgentHost(refused.deps), false);
@@ -91,6 +91,15 @@ describe("#2326: Stop agent host", () => {
     const h = harness({ code: null, stdout: "a4sx agent host: asked it to stop (pid 42). …\n", stderr: "" });
     assert.strictEqual(await stopAgentHost(h.deps), false);
     assert.deepStrictEqual(calls.errors.map((e) => e.message), [AGENT_HOST_TEXTS.stopNoAnswer]);
+  });
+
+  it("cell01: the done toast's first sentence is short (VS Code cuts a toast at about 60 characters)", () => {
+    assert.strictEqual(AGENT_HOST_TEXTS.stopDone, "a4sx agent host stopped. Start it again to use your cells in the Agents window.");
+    assert.ok(AGENT_HOST_TEXTS.stopDone.split(". ")[0].length <= 30);
+    // review of #40: the other messages of the command also give their point within the first ~60 characters
+    assert.ok(AGENT_HOST_TEXTS.stopping.startsWith("Stopping the a4sx agent host…"));
+    assert.ok(AGENT_HOST_TEXTS.stopNeedsUpdate.indexOf("0.59.15") < 60);
+    assert.ok(AGENT_HOST_TEXTS.stopNoAnswer.indexOf("45 s") < 60);
   });
 
   it("the command is contributed with its title", () => {

@@ -250,6 +250,11 @@ describe("cell01 on Windows: Ctrl+C on the agent host started from here asks not
       { exe: "C:\\Python312\\python.exe", pre: ["C:\\Users\\me\\a4sx\\amdx.py"] });
     assert.strictEqual(directLaunch("/usr/local/bin/a4sx", () => "", () => true, "linux"), undefined);
     assert.strictEqual(directLaunch("C:\\a.cmd", () => "@echo off\r\nrem something else", () => true, "win32"), undefined);
+    // review of #32: only spaces or tabs between the parts; no % in a path
+    assert.strictEqual(directLaunch("C:\\a.cmd", () => '@"C:\\P\\python.exe"\r\n"C:\\s\\amdx.py" %*', () => true, "win32"), undefined);
+    assert.strictEqual(directLaunch("C:\\a.cmd", () => '@"C:\\P\\python.exe" "C:\\s\\amdx.py"\r\n%*', () => true, "win32"), undefined);
+    assert.strictEqual(directLaunch("C:\\a.cmd", () => '@"C:\\%TEMP%\\python.exe" "C:\\s\\amdx.py" %*', () => true, "win32"), undefined);
+    assert.ok(directLaunch("C:\\a.cmd", () => '@"C:\\P\\python.exe"\t"C:\\s\\amdx.py" %*', () => true, "win32"));
   });
 
   it("after Start agent host, the status is read again a few times", async () => {
