@@ -291,6 +291,9 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
   private peers = new Map<string, Promise<PeersLoad>>();
   /** #2301 E2: the agent host's status, read once per refresh when This computer's rows are asked for. */
   private host: Promise<AgentHostStatus | { failed: string } | undefined> | undefined;
+  /** #35 review: the delayed re-reads still to come (cleared on dispose), and their delay (tests shorten it). */
+  private readonly timers = new Set<ReturnType<typeof setTimeout>>();
+  rereadAfterMs = CELLS_REREAD_AFTER_MS;
   /** #2309: the last host state seen (running and the open set), across refreshes: a change re-reads the cells. */
   private hostKey: string | undefined;
   private hostSeen: AgentHostStatus | undefined;
@@ -462,8 +465,21 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
                   this.changed.fire();   // review: the open marks too, whatever redraws first
                 }
               }, () => undefined);
-              // review: the cell may record that it runs a moment after the Agents window opened it: read once more
-              setTimeout(() => void this.refresh(), CELLS_REREAD_AFTER_MS).unref?.();
+              // review: the cell may record that it runs a moment after the Agents window opened it: read once more,
+              // keeping the host status it had (no open-mark flicker); cancelled on dispose
+              const t = setTimeout(() => {
+                this.timers.delete(t);
+                const keep = this.hostSeen;
+                void this.refresh().then(() => {
+                  if (!this.hostSeen && keep) {
+                    this.hostSeen = keep;
+                    this.changed.fire();
+                    this.summaryChanged.fire();
+                  }
+                }, () => undefined);
+              }, this.rereadAfterMs);
+              t.unref?.();
+              this.timers.add(t);
               this.summaryChanged.fire();
               return s;
             }
@@ -530,6 +546,8 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
   }
 
   dispose(): void {
+    this.timers.forEach((t) => clearTimeout(t));   // #35 review: no CLI run after the extension stopped
+    this.timers.clear();
     this.changed.dispose();
     this.summaryChanged.dispose();
   }

@@ -333,4 +333,37 @@ describe("#2309 (cell01): a session opened in the Agents window re-reads the cel
     await new Promise((r) => setTimeout(r, 10));
     assert.strictEqual(lists(), 2);
   });
+
+  it("#35 review: one more read after a delay, with the open marks kept; none after dispose", async () => {
+    const runs: string[] = [];
+    let open: string[] = [];
+    const cells = { v: 1, default: "build", cells: [{ ...row("active"), name: "build" }] };
+    const run = async (_c: string, args: readonly string[]): Promise<CliOutput> => {
+      const a = args.join(" ");
+      runs.push(a);
+      return a === "--version" ? { code: 0, stdout: "a4sx 0.59.7\n", stderr: "" }
+        : a === "mesh cells --json" ? { code: 0, stdout: JSON.stringify(cells), stderr: "" }
+          : a === "agent-host status --json" ? { code: 0, stdout: JSON.stringify({ ...RUNNING, open }), stderr: "" }
+            : { code: 0, stdout: "[]", stderr: "" };
+    };
+    const p = new CellsProvider({ resolve: () => ({ kind: "found", path: CLI }), run, server: () => BASE, onState: () => undefined });
+    p.rereadAfterMs = 20;
+    const lists = () => runs.filter((r) => r === "mesh cells --json").length;
+    await p.getChildren((await p.getChildren())[0]);
+    open = ["build (Team mesh)"];
+    p.rereadHostNow();
+    await p.getChildren((await p.getChildren())[0]);
+    await new Promise((r) => setTimeout(r, 60));
+    assert.strictEqual(lists(), 3, "the change's read, then the delayed one");
+    const group = (await p.getChildren()).find((i) => i instanceof MeshGroupItem)!;
+    const build = (await p.getChildren(group)).find((i) => i instanceof LocalCellItem)!;
+    assert.ok(String(build.description).startsWith("open in the Agents window"), "the marks kept");
+    open = [];
+    p.rereadHostNow();
+    await p.getChildren((await p.getChildren())[0]);
+    const before = lists();
+    p.dispose();
+    await new Promise((r) => setTimeout(r, 60));
+    assert.ok(lists() <= before + 1, "no delayed read after dispose");
+  });
 });
