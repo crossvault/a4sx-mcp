@@ -99,6 +99,9 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
     private readonly login: (client: Client, req: LoginRequest) => Promise<Stored>,
   ) {}
 
+  /** review: true while a step-up stores the new sign-in and re-ties the mesh key to it. */
+  private retying = false;
+
   private async read(key: string = SECRET_KEY): Promise<Stored | undefined> {
     const raw = await this.secrets.get(key);
     if (!raw) {
@@ -188,7 +191,9 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
     const main = await this.current();
     // review: a mesh key belongs to the sign-in it was made for (another account's, after a new sign-in: never)
     if (!main || s.forId !== main.id || (s.expiresAt && Date.parse(s.expiresAt) <= Date.now())) {
-      await this.dropMesh();
+      if (!this.retying) {   // review: never dropped while a step-up re-ties it to the new sign-in
+        await this.dropMesh();
+      }
       return undefined;
     }
     return s;
@@ -246,11 +251,16 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
   private async signInWith(req: LoginRequest): Promise<vscode.AuthenticationSession> {
     const stored = await this.login(this.client(), req);
     const old = await this.read();
-    await this.secrets.store(SECRET_KEY, JSON.stringify(stored));
-    // review: a step-up (profiles, folders) replaces the sign-in with a new id: its mesh key goes with it
-    const mesh = req.adding && old ? await this.read(MESH_SECRET_KEY) as (Stored & { forId?: string }) | undefined : undefined;
-    if (mesh && old && mesh.forId === old.id) {
-      await this.secrets.store(MESH_SECRET_KEY, JSON.stringify({ ...mesh, forId: stored.id }));
+    this.retying = true;
+    try {
+      await this.secrets.store(SECRET_KEY, JSON.stringify(stored));
+      // review: a step-up (profiles, folders) replaces the sign-in with a new id: its mesh key goes with it
+      const mesh = req.adding && old ? await this.read(MESH_SECRET_KEY) as (Stored & { forId?: string }) | undefined : undefined;
+      if (mesh && old && mesh.forId === old.id) {
+        await this.secrets.store(MESH_SECRET_KEY, JSON.stringify({ ...mesh, forId: stored.id }));
+      }
+    } finally {
+      this.retying = false;
     }
     const session = this.toSession(stored);
     this.changed.fire({ added: [session], removed: old ? [this.toSession(old)] : [], changed: [] });
