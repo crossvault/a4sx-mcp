@@ -298,3 +298,39 @@ describe("cell01 (#2301 E2): the host's status is read again while the view is v
     assert.strictEqual(n, done, "nothing after dispose");
   });
 });
+
+
+describe("#2309 (cell01): a session opened in the Agents window re-reads the cells", () => {
+  it("a change of the host's open set or running state reads `mesh cells` again, once; the same state never", async () => {
+    const runs: string[] = [];
+    let open: string[] = [];
+    const cells = { v: 1, default: "build", cells: [{ ...row("active"), name: "build" }] };
+    const run = async (_c: string, args: readonly string[]): Promise<CliOutput> => {
+      const a = args.join(" ");
+      runs.push(a);
+      return a === "--version" ? { code: 0, stdout: "a4sx 0.59.7\n", stderr: "" }
+        : a === "mesh cells --json" ? { code: 0, stdout: JSON.stringify(cells), stderr: "" }
+          : a === "agent-host status --json" ? { code: 0, stdout: JSON.stringify({ ...RUNNING, open }), stderr: "" }
+            : { code: 0, stdout: "[]", stderr: "" };
+    };
+    const p = new CellsProvider({ resolve: () => ({ kind: "found", path: CLI }), run, server: () => BASE, onState: () => undefined });
+    const lists = () => runs.filter((r) => r === "mesh cells --json").length;
+    let top = await p.getChildren();
+    await p.getChildren(top[0]);                      // the first status: only recorded
+    assert.strictEqual(lists(), 1);
+    p.rereadHostNow();
+    top = await p.getChildren();
+    await p.getChildren(top[0]);                      // the same state: no re-read
+    assert.strictEqual(lists(), 1);
+    open = ["build (Team mesh)"];                     // a session opened in the Agents window
+    p.rereadHostNow();
+    top = await p.getChildren();
+    await p.getChildren(top[0]);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.strictEqual(lists(), 2, "the cell list is read again once");
+    top = await p.getChildren();
+    await p.getChildren(top[0]);                      // the refresh's own status read: same state, no loop
+    await new Promise((r) => setTimeout(r, 10));
+    assert.strictEqual(lists(), 2);
+  });
+});

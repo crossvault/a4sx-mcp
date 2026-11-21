@@ -289,6 +289,8 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
   private peers = new Map<string, Promise<PeersLoad>>();
   /** #2301 E2: the agent host's status, read once per refresh when This computer's rows are asked for. */
   private host: Promise<AgentHostStatus | { failed: string } | undefined> | undefined;
+  /** #2309: the last host state seen (running and the open set), across refreshes: a change re-reads the cells. */
+  private hostKey: string | undefined;
   private hostSeen: AgentHostStatus | undefined;
   /** cell01 (the status bar): fires when the cells were read again or the agent host's status became known. */
   private readonly summaryChanged = new vscode.EventEmitter<void>();
@@ -443,6 +445,23 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
           if (this.host === mine && s && !("failed" in s)) {   // review: never the marks of a read a refresh replaced
             const had = this.hostSeen?.open.length ?? 0;
             this.hostSeen = s;
+            // #2309 (cell01): a session opened or closed in the Agents window, or the host started or stopped, also
+            // changes which cells run here: the cell list is read again then (once per change; kept across refreshes,
+            // so a refresh's own status read never refreshes again)
+            const key = `${s.running}|${s.open.map((o) => `${o.name} (${o.mesh})`).sort().join(",")}`;
+            const before = this.hostKey;
+            this.hostKey = key;
+            if (before !== undefined && before !== key) {
+              // the status just read stays what the view and the status bar show until the next one
+              void this.refresh().then(() => {
+                if (!this.hostSeen) {
+                  this.hostSeen = s;
+                  this.summaryChanged.fire();
+                }
+              }, () => undefined);
+              this.summaryChanged.fire();
+              return s;
+            }
             if (s.open.length || had) {
               this.changed.fire();   // the open marks on the cell rows
             }
