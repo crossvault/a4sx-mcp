@@ -91,6 +91,7 @@ export const CELL_ACTION_TEXTS = {
   agentsStarting: (name: string) => `Starting the a4sx agent host, then opening «${name}» in the Agents window…`,
   agentsHostEnded: (why: string) =>
     `The a4sx agent host stopped before it answered (${why}), so the Agents window wasn't opened. Its terminal "a4sx: agent host" has the details; choose Open in Agents window again once that is fixed.`,
+  agentsHostExited: (code: number | undefined) => (code === undefined ? "its terminal ended" : `its terminal ended with exit code ${code}`),
   agentsWaitCancelled: "Stopped waiting, so the Agents window wasn't opened. The agent host keeps starting in its terminal \"a4sx: agent host\"; choose Open in Agents window again once it runs.",
   agentsHostSlow: (s: number) =>
     `The a4sx agent host didn't answer within ${s} seconds, so the Agents window wasn't opened. Its terminal "a4sx: agent host" says why; choose Open in Agents window again once it runs.`,
@@ -351,6 +352,10 @@ export function agentsWindowLink(uriScheme: string, instanceId: string): string 
     ? `${uriScheme}://agents/agent-host-session/ahp-session/a4sx-cell-${instanceId}` : undefined;
 }
 
+/** vscode.TerminalExitReason.User / .Shutdown (VS Code 1.90+), as numbers: the test double has no such enum. */
+const TERMINAL_CLOSED_BY_USER = 3;
+const TERMINAL_SHUTDOWN = 1;
+
 /** cell01: how long "Open in Agents window" waits for an agent host it started (cold, it answered in about 8 s). */
 export const AGENTS_WAIT_MS = 30_000;
 const AGENTS_POLL_MS = 1_000;
@@ -378,7 +383,7 @@ export async function waitForHost(deps: CellActionDeps, cli: string, ms: number,
       return s;
     }
     const at = s && !s.running && s.lastError?.at ? Date.parse(s.lastError.at) : NaN;
-    if (s?.lastError && at >= began - 2000) {   // the CLI's clock and ours: the same computer
+    if (s?.lastError && at >= began - 1000) {   // the same computer's clock; the CLI's times are whole seconds
       return { failed: s.lastError.text };
     }
   }
@@ -442,7 +447,12 @@ export async function openCellInAgentsWindow(deps: CellActionDeps, item: LocalCe
         }
         const up = await waitForHost(deps, cli, deps.agentsWait?.ms ?? AGENTS_WAIT_MS, deps.agentsWait?.pollMs,
           () => token.isCancellationRequested || term.exitStatus !== undefined);
-        return up ?? (token.isCancellationRequested ? "cancelled" as const : term.exitStatus !== undefined ? "closed" as const : undefined);
+        const exit = term.exitStatus;
+        // review: closed by you (or VS Code shutting down) is said by nothing; a host that ran as the terminal's own
+        // process (a shell VS Code doesn't know) and ended closes it too: that is said, with its exit code
+        return up ?? (token.isCancellationRequested ? "cancelled" as const : exit === undefined ? undefined
+          : exit.reason === TERMINAL_CLOSED_BY_USER || exit.reason === TERMINAL_SHUTDOWN ? "closed" as const
+            : { failed: t.agentsHostExited(exit.code) });
       });
     if (got === "none" || got === "closed") {
       return false;   // no CLI (ensureCli said why), or you closed the host's terminal yourself

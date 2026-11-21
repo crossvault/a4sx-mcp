@@ -105,7 +105,7 @@ describe("#2301: Open in Agents window", () => {
     const e = harness(off);
     const vs = require("vscode") as any;
     const make = vs.window.createTerminal;
-    vs.window.createTerminal = (o: unknown) => ({ ...make(o), exitStatus: { code: 1 } });   // you closed it
+    vs.window.createTerminal = (o: unknown) => ({ ...make(o), exitStatus: { code: undefined, reason: 3 } });   // you closed it
     try {
       assert.strictEqual(await openCellInAgentsWindow(e.deps, e.item), false);
     } finally {
@@ -113,6 +113,16 @@ describe("#2301: Open in Agents window", () => {
     }
     assert.strictEqual(calls.errors.length, 0, "nothing to say: you closed it");
     assert.deepStrictEqual(calls.opened, []);
+    resetCalls();
+    // review: a host run as the terminal's own process (a shell VS Code doesn't know) that ended: said, with its code
+    const x = harness(off);
+    vs.window.createTerminal = (o: unknown) => ({ ...make(o), exitStatus: { code: 1, reason: 2 } });
+    try {
+      assert.strictEqual(await openCellInAgentsWindow(x.deps, x.item), false);
+    } finally {
+      vs.window.createTerminal = make;
+    }
+    assert.deepStrictEqual(calls.errors.map((m) => m.message), [CELL_ACTION_TEXTS.agentsHostEnded("its terminal ended with exit code 1")]);
     resetCalls();
     // the host stopped with an error (its shell stays open, so only the status says so): said at once, with the error
     const now = new Date().toISOString();
