@@ -700,8 +700,10 @@ export async function stopAgentHost(deps: CellCommandDeps): Promise<boolean> {
     await vscode.window.showInformationMessage(/not running/.test(out.stdout) ? AGENT_HOST_TEXTS.stopNotRunning : AGENT_HOST_TEXTS.stopDone);
     return true;
   }
+  const why = cliErrorText(out);
   await vscode.window.showErrorMessage(lacksAgentHost(out.stderr) ? AGENT_HOST_TEXTS.stopNeedsUpdate
-    : CELL_CMD_TEXTS.cliFailed(AGENT_HOST_TEXTS.stopWhat, cliErrorText(out)));
+    : !why && out.code === null ? AGENT_HOST_TEXTS.stopNoAnswer   // review: the run's own timeout says nothing itself
+      : CELL_CMD_TEXTS.cliFailed(AGENT_HOST_TEXTS.stopWhat, why));
   return false;
 }
 

@@ -60,6 +60,12 @@ describe("#2326: Stop agent host", () => {
       [CELL_CMD_TEXTS.cliFailed("stop the agent host", "the agent host (pid 42) hasn't stopped within 30 s: it is still ending its cells")]);
   });
 
+  it("review: the run's own timeout (no exit code, nothing said): what that means and what to do", async () => {
+    const h = harness({ code: null, stdout: "a4sx agent host: asked it to stop (pid 42). …\n", stderr: "" });
+    assert.strictEqual(await stopAgentHost(h.deps), false);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [AGENT_HOST_TEXTS.stopNoAnswer]);
+  });
+
   it("the command is contributed with its title", () => {
     const cmd = pkg.contributes.commands.find((c: any) => c.command === "a4sx.stopAgentHost");
     assert.deepStrictEqual([cmd.title, cmd.category], ["Stop agent host", "a4sx"]);
