@@ -87,7 +87,7 @@ describe("#2301: Open in Agents window", () => {
     assert.strictEqual(await openCellInAgentsWindow(flaky.deps, flaky.item), true);
   });
 
-  it("review: a host that runs but didn't answer yet isn't ready; cancel, a host that ended, no CLI: nothing opens", async () => {
+  it("review: a host that runs but didn't answer yet isn't ready; Cancel, a closed terminal, a host that failed, no CLI", async () => {
     const off = { code: 0, stdout: status({ running: false, address: null }), stderr: "" };
     const silent = { code: 0, stdout: status({ answering: false }), stderr: "" };
     const h = harness([off, silent, silent, { code: 0, stdout: status({ answering: true }), stderr: "" }]);
@@ -99,18 +99,34 @@ describe("#2301: Open in Agents window", () => {
     assert.strictEqual(await openCellInAgentsWindow(c.deps, c.item), false);
     assert.deepStrictEqual(c.runs, ["agent-host status --json"], "no wait after a cancel");
     assert.strictEqual(calls.errors.length, 0);
+    assert.deepStrictEqual(calls.infos, [CELL_ACTION_TEXTS.agentsWaitCancelled]);
     assert.strictEqual(calls.progress[0].options.cancellable, true);
     resetCalls();
     const e = harness(off);
-    const make = (require("vscode") as any).window.createTerminal;
-    (require("vscode") as any).window.createTerminal = (o: unknown) => ({ ...make(o), exitStatus: { code: 1 } });
+    const vs = require("vscode") as any;
+    const make = vs.window.createTerminal;
+    vs.window.createTerminal = (o: unknown) => ({ ...make(o), exitStatus: { code: 1 } });   // you closed it
     try {
       assert.strictEqual(await openCellInAgentsWindow(e.deps, e.item), false);
     } finally {
-      (require("vscode") as any).window.createTerminal = make;
+      vs.window.createTerminal = make;
     }
-    assert.deepStrictEqual(calls.errors.map((x) => x.message), [CELL_ACTION_TEXTS.agentsHostEnded]);
+    assert.strictEqual(calls.errors.length, 0, "nothing to say: you closed it");
     assert.deepStrictEqual(calls.opened, []);
+    resetCalls();
+    // the host stopped with an error (its shell stays open, so only the status says so): said at once, with the error
+    const now = new Date().toISOString();
+    const failed = harness([off, { code: 0, stdout: status({ running: false, address: null, last_error: { at: now, text: "couldn't listen on 127.0.0.1:8765" } }), stderr: "" }]);
+    const t0 = Date.now();
+    assert.strictEqual(await openCellInAgentsWindow(failed.deps, failed.item), false);
+    assert.ok(Date.now() - t0 < 500, "not the whole wait");
+    assert.deepStrictEqual(calls.errors.map((x) => x.message), [CELL_ACTION_TEXTS.agentsHostEnded("couldn't listen on 127.0.0.1:8765")]);
+    assert.strictEqual(CELL_ACTION_TEXTS.agentsHostEnded("x"), "The a4sx agent host stopped before it answered (x), so the Agents window wasn't opened. Its terminal \"a4sx: agent host\" has the details; choose Open in Agents window again once that is fixed.");
+    resetCalls();
+    // an older error (from before this start) is not this start's
+    const old = harness([off, { code: 0, stdout: status({ running: false, address: null, last_error: { at: "2020-01-01T00:00:00Z", text: "old" } }), stderr: "" }]);
+    assert.strictEqual(await openCellInAgentsWindow(old.deps, old.item), false);
+    assert.deepStrictEqual(calls.errors.map((x) => x.message), [CELL_ACTION_TEXTS.agentsHostSlow(1)]);
     resetCalls();
     const n = harness(off);
     let asked = 0;
@@ -122,11 +138,12 @@ describe("#2301: Open in Agents window", () => {
 
   it("waitForHost: each status call gets only the time that is left", async () => {
     const h = harness({ code: 0, stdout: status({ running: false, address: null }), stderr: "" });
-    const timeouts: number[] = [];
+    const asks: { at: number; ms: number }[] = [];
     const run = h.deps.run;
-    h.deps.run = async (cli, args, ms) => { timeouts.push(ms ?? -1); return run(cli, args, ms); };
-    assert.strictEqual(await waitForHost(h.deps, CLI, 300, 20), undefined);
-    assert.ok(timeouts.length > 0 && timeouts.every((t) => t >= 1000 && t <= 10_000));
+    h.deps.run = async (cli, args, ms) => { asks.push({ at: Date.now(), ms: ms ?? -1 }); return run(cli, args, ms); };
+    const t0 = Date.now();
+    assert.strictEqual(await waitForHost(h.deps, CLI, 400, 20), undefined);
+    assert.ok(asks.length > 0 && asks.every((a) => a.ms >= 200 && a.at + a.ms <= t0 + 400 + 30), "never past the end");
   });
 
   it("the Agents window not set up: offers Set up the Agents window first, even with the host stopped", async () => {

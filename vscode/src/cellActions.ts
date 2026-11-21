@@ -22,7 +22,7 @@ import { SessionRow } from "./api";
 import { CELL_CMD_TEXTS, CellCommandDeps, cliErrorText, ensureCli, setupAgentsWindow, startAgentHost } from "./cellCommands";
 import { cellStartPlan } from "./cellResume";
 import { CELL_NAME, cellsListDir, CLI_MESH_ID, INSTANCE_ID, LocalCell, showText, startableCell } from "./cells";
-import { AGENT_HOST_STATUS_ARGS, AGENT_HOST_TEXTS, agentsWindowSetUp, isOpen, lacksAgentHost, parseAgentHostStatus } from "./agentHostStatus";
+import { AgentHostStatus, AGENT_HOST_STATUS_ARGS, AGENT_HOST_TEXTS, agentsWindowSetUp, isOpen, lacksAgentHost, parseAgentHostStatus } from "./agentHostStatus";
 import { CMD_STOP_CELL, LocalCellItem, RemoteCellItem } from "./cellsView";
 import { CLI_NAME } from "./cli";
 import { findLocalSession, librarySlug } from "./localSession";
@@ -89,7 +89,9 @@ export const CELL_ACTION_TEXTS = {
     `«${name}» is running in a terminal on this computer, so the Agents window can't start it too. Stop it there, then choose Open in Agents window again.`,
   stopIt: "Stop it",
   agentsStarting: (name: string) => `Starting the a4sx agent host, then opening «${name}» in the Agents window…`,
-  agentsHostEnded: "The a4sx agent host stopped before it answered, so the Agents window wasn't opened. Its terminal \"a4sx: agent host\" says why; choose Open in Agents window again once that is fixed.",
+  agentsHostEnded: (why: string) =>
+    `The a4sx agent host stopped before it answered (${why}), so the Agents window wasn't opened. Its terminal "a4sx: agent host" has the details; choose Open in Agents window again once that is fixed.`,
+  agentsWaitCancelled: "Stopped waiting, so the Agents window wasn't opened. The agent host keeps starting in its terminal \"a4sx: agent host\"; choose Open in Agents window again once it runs.",
   agentsHostSlow: (s: number) =>
     `The a4sx agent host didn't answer within ${s} seconds, so the Agents window wasn't opened. Its terminal "a4sx: agent host" says why; choose Open in Agents window again once it runs.`,
 };
@@ -354,23 +356,30 @@ export const AGENTS_WAIT_MS = 30_000;
 const AGENTS_POLL_MS = 1_000;
 
 /**
- * The agent host's status once it runs and answers (a local `agent-host status --json` each second), or undefined
- * after `ms`, or as soon as `gone()` says to stop (cancelled, or the host's terminal closed). Review: a host that
- * runs but didn't answer the probe yet isn't ready; each status call gets only the time that is left.
+ * The agent host's status once it runs and answers (a local `agent-host status --json` each second); `{ failed }`
+ * when the status shows an error from after the wait began while the host doesn't run (it stopped: the shell of its
+ * terminal stays open, so the terminal never says so); undefined after `ms`, or as soon as `gone()` says to stop
+ * (cancelled, or the terminal closed). Review: a host that runs but didn't answer the probe yet isn't ready; each
+ * status call gets only the time that is left.
  */
 export async function waitForHost(deps: CellActionDeps, cli: string, ms: number, pollMs = AGENTS_POLL_MS,
-  gone: () => boolean = () => false) {
-  const until = Date.now() + ms;
+  gone: () => boolean = () => false): Promise<AgentHostStatus | { failed: string } | undefined> {
+  const began = Date.now();
+  const until = began + ms;
   while (Date.now() < until && !gone()) {
     await new Promise((r) => setTimeout(r, Math.min(pollMs, Math.max(0, until - Date.now()))));
     const left = until - Date.now();
-    if (left <= 0 || gone()) {
+    if (left < 200 || gone()) {
       break;
     }
-    const out = await deps.run(cli, AGENT_HOST_STATUS_ARGS, Math.min(10_000, Math.max(1000, left)));
+    const out = await deps.run(cli, AGENT_HOST_STATUS_ARGS, Math.min(10_000, left));
     const s = out.code === 0 ? parseAgentHostStatus(out.stdout) : undefined;
     if (s?.running && s.answering !== false) {
       return s;
+    }
+    const at = s && !s.running && s.lastError?.at ? Date.parse(s.lastError.at) : NaN;
+    if (s?.lastError && at >= began - 2000) {   // the CLI's clock and ours: the same computer
+      return { failed: s.lastError.text };
     }
   }
   return undefined;
@@ -435,11 +444,15 @@ export async function openCellInAgentsWindow(deps: CellActionDeps, item: LocalCe
           () => token.isCancellationRequested || term.exitStatus !== undefined);
         return up ?? (token.isCancellationRequested ? "cancelled" as const : term.exitStatus !== undefined ? "closed" as const : undefined);
       });
-    if (got === "none" || got === "cancelled") {
+    if (got === "none" || got === "closed") {
+      return false;   // no CLI (ensureCli said why), or you closed the host's terminal yourself
+    }
+    if (got === "cancelled") {
+      await vscode.window.showInformationMessage(t.agentsWaitCancelled);
       return false;
     }
-    if (got === "closed") {
-      await vscode.window.showErrorMessage(t.agentsHostEnded);
+    if (got && "failed" in got) {
+      await vscode.window.showErrorMessage(t.agentsHostEnded(got.failed));
       return false;
     }
     const up = got;
