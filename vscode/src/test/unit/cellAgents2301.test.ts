@@ -122,16 +122,26 @@ describe("#34 review: Open in Agents window edge cases", () => {
     assert.deepStrictEqual(calls.executed.map((e) => e.id), ["a4sx.stopCell"]);
   });
 
+  it("a cell running in a terminal with the host stopped: Stop it first, not Start the host", async () => {
+    const h = harness({ code: 0, stdout: status({ running: false, address: null, open: [] }), stderr: "" }, MESH, "running");
+    await openCellInAgentsWindow(h.deps, h.item);
+    assert.deepStrictEqual(calls.infos, [CELL_ACTION_TEXTS.agentsRunningElsewhere("build")], "Stop it is the first step");
+    assert.deepStrictEqual(calls.opened, []);
+  });
+
   it("the set-up check is this editor's when setup-vscode set it up", () => {
     const s = { running: true, open: [], editors: { stable: "ok", insiders: "missing" } } as any;
     assert.strictEqual(agentsWindowSetUp(s, "vscode"), true);
     assert.strictEqual(agentsWindowSetUp(s, "vscode-insiders"), false);
-    assert.strictEqual(agentsWindowSetUp(s, "vscodium"), false, "not set up for it: all must be ok");
+    assert.strictEqual(agentsWindowSetUp(s, "vscodium"), false, "a known editor setup-vscode didn't set up");
+    assert.strictEqual(agentsWindowSetUp({ running: true, open: [], editors: { stable: "ok" } } as any, "vscodium"), false);
+    assert.strictEqual(agentsWindowSetUp({ running: true, open: [], editors: { stable: "ok" } } as any, "cursor"), true, "unknown: all ok");
   });
 
   it("a hostile status answer can't change the opened link", async () => {
     const h = harness({ code: 0, stdout: status({ address: "ws://evil.example:1/", open: ["x (y)"] }), stderr: "" });
     await openCellInAgentsWindow(h.deps, h.item);
+    assert.strictEqual(calls.opened.length, 1, "it opened: the loop below checks something");
     for (const u of calls.opened) {
       assert.ok(String(u).includes("://agents/agent-host-session/ahp-session/a4sx-cell-ins_"), String(u));
       assert.ok(!String(u).includes("evil"), String(u));

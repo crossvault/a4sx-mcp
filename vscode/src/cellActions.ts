@@ -378,6 +378,12 @@ export async function openCellInAgentsWindow(deps: CellActionDeps, item: LocalCe
       : CELL_CMD_TEXTS.cliFailed(t.agentsStatusWhat, out.code === 0 ? AGENT_HOST_TEXTS.notJson : cliErrorText(out)));
     return false;
   }
+  if (cell.localState === "running" && !isOpen(host, cell)) {   // review: first: the host would refuse it in the window only
+    if ((await vscode.window.showInformationMessage(t.agentsRunningElsewhere(cell.name), t.stopIt)) === t.stopIt) {
+      await vscode.commands.executeCommand(CMD_STOP_CELL, item);
+    }
+    return false;
+  }
   if (!agentsWindowSetUp(host, vscode.env.uriScheme)) {
     if ((await vscode.window.showInformationMessage(t.agentsNotSetUp, AGENT_HOST_TEXTS.setup)) === AGENT_HOST_TEXTS.setup) {
       await vscode.commands.executeCommand(CMD_SETUP_AGENTS_WINDOW);
@@ -387,12 +393,6 @@ export async function openCellInAgentsWindow(deps: CellActionDeps, item: LocalCe
   if (!host.running) {
     if ((await vscode.window.showInformationMessage(t.agentsHostOff(cell.name), AGENT_HOST_TEXTS.start)) === AGENT_HOST_TEXTS.start) {
       await vscode.commands.executeCommand(CMD_START_AGENT_HOST);
-    }
-    return false;
-  }
-  if (cell.localState === "running" && !isOpen(host, cell)) {   // review: the host would refuse it in the window only
-    if ((await vscode.window.showInformationMessage(t.agentsRunningElsewhere(cell.name), t.stopIt)) === t.stopIt) {
-      await vscode.commands.executeCommand(CMD_STOP_CELL, item);
     }
     return false;
   }

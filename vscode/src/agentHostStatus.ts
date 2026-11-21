@@ -98,13 +98,13 @@ export function lacksAgentHost(stderr: string): boolean {
 const EDITOR_OF_SCHEME: Record<string, string> = { vscode: "stable", "vscode-insiders": "insiders", vscodium: "vscodium", "code-oss": "oss" };
 
 /**
- * True when the Agents window is set up for the agent host: for this editor (by `uriScheme`) when setup-vscode set
- * it up, else (another editor, or no scheme given) when every editor it set up still points at the host.
+ * True when the Agents window is set up for the agent host: for a known editor (by `uriScheme`), its own entry; for an
+ * unknown one (or no scheme given), every editor setup-vscode set up still points at the host.
  */
 export function agentsWindowSetUp(s: AgentHostStatus, uriScheme?: string): boolean {
   const eds = s.editors ?? {};
   const mine = uriScheme ? EDITOR_OF_SCHEME[uriScheme] : undefined;
-  if (mine && mine in eds) {
+  if (mine) {   // review: a known editor that setup-vscode didn't set up is not set up
     return eds[mine] === "ok";
   }
   const states = Object.values(eds);
