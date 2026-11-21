@@ -3,6 +3,7 @@
 // The "My sessions" view: the sessions in your a4sx library, newest first, in nested folders
 // (unfiled sessions at the top level). A filter shows the matching sessions as a flat list.
 import * as vscode from "vscode";
+import { CLI_LIBRARY_TEXTS } from "./cliLibrary";
 import { ApiError, Client, listSessions, MESSAGES, SessionRow } from "./api";
 
 export const SESSION_CONTEXT = "a4sx.session";
@@ -184,10 +185,20 @@ export class SessionsProvider implements vscode.TreeDataProvider<vscode.TreeItem
     private readonly client: () => Client,
     private readonly onState: (state: ViewState) => void,
     private readonly onFilter: (filter: string | undefined) => void = () => undefined,
+    /** #2301 E4: the library through the a4sx CLI's sign-in, when the extension has none (undefined: no such list). */
+    private readonly viaCli?: () => Promise<SessionRow[] | undefined>,
+    /** #2301 E4 review: whether the rows came through the CLI (the a4sx.sessionsViaCli context: Refresh, Filter). */
+    private readonly onViaCli: (via: boolean) => void = () => undefined,
   ) {}
+
+  /** #2301 E4: true while the rows came through the a4sx CLI's sign-in. */
+  listedViaCli = false;
+  /** review: the CLI's list, read once until Refresh (two process starts and two server calls each time). */
+  private cliRows: Promise<SessionRow[] | undefined> | undefined;
 
   refresh(): void {
     this.rows = undefined;
+    this.cliRows = undefined;
     this.changed.fire();
   }
 
@@ -234,10 +245,38 @@ export class SessionsProvider implements vscode.TreeDataProvider<vscode.TreeItem
       const token = await this.auth.token();
       if (!token) {
         this.rows = undefined;
-        this.show(undefined);
-        this.set("signed-out");
-        return [];
+        this.set("signed-out");   // the extension's own sign-in: actions that need it still ask for it
+        if (this.viaCli && !this.cliRows) {
+          const read = this.viaCli().catch(() => undefined);
+          this.cliRows = read;
+          // review: only a list is kept; "no list" asks again next time (after `a4sx login` in a terminal)
+          void read.then((r) => { if (!r && this.cliRows === read) { this.cliRows = undefined; } });
+        }
+        const viaCli = this.cliRows ? await this.cliRows : undefined;
+        this.listedViaCli = !!viaCli;
+        this.onViaCli(this.listedViaCli);
+        if (!viaCli) {
+          this.show(undefined);
+          return [];   // the welcome text offers the sign-in
+        }
+        if (viaCli.length === 0) {
+          this.show(undefined);
+          return [new MessageItem(CLI_LIBRARY_TEXTS.empty, "info")];
+        }
+        if (this.filter) {   // review: Filter works on the CLI's rows as on the server's
+          const q = this.filter;
+          const hits = viaCli.filter((r) => matchesFilter(r, q)).sort(newestFirst);
+          this.show(FILTER_MESSAGE(q, hits.length, viaCli.length));
+          if (hits.length === 0) {
+            return [new MessageItem(NO_MATCH(q), "filter", { command: "a4sx.clearSessionFilter", title: "Clear filter" })];
+          }
+          return hits.map((r) => new SessionItem(r, true));
+        }
+        this.show(CLI_LIBRARY_TEXTS.via);
+        return this.nodeItems(buildFolderTree([...viaCli].sort(newestFirst)));
       }
+      this.listedViaCli = false;
+      this.onViaCli(false);
       rows = this.rows ?? await listSessions(this.client(), token);
     } catch (e) {
       this.show(undefined);

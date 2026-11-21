@@ -467,12 +467,12 @@
         },
         {
           "command": "a4sx.refreshSessions",
-          "when": "view == a4sx.sessions && a4sx.signedIn",
+          "when": "view == a4sx.sessions && (a4sx.signedIn || a4sx.sessionsViaCli)",
           "group": "navigation@2"
         },
         {
           "command": "a4sx.filterSessions",
-          "when": "view == a4sx.sessions && a4sx.signedIn",
+          "when": "view == a4sx.sessions && (a4sx.signedIn || a4sx.sessionsViaCli)",
           "group": "navigation@3"
         },
         {
@@ -801,7 +801,7 @@
         },
         {
           "command": "a4sx.refreshSessions",
-          "when": "a4sx.signedIn"
+          "when": "a4sx.signedIn || a4sx.sessionsViaCli"
         },
         {
           "command": "a4sx.resumeSession",
@@ -825,7 +825,7 @@
         },
         {
           "command": "a4sx.filterSessions",
-          "when": "a4sx.signedIn"
+          "when": "a4sx.signedIn || a4sx.sessionsViaCli"
         },
         {
           "command": "a4sx.clearSessionFilter",

@@ -12,6 +12,7 @@ import { A4sxAuthProvider, AUTH_ID, AUTH_LABEL, LoginCancelled, LoginRequest, SE
 import { CLAUDE_EXTENSION_ID, claudeResumeUri } from "./claudeResume";
 import { CLI_NAME, findClaude, findCli, CliLookup, LookupEnv } from "./cli";
 import { cellsListDir, showText } from "./cells";
+import { cliLibrary } from "./cliLibrary";
 import {
   CellActionDeps, cellLastMessages, cellWhyMessage, CMD_CELL_EXPLAIN, CMD_CELL_FROM_SAVED, CMD_CELL_MESSAGES, CMD_CELL_OPEN_AGENTS, CMD_CELL_SAVE, openCellInAgentsWindow, saveCellConversation, startCellFromSaved,
 } from "./cellActions";
@@ -1022,7 +1023,12 @@ export function activate(context: vscode.ExtensionContext): void {
     setContext("a4sx.signedIn", state !== "signed-out");
     setContext("a4sx.sessionsEmpty", state === "empty");
     setContext("a4sx.foldersSupported", sessions.foldersSupported());
-  }, (filter) => setContext("a4sx.sessionsFiltered", !!filter));
+  }, (filter) => setContext("a4sx.sessionsFiltered", !!filter),
+  // #2301 E4: one sign-in: without the extension's own, the library through the a4sx CLI's (and it says so)
+  () => {
+    const cli = resolveCellsCli();
+    return cliLibrary(cli.kind === "found" ? cli.path : undefined, runCli, client().base);
+  }, (via) => setContext("a4sx.sessionsViaCli", via));
   // Launch profiles: the a4sx CLI's list when it has `profiles --json` (0.25.0+), else the server's (as before).
   const profiles = new ProfilesProvider(
     auth, client, setProfilesContext,
