@@ -158,7 +158,9 @@ describe("#2301 E2: This computer", () => {
 
   it("running and set up: one row; stopped: Start agent host and Set up the Agents window; the last error", () => {
     const up = thisComputerChildren(parseAgentHostStatus(JSON.stringify(RUNNING))!);
-    assert.deepStrictEqual(up.map((i) => i.label), ["agent host running · 127.0.0.1:8765"]);
+    assert.deepStrictEqual(up.map((i) => i.label), ["agent host running · 127.0.0.1:8765", AGENT_HOST_TEXTS.stop]);
+    assert.strictEqual(up[1].command!.command, "a4sx.stopAgentHost", "a4sx #2326: the host's own stop, from here");
+    assert.strictEqual(up[1].tooltip, AGENT_HOST_TEXTS.stopTooltip);
     const down = thisComputerChildren(parseAgentHostStatus(JSON.stringify({
       running: false, address: null, open: [], vscode: null, last_error: { at: "2026-11-21T16:00:00Z", text: "port 8765 is taken" },
     }))!);

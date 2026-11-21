@@ -10,6 +10,8 @@ import { CELL_NAME, showText } from "./cells";
 export const AGENT_HOST_STATUS_ARGS = ["agent-host", "status", "--json"] as const;
 export const AGENT_HOST_START_ARGS = ["agent-host"] as const;
 export const AGENT_HOST_SETUP_ARGS = ["agent-host", "setup-vscode"] as const;
+/** a4sx #2326 (CLI 0.59.15): the same stop as Ctrl-C in the host's terminal, asked from here. */
+export const AGENT_HOST_STOP_ARGS = ["agent-host", "stop"] as const;
 
 export interface AgentHostStatus {
   running: boolean;
@@ -123,6 +125,13 @@ export const AGENT_HOST_TEXTS = {
   runningTooltip: (address: string) => `The a4sx agent host runs on this computer at ${address}. VS Code's Agents window reaches your cells through it.`,
   stoppedTooltip: "The a4sx agent host doesn't run on this computer, so VS Code's Agents window can't reach your cells. Start it in a terminal: it runs until you stop it (Ctrl+C) or close that terminal.",
   start: "Start agent host",
+  stop: "Stop agent host",
+  stopTooltip: "Runs `a4sx agent-host stop`: the same stop as Ctrl+C in the host's terminal. It tells the Agents window first, then ends the cells it started.",
+  stopping: "Stopping the a4sx agent host (it tells the Agents window first and ends the cells it started)…",
+  stopDone: "The a4sx agent host stopped. The Agents window can't reach your cells until you start it again.",
+  stopNeedsUpdate: "This a4sx CLI can't stop the agent host from here (that needs CLI 0.59.15 or newer). Update a4sx, or stop it with Ctrl+C in its terminal \"a4sx: agent host\"; nothing was stopped.",
+  stopWhat: "stop the agent host",
+  stopNotRunning: "The a4sx agent host wasn't running, so there was nothing to stop.",
   setup: "Set up the Agents window",
   setupTooltip: "Runs `a4sx agent-host setup-vscode` in a terminal: it points VS Code's Agents window at the agent host on this computer, says what it changed, and starts the agent host there when it isn't running.",
   openMark: "open in the Agents window",

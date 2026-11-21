@@ -102,7 +102,7 @@ describe("#2301 looks: the state as the icon's colour", () => {
     const top = await h.provider.getChildren();
     assert.ok(top[0] instanceof ThisComputerItem);
     const here = await h.provider.getChildren(top[0]);
-    assert.deepStrictEqual(here.map(icon), [["pass", CELL_ICON_COLORS.running], ["warning", CELL_ICON_COLORS.attention]]);
+    assert.deepStrictEqual(here.map(icon), [["pass", CELL_ICON_COLORS.running], ["debug-stop", undefined], ["warning", CELL_ICON_COLORS.attention]]);
     const team = await h.provider.getChildren(top.find((g) => g instanceof MeshGroupItem && g.meshId === MESH)!);
     assert.deepStrictEqual(team.filter((i) => i instanceof LocalCellItem).map((i) => [i.label, ...icon(i)]), [
       ["build", "debug-start", CELL_ICON_COLORS.running],

@@ -20,6 +20,7 @@ export const CMD_START_CELL_HERE = "a4sx.startCellHere";
 export const CELLS_REREAD_AFTER_MS = 5_000;
 export const CMD_START_AGENT_HOST = "a4sx.startAgentHost";
 export const CMD_SETUP_AGENTS_WINDOW = "a4sx.setupAgentsWindow";
+export const CMD_STOP_AGENT_HOST = "a4sx.stopAgentHost";
 export const THIS_COMPUTER_CONTEXT = "a4sx.thisComputer";
 export const CMD_START_CELL = "a4sx.startCell";
 export const CMD_DEFAULT_CELL = "a4sx.setDefaultCell";
@@ -210,6 +211,11 @@ export function thisComputerChildren(host: AgentHostStatus): vscode.TreeItem[] {
   }
   state.tooltip = host.running && host.address ? AGENT_HOST_TEXTS.runningTooltip(host.address) : AGENT_HOST_TEXTS.stoppedTooltip;
   const out: vscode.TreeItem[] = [state];
+  if (host.running) {   // a4sx #2326: the host's own stop, from here
+    const stop = new MessageItem(AGENT_HOST_TEXTS.stop, "debug-stop", { command: CMD_STOP_AGENT_HOST, title: AGENT_HOST_TEXTS.stop });
+    stop.tooltip = AGENT_HOST_TEXTS.stopTooltip;
+    out.push(stop);
+  }
   const setUp = agentsWindowSetUp(host);
   if (!host.running && setUp) {   // review: set-up starts the host too, so not both
     out.push(new MessageItem(AGENT_HOST_TEXTS.start, "play", { command: CMD_START_AGENT_HOST, title: AGENT_HOST_TEXTS.start }));
