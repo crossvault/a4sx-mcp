@@ -249,6 +249,12 @@
         "icon": "$(cloud-upload)"
       },
       {
+        "command": "a4sx.openCellInAgentsWindow",
+        "title": "Open in Agents window",
+        "category": "a4sx",
+        "icon": "$(comment-discussion)"
+      },
+      {
         "command": "a4sx.startCellFromSaved",
         "title": "Start from a saved session…",
         "category": "a4sx",
@@ -570,6 +576,11 @@
           "command": "a4sx.startCellFromSaved",
           "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?(\\.policy)?$/",
           "group": "1_cell_saved@2"
+        },
+        {
+          "command": "a4sx.openCellInAgentsWindow",
+          "when": "view == a4sx.cells && viewItem =~ /^a4sx\\.localCell(\\.default)?(\\.running)?(\\.policy)?$/",
+          "group": "0_cell_open@1"
         },
         {
           "command": "a4sx.resumeSession",
@@ -898,6 +909,10 @@
         },
         {
           "command": "a4sx.startCellFromSaved",
+          "when": "false"
+        },
+        {
+          "command": "a4sx.openCellInAgentsWindow",
           "when": "false"
         },
         {

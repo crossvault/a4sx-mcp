@@ -22,7 +22,8 @@ import { SessionRow } from "./api";
 import { CELL_CMD_TEXTS, CellCommandDeps, cliErrorText, ensureCli } from "./cellCommands";
 import { cellStartPlan } from "./cellResume";
 import { CELL_NAME, cellsListDir, CLI_MESH_ID, INSTANCE_ID, LocalCell, showText, startableCell } from "./cells";
-import { LocalCellItem, RemoteCellItem } from "./cellsView";
+import { AGENT_HOST_STATUS_ARGS, AGENT_HOST_TEXTS, agentsWindowSetUp, parseAgentHostStatus } from "./agentHostStatus";
+import { CMD_SETUP_AGENTS_WINDOW, CMD_START_AGENT_HOST, LocalCellItem, RemoteCellItem } from "./cellsView";
 import { CLI_NAME } from "./cli";
 import { findLocalSession, librarySlug } from "./localSession";
 import { claudeProjectsDir } from "./nativeSeed";
@@ -35,6 +36,7 @@ export const CMD_CELL_MESSAGES = "a4sx.cellLastMessages";
 export const CMD_CELL_EXPLAIN = "a4sx.cellWhyMessage";
 export const CMD_CELL_SAVE = "a4sx.saveCellConversation";
 export const CMD_CELL_FROM_SAVED = "a4sx.startCellFromSaved";
+export const CMD_CELL_OPEN_AGENTS = "a4sx.openCellInAgentsWindow";
 
 /** The CLI's MESH_TEXT_DELIVERIES_NONE (it exits non-zero with it): nothing recorded, which is no failure. */
 const NO_DELIVERIES = /^no delivery results for /;
@@ -76,6 +78,14 @@ export const CELL_ACTION_TEXTS = {
     "extension can't read your library. Sign in under My sessions, then try again.",
   fromSavedUnreadable: (reason: string) => `Nothing was started: your a4sx library couldn't be read (${reason}).`,
   untitled: "(untitled)",
+  agentsBad: "This cell can't be opened in the Agents window from here: its id isn't one the a4sx CLI accepts.",
+  agentsStandalone: (name: string) => `The cell «${name}» isn't in a mesh yet, so the agent host doesn't serve it.`,
+  agentsNoStatus: "This a4sx CLI can't say whether its agent host runs (it has no agent-host status command). Update a4sx, then try again.",
+  agentsStatusWhat: "read the agent host's status",
+  agentsHostOff: (name: string) =>
+    `The a4sx agent host isn't running on this computer, so the Agents window can't reach «${name}». Start it, then choose Open in Agents window again.`,
+  agentsNotSetUp: "VS Code's Agents window isn't set up for the a4sx agent host on this computer yet. Set it up, then choose Open in Agents window again.",
+  agentsNotOpened: "VS Code didn't open the link to the Agents window.",
 };
 
 export interface CellActionDeps extends CellCommandDeps {
@@ -320,4 +330,64 @@ export async function startCellFromSaved(deps: CellActionDeps, item: LocalCellIt
     return undefined;
   }
   return runAsCell(deps, savedRowSession(picked.row, options.projectsDir), { choice: { kind: "cell", cell } });
+}
+
+/**
+ * The Agents window's own link to a cell's session there (what its "Copy Link" gives for a cell row):
+ * <scheme>://agents/agent-host-session/ahp-session/a4sx-cell-<instance id>. undefined for an id the CLI doesn't take.
+ */
+export function agentsWindowLink(uriScheme: string, instanceId: string): string | undefined {
+  return /^[a-z][a-z0-9+.-]{0,31}$/.test(uriScheme) && INSTANCE_ID.test(instanceId)
+    ? `${uriScheme}://agents/agent-host-session/ahp-session/a4sx-cell-${instanceId}` : undefined;
+}
+
+/**
+ * Open in Agents window: the cell's session in VS Code's Agents window, through that window's own link. The agent host
+ * must run and the Agents window must be set up for it: when not, this says so and offers the one step that is
+ * missing (Start agent host, Set up the Agents window), and opens nothing. The agent host starts the cell when its
+ * session opens, and asks there when the cell still needs your OK on this computer. Resolves true when the link opened.
+ */
+export async function openCellInAgentsWindow(deps: CellActionDeps, item: LocalCellItem | undefined): Promise<boolean> {
+  if (!(item instanceof LocalCellItem)) {
+    return false;
+  }
+  const t = CELL_ACTION_TEXTS;
+  const cell = item.cell;
+  if (!startableCell(cell)) {
+    await vscode.window.showErrorMessage(t.agentsStandalone(cell.name));
+    return false;
+  }
+  const link = agentsWindowLink(vscode.env.uriScheme, cell.instanceId);
+  if (!link) {
+    await vscode.window.showErrorMessage(t.agentsBad);
+    return false;
+  }
+  const cli = await ensureCli(deps);
+  if (!cli) {
+    return false;
+  }
+  const out = await deps.run(cli, AGENT_HOST_STATUS_ARGS, 15_000);   // this computer's own file, no server call
+  const host = out.code === 0 ? parseAgentHostStatus(out.stdout) : undefined;
+  if (!host) {
+    await vscode.window.showErrorMessage(out.code === 0 ? t.agentsNoStatus : CELL_CMD_TEXTS.cliFailed(t.agentsStatusWhat, cliErrorText(out)));
+    return false;
+  }
+  if (!agentsWindowSetUp(host)) {
+    if ((await vscode.window.showInformationMessage(t.agentsNotSetUp, AGENT_HOST_TEXTS.setup)) === AGENT_HOST_TEXTS.setup) {
+      await vscode.commands.executeCommand(CMD_SETUP_AGENTS_WINDOW);
+    }
+    return false;
+  }
+  if (!host.running) {
+    if ((await vscode.window.showInformationMessage(t.agentsHostOff(cell.name), AGENT_HOST_TEXTS.start)) === AGENT_HOST_TEXTS.start) {
+      await vscode.commands.executeCommand(CMD_START_AGENT_HOST);
+    }
+    return false;
+  }
+  if (!(await vscode.env.openExternal(vscode.Uri.parse(link)))) {
+    await vscode.window.showErrorMessage(t.agentsNotOpened);
+    return false;
+  }
+  deps.provider.rereadHostSoon();   // the open mark follows
+  return true;
 }
