@@ -17,7 +17,7 @@ import {
   CELL_CMD_TEXTS, CellCommandDeps, CONSENT_KEY, copyCellLaunch, ensureCli, machineKey, renameCell, stopCell, typedCommand, validateNewCellName,
 } from "../../cellCommands";
 import {
-  CELL_TEXTS, CellsProvider, CliOutput, CliResolution, LocalCellItem, MeshGroupItem, RemoteCellItem,
+  CELL_TEXTS, CellsProvider, CliOutput, CliResolution, LocalCellItem, MeshGroupItem, RemoteCellItem, ThisComputerItem,
 } from "../../cellsView";
 import {
   cliGate, configAutoAllow, IN_SESSION_MESSAGE, insideMeshSession, MIN_JSON_CLI, parseCellsAnswer, parseCliError, parseCliVersion, parsePeersAnswer, parseProfilesAnswer,
@@ -387,7 +387,9 @@ describe("Cells view: grouped by mesh, with the other machines' cells", () => {
 
   it("one group per mesh with its policy (unknown when null), standalone last; no update line for a 0.25.0 CLI", async () => {
     const h = harness();
-    const top = await h.provider.getChildren();
+    const all = await h.provider.getChildren();
+    assert.ok(all[0] instanceof ThisComputerItem, "#2301 E2: This computer first");
+    const top = all.slice(1);
     assert.deepStrictEqual(top.map((g) => [g.label, g.description, g.contextValue]), [
       ["Lab", "policy: unknown · 1 cell here", "a4sx.cellMesh"],
       ["Team mesh", "policy: open · 2 cells here", "a4sx.cellMesh"],
@@ -397,7 +399,7 @@ describe("Cells view: grouped by mesh, with the other machines' cells", () => {
 
   it("a mesh's cells: profile, local state, registry, path; then the other machines' cells, read-only, read when the group opens", async () => {
     const h = harness();
-    const top = await h.provider.getChildren();
+    const top = (await h.provider.getChildren()).filter((i) => !(i instanceof ThisComputerItem));
     assert.ok(!h.runs.some((r) => r.startsWith("mesh peers")), "not before the group opens");
     const team = await h.provider.getChildren(top[1]);
     assert.deepStrictEqual(team.map((i) => [i.label, i.description, i.contextValue]), [
@@ -410,8 +412,8 @@ describe("Cells view: grouped by mesh, with the other machines' cells", () => {
     assert.match(String(team[2].tooltip), /^Cell: desk-agent\nYours, on another machine\. Start on this computer moves it here/);
     assert.match(String(team[3].tooltip), /^Cell: laptop-agent\nOn another machine: read-only here\./);
     assert.ok(!team.some((i) => i instanceof RemoteCellItem && i.peer.instanceId === "ins_A1"), "your cell stored here is listed once, as local");
-    assert.match(String(team[0].tooltip), /On this computer: running \(pid 4242\)\nRegistry: active\nPath: lan/);
-    assert.match(String(team[1].tooltip), /Path: none/);
+    assert.match(String(team[0].tooltip), /On this computer: running \(pid 4242\)\nRegistry: active\nConnection path: lan/);
+    assert.ok(!String(team[1].tooltip).includes("Path"), "#2301 (cell01): no \"Path: none\"");
     assert.deepStrictEqual(h.runs, ["--version", "mesh cells --json", `mesh peers ${MESH} --json`]);
     await h.provider.getChildren(top[1]);
     assert.strictEqual(h.runs.length, 3, "peers are read once per refresh");

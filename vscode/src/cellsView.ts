@@ -10,11 +10,15 @@ import * as vscode from "vscode";
 import { CELLS_LIST_ARGS, LocalCell, localCellDescription, localCellTooltip, startableCell } from "./cells";
 import { CliGate, cliGate, IN_SESSION_MESSAGE, MeshPolicy, parseCellsAnswer, parseCliError, parseCliVersion, parsePeersAnswer, peersArgs, RemoteCell, VERSION_ARGS } from "./cliJson";
 import { MessageItem } from "./sessionsView";
+import { AGENT_HOST_STATUS_ARGS, AGENT_HOST_TEXTS, AgentHostStatus, agentsWindowSetUp, parseAgentHostStatus } from "./agentHostStatus";
 
 export const VIEW_CELLS = "a4sx.cells";
 export const CMD_REFRESH_CELLS = "a4sx.refreshCells";
 export const CMD_NEW_CELL = "a4sx.newCell";
 export const CMD_START_CELL_HERE = "a4sx.startCellHere";
+export const CMD_START_AGENT_HOST = "a4sx.startAgentHost";
+export const CMD_SETUP_AGENTS_WINDOW = "a4sx.setupAgentsWindow";
+export const THIS_COMPUTER_CONTEXT = "a4sx.thisComputer";
 export const CMD_START_CELL = "a4sx.startCell";
 export const CMD_DEFAULT_CELL = "a4sx.setDefaultCell";
 export const CMD_FORGET_CELL = "a4sx.forgetCell";
@@ -141,6 +145,36 @@ export class MeshGroupItem extends vscode.TreeItem {
 }
 
 /** A cell of the same mesh that isn't stored on this computer (yours or someone else's): read-only. */
+/** #2301 E2: the agent host on this computer, above the meshes. */
+export class ThisComputerItem extends vscode.TreeItem {
+  constructor() {
+    super(AGENT_HOST_TEXTS.node, vscode.TreeItemCollapsibleState.Expanded);
+    this.id = "thisComputer";
+    this.contextValue = THIS_COMPUTER_CONTEXT;
+    this.iconPath = new vscode.ThemeIcon("vm");
+  }
+}
+
+/** The rows under This computer: whether the agent host runs, the actions that apply, and the last error. */
+export function thisComputerChildren(host: AgentHostStatus): vscode.TreeItem[] {
+  const state = new MessageItem(host.running && host.address ? AGENT_HOST_TEXTS.running(host.address) : AGENT_HOST_TEXTS.stopped,
+    host.running ? "pass" : "circle-slash");
+  state.tooltip = host.running && host.address ? AGENT_HOST_TEXTS.runningTooltip(host.address) : AGENT_HOST_TEXTS.stoppedTooltip;
+  const out: vscode.TreeItem[] = [state];
+  if (!host.running) {
+    out.push(new MessageItem(AGENT_HOST_TEXTS.start, "play", { command: CMD_START_AGENT_HOST, title: AGENT_HOST_TEXTS.start }));
+  }
+  if (!agentsWindowSetUp(host)) {
+    const setup = new MessageItem(AGENT_HOST_TEXTS.setup, "settings-gear", { command: CMD_SETUP_AGENTS_WINDOW, title: AGENT_HOST_TEXTS.setup });
+    setup.tooltip = AGENT_HOST_TEXTS.setupTooltip;
+    out.push(setup);
+  }
+  if (host.lastError) {
+    out.push(new MessageItem(AGENT_HOST_TEXTS.lastError(host.lastError.text, host.lastError.at), "warning"));
+  }
+  return out;
+}
+
 export class RemoteCellItem extends vscode.TreeItem {
   constructor(public readonly meshId: string, public readonly peer: RemoteCell) {
     super(peer.name, vscode.TreeItemCollapsibleState.None);
@@ -187,6 +221,9 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
   load: CellsLoad | undefined;
   private inflight: Promise<CellsLoad> | undefined;
   private peers = new Map<string, Promise<PeersLoad>>();
+  /** #2301 E2: the agent host's status, read once per refresh when This computer's rows are asked for. */
+  private host: Promise<AgentHostStatus | undefined> | undefined;
+  private hostOpen = new Set<string>();
   readonly versions: CliVersions;
 
   constructor(private readonly deps: CellsDeps) {
@@ -199,6 +236,7 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
       await this.inflight.catch(() => undefined);
     }
     this.peers = new Map();
+    this.host = undefined;
     this.inflight = this.read();
     try {
       this.load = await this.inflight;
@@ -246,6 +284,10 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
     if (parent instanceof MeshGroupItem) {
       return this.groupChildren(parent);
     }
+    if (parent instanceof ThisComputerItem) {
+      const host = await this.hostStatus();
+      return host ? thisComputerChildren(host) : [new MessageItem(AGENT_HOST_TEXTS.unknown, "question")];
+    }
     if (parent) {
       return [];
     }
@@ -268,15 +310,45 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
         ];
       case "ok": {
         const legacy = !!load.legacy;
-        const groups = groupByMesh(load.cells).map((g) => new MeshGroupItem(g.meshId, g.cells, load.cells, legacy));
-        return legacy && load.cells.length ? [new MessageItem(CELL_TEXTS.olderCli, "warning", { command: CMD_UPDATE_CLI, title: CELL_TEXTS.updateCli }), ...groups] : groups;
+        const groups: vscode.TreeItem[] = groupByMesh(load.cells).map((g) => new MeshGroupItem(g.meshId, g.cells, load.cells, legacy));
+        if (legacy) {
+          return load.cells.length ? [new MessageItem(CELL_TEXTS.olderCli, "warning", { command: CMD_UPDATE_CLI, title: CELL_TEXTS.updateCli }), ...groups] : groups;
+        }
+        // #2301 E2: the agent host, above the meshes (with no cells, the welcome text stays)
+        return load.cells.length ? [new ThisComputerItem(), ...groups] : groups;
       }
     }
   }
 
+  /** #2301 E2: `agent-host status --json`, once per refresh; undefined from an older CLI or on a failure. */
+  hostStatus(): Promise<AgentHostStatus | undefined> {
+    if (!this.host) {
+      const cli = this.deps.resolve();
+      this.host = cli.kind !== "found" ? Promise.resolve(undefined) : this.deps.run(cli.path, AGENT_HOST_STATUS_ARGS, 15_000)
+        .then((out) => (out.code === 0 ? parseAgentHostStatus(out.stdout) : undefined), () => undefined)
+        .then((s) => {
+          const open = new Set(s?.open ?? []);
+          const changed = [...open].some((n) => !this.hostOpen.has(n)) || [...this.hostOpen].some((n) => !open.has(n));
+          this.hostOpen = open;
+          if (changed) {
+            this.changed.fire();   // the open marks on the cell rows
+          }
+          return s;
+        });
+    }
+    return this.host;
+  }
+
   private async groupChildren(group: MeshGroupItem): Promise<vscode.TreeItem[]> {
     const server = this.deps.server();
-    const local: vscode.TreeItem[] = group.cells.map((c) => new LocalCellItem(c, group.all, server, group.legacy));
+    const open = this.hostOpen;
+    const local: vscode.TreeItem[] = group.cells.map((c) => {
+      const item = new LocalCellItem(c, group.all, server, group.legacy);
+      if (open.has(c.name)) {   // #2301 E2: open in VS Code's Agents window now
+        item.description = [item.description, AGENT_HOST_TEXTS.openMark].filter(Boolean).join(" · ");
+      }
+      return item;
+    });
     if (!group.meshId || group.legacy) {
       return local;
     }

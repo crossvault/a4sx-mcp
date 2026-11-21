@@ -231,6 +231,17 @@
         "icon": "$(play)"
       },
       {
+        "command": "a4sx.startAgentHost",
+        "title": "Start agent host",
+        "category": "a4sx",
+        "icon": "$(play)"
+      },
+      {
+        "command": "a4sx.setupAgentsWindow",
+        "title": "Set up the Agents window",
+        "category": "a4sx"
+      },
+      {
         "command": "a4sx.setDefaultCell",
         "title": "Set as default",
         "category": "a4sx",

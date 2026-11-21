@@ -21,7 +21,7 @@ describe("#2301 E3: a cell the signed-in account doesn't list", () => {
       assert.ok(!/revoked/.test(shown), shown);
     }
     const mine = parseCellsAnswer(JSON.stringify({ v: 1, default: null, cells: [row("not_in_account")] }))!.cells[0];
-    assert.ok(localCellDescription(mine, BASE).includes("not in the signed-in account"));
+    assert.ok(localCellDescription(mine, BASE).includes("other account"));   // cell01: short, never cut
     assert.ok(localCellTooltip(mine, BASE).includes("a4sx mesh cells --refresh"));
   });
 
@@ -34,12 +34,13 @@ describe("#2301 E3: a cell the signed-in account doesn't list", () => {
     // review: a CLI before 0.59.7 says "revoked" for another account's working cell too: no advice to remove it
     const tip = localCellTooltip(gone, BASE);
     assert.ok(!/forget|remove|make a new cell/i.test(tip), tip);
-    assert.ok(tip.includes("If it still starts and connects, it belongs to another of your accounts"), tip);
+    assert.ok(tip.includes("If it still starts and connects, it belongs to another account"), tip);
   });
 
   it("the texts, verbatim, with no literal backticks", () => {
-    assert.strictEqual(REGISTRY_TEXTS.description.not_in_account, "not in the signed-in account");
-    assert.strictEqual(REGISTRY_TEXTS.description.other_account, "another account's (its key works)");
+    assert.strictEqual(REGISTRY_TEXTS.description.not_in_account, "other account");
+    assert.strictEqual(REGISTRY_TEXTS.description.other_account, "other account (its key works)");
+    assert.ok(!Object.values(REGISTRY_TEXTS.tooltip).some((t) => t.includes("of your accounts")), "a colleague's too");
     for (const s of REGISTRY_STATES) {
       assert.ok(!REGISTRY_TEXTS.tooltip[s].includes("`"), s);
     }
@@ -127,5 +128,74 @@ describe("#2301 E1: Start on this computer", () => {
     assert.strictEqual(await startCellHere(h.deps, item), undefined);
     assert.strictEqual(calls.terminals.length, 0);
     assert.ok(calls.errors.some((e) => e.message === CELL_CMD_TEXTS.startHereBad), JSON.stringify(calls.errors));
+  });
+});
+
+// ---- #2301 E2: This computer (the agent host) ------------------------------------------------------------------------
+import { AGENT_HOST_TEXTS, parseAgentHostStatus } from "../../agentHostStatus";
+import { CELLS_LIST_ARGS } from "../../cells";
+import { LocalCellItem, MeshGroupItem, ThisComputerItem, thisComputerChildren } from "../../cellsView";
+
+const RUNNING = { running: true, proved: true, answering: true, pid: 4242, address: "ws://127.0.0.1:8765/", open: ["build"],
+  vscode: { address: "ws://127.0.0.1:8765", editors: { code: "ok" } }, last_error: null, cells: [] };
+
+describe("#2301 E2: This computer", () => {
+  beforeEach(resetCalls);
+
+  it("reads `agent-host status --json`; anything else is no answer", () => {
+    const s = parseAgentHostStatus(JSON.stringify(RUNNING))!;
+    assert.deepStrictEqual(s, { running: true, address: "ws://127.0.0.1:8765/", open: ["build"], editors: { code: "ok" }, lastError: undefined });
+    assert.strictEqual(parseAgentHostStatus("usage: a4sx …"), undefined);
+    assert.strictEqual(parseAgentHostStatus(JSON.stringify({ v: 1 })), undefined);
+    const odd = parseAgentHostStatus(JSON.stringify({ ...RUNNING, address: "ws://x/; rm", open: ["../x", "ok"] }))!;
+    assert.strictEqual(odd.running, false, "no usable address: not shown as running");
+    assert.deepStrictEqual(odd.open, []);
+  });
+
+  it("running and set up: one row; stopped: Start agent host and Set up the Agents window; the last error", () => {
+    const up = thisComputerChildren(parseAgentHostStatus(JSON.stringify(RUNNING))!);
+    assert.deepStrictEqual(up.map((i) => i.label), ["agent host running · 127.0.0.1:8765"]);
+    const down = thisComputerChildren(parseAgentHostStatus(JSON.stringify({
+      running: false, address: null, open: [], vscode: null, last_error: { at: "2026-11-21T16:00:00Z", text: "port 8765 is taken" },
+    }))!);
+    assert.deepStrictEqual(down.map((i) => i.label), [AGENT_HOST_TEXTS.stopped, AGENT_HOST_TEXTS.start, AGENT_HOST_TEXTS.setup,
+      "Last error (2026-11-21T16:00:00Z): port 8765 is taken"]);
+    assert.strictEqual(down[1].command!.command, "a4sx.startAgentHost");
+    assert.strictEqual(down[2].command!.command, "a4sx.setupAgentsWindow");
+  });
+
+  it("above the meshes when there are cells; its rows read the status once; open cells are marked", async () => {
+    const runs: string[] = [];
+    const cells = { v: 1, default: "build", cells: [{ ...row("active"), name: "build" }] };
+    const run = async (_c: string, args: readonly string[]): Promise<CliOutput> => {
+      runs.push(args.join(" "));
+      const a = args.join(" ");
+      return a === "--version" ? { code: 0, stdout: "a4sx 0.59.7\n", stderr: "" }
+        : a === CELLS_LIST_ARGS.join(" ") ? { code: 0, stdout: JSON.stringify(cells), stderr: "" }
+          : a === "agent-host status --json" ? { code: 0, stdout: JSON.stringify(RUNNING), stderr: "" }
+            : { code: 0, stdout: "[]", stderr: "" };
+    };
+    const p = new CellsProvider({ resolve: () => ({ kind: "found", path: CLI }), run, server: () => BASE, onState: () => undefined });
+    const top = await p.getChildren();
+    assert.ok(top[0] instanceof ThisComputerItem && top[1] instanceof MeshGroupItem);
+    assert.ok(!runs.includes("agent-host status --json"), "not before its rows are asked for");
+    const rows = await p.getChildren(top[0]);
+    assert.strictEqual(rows[0].label, "agent host running · 127.0.0.1:8765");
+    await p.getChildren(top[0]);
+    assert.strictEqual(runs.filter((r) => r === "agent-host status --json").length, 1, "once per refresh");
+    const group = (await p.getChildren()).find((i) => i instanceof MeshGroupItem)!;
+    const build = (await p.getChildren(group)).find((i) => i instanceof LocalCellItem)!;
+    assert.ok(String(build.description).endsWith("· open in the Agents window"), String(build.description));
+  });
+
+  it("an older CLI without `agent-host status`: one row that says so", async () => {
+    const run = async (_c: string, args: readonly string[]): Promise<CliOutput> =>
+      args.join(" ") === "agent-host status --json" ? { code: 2, stdout: "", stderr: "invalid choice: 'agent-host'" }
+        : args.join(" ") === "--version" ? { code: 0, stdout: "a4sx 0.30.0\n", stderr: "" }
+          : { code: 0, stdout: JSON.stringify({ v: 1, default: null, cells: [row("active")] }), stderr: "" };
+    const p = new CellsProvider({ resolve: () => ({ kind: "found", path: CLI }), run, server: () => BASE, onState: () => undefined });
+    const top = await p.getChildren();
+    const rows = await p.getChildren(top[0]);
+    assert.deepStrictEqual(rows.map((i) => i.label), [AGENT_HOST_TEXTS.unknown]);
   });
 });

@@ -10,6 +10,7 @@ import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
 import { CLI_NAME } from "./cli";
+import { AGENT_HOST_SETUP_ARGS, AGENT_HOST_START_ARGS, AGENT_HOST_TEXTS } from "./agentHostStatus";
 import { CellStartPlan, cellStartPlan, isDirectory, lastPromptFolder } from "./cellResume";
 import {
   CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellProfileArgs, cellRenameArgs, cellsListDir, cellStopArgs, LocalCell, MIN_CELL_CONSENT_CLI, NEW_CELL_ARGS,
@@ -666,6 +667,24 @@ export async function startCellHere(deps: CellCommandDeps, item: RemoteCellItem 
   const terminal = track(deps, openCommandTerminal(CELL_CMD_TEXTS.startHereTerminal(name), cli, CLI_NAME, args, cwd, claude.env, undefined, true));
   void vscode.window.showInformationMessage(CELL_CMD_TEXTS.startHereStarted(name, showText(cwd, 300) ?? cwd));
   return terminal;
+}
+
+/** #2301 E2: `a4sx agent-host` in a terminal (it runs there until Ctrl+C or the terminal closes). */
+export async function startAgentHost(deps: CellCommandDeps): Promise<vscode.Terminal | undefined> {
+  const cli = await ensureCli(deps);
+  if (!cli) {
+    return undefined;
+  }
+  return track(deps, openCommandTerminal(AGENT_HOST_TEXTS.startTerminal, cli, CLI_NAME, [...AGENT_HOST_START_ARGS], deps.home ?? os.homedir(), undefined, undefined, true));
+}
+
+/** #2301 E2: `a4sx setup-vscode` in a terminal: it says what it changed. */
+export async function setupAgentsWindow(deps: CellCommandDeps): Promise<vscode.Terminal | undefined> {
+  const cli = await ensureCli(deps);
+  if (!cli) {
+    return undefined;
+  }
+  return track(deps, openCommandTerminal(AGENT_HOST_TEXTS.setupTerminal, cli, CLI_NAME, [...AGENT_HOST_SETUP_ARGS], deps.home ?? os.homedir(), undefined, undefined, true));
 }
 
 /** The last line the CLI wrote to stderr, made safe to show (its own message, e.g. "no cell named …"). */
