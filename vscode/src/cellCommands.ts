@@ -10,7 +10,7 @@ import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
 import { CLI_NAME } from "./cli";
-import { AGENT_HOST_SETUP_ARGS, AGENT_HOST_START_ARGS, AGENT_HOST_TEXTS, directLaunch } from "./agentHostStatus";
+import { AGENT_HOST_SETUP_ARGS, AGENT_HOST_START_ARGS, AGENT_HOST_STATUS_ARGS, AGENT_HOST_STOP_ARGS, AGENT_HOST_TEXTS, directLaunch, lacksAgentHost, parseAgentHostStatus } from "./agentHostStatus";
 import { CellStartPlan, cellStartPlan, isDirectory, lastPromptFolder } from "./cellResume";
 import {
   CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellProfileArgs, cellRenameArgs, cellsListDir, cellStopArgs, LocalCell, MIN_CELL_CONSENT_CLI, NEW_CELL_ARGS,
@@ -681,6 +681,48 @@ export async function startAgentHost(deps: CellCommandDeps): Promise<vscode.Term
     : openCommandTerminal(AGENT_HOST_TEXTS.startTerminal, cli, CLI_NAME, [...AGENT_HOST_START_ARGS], deps.home ?? os.homedir(), undefined, undefined, true);
   deps.provider.rereadHostSoon();
   return track(deps, t);
+}
+
+/**
+ * a4sx #2326: `a4sx agent-host stop` (CLI 0.59.15+), the same stop as Ctrl+C in the host's terminal, with a progress
+ * notification while it waits (at most about 30 s). Says the CLI's own line on a refusal, and "update" for a CLI
+ * without the command. Resolves true when the host stopped (or wasn't running).
+ */
+export async function stopAgentHost(deps: CellCommandDeps): Promise<boolean> {
+  const cli = await ensureCli(deps);
+  if (!cli) {
+    return false;
+  }
+  // coordinator (as the deck's S): ask first when cells run in it; with none, stop without asking
+  const now = await deps.run(cli, AGENT_HOST_STATUS_ARGS, 15_000);
+  const open = (now.code === 0 ? parseAgentHostStatus(now.stdout)?.open : undefined) ?? [];
+  const plain = now.code === 0 ? plainOpenCount(now.stdout) : 0;   // review: a plain conversation ends too
+  if ((open.length || plain) && (await vscode.window.showWarningMessage(AGENT_HOST_TEXTS.stopAsk(open.map((o) => o.name), plain), { modal: true },
+    AGENT_HOST_TEXTS.stopIt)) !== AGENT_HOST_TEXTS.stopIt) {
+    return false;
+  }
+  const out = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: AGENT_HOST_TEXTS.stopping },
+    () => deps.run(cli, AGENT_HOST_STOP_ARGS, 45_000));
+  deps.provider.rereadHostSoon();
+  if (out.code === 0) {   // the CLI says "stopped (pid N)", or "not running, so there is nothing to stop"
+    await vscode.window.showInformationMessage(/not running/.test(out.stdout) ? AGENT_HOST_TEXTS.stopNotRunning : AGENT_HOST_TEXTS.stopDone);
+    return true;
+  }
+  const why = cliErrorText(out);
+  await vscode.window.showErrorMessage(lacksAgentHost(out.stderr) ? AGENT_HOST_TEXTS.stopNeedsUpdate
+    : !why && out.code === null ? AGENT_HOST_TEXTS.stopNoAnswer   // review: the run's own timeout says nothing itself
+      : CELL_CMD_TEXTS.cliFailed(AGENT_HOST_TEXTS.stopWhat, why));
+  return false;
+}
+
+/** How many plain Agents-window conversations (not cells) the status lists as open: "name (plain)" entries. */
+function plainOpenCount(stdout: string): number {
+  try {
+    const raw = JSON.parse(stdout) as { open?: unknown };
+    return Array.isArray(raw.open) ? raw.open.slice(0, 64).filter((e) => typeof e === "string" && e.endsWith(" (plain)")).length : 0;
+  } catch {
+    return 0;
+  }
 }
 
 /** A launcher file's text (at most 4 KiB), or undefined. */

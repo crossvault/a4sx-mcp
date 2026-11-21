@@ -17,12 +17,12 @@ import {
   CellActionDeps, cellLastMessages, cellWhyMessage, CMD_CELL_EXPLAIN, CMD_CELL_FROM_SAVED, CMD_CELL_MESSAGES, CMD_CELL_OPEN_AGENTS, CMD_CELL_SAVE, openCellInAgentsWindow, saveCellConversation, startCellFromSaved,
 } from "./cellActions";
 import {
-  CellCommandDeps, copyCellLaunch, dailyUpdate, forgetCell, installCli, newCell, openCellOnWeb, openCellPolicy, ownCliCheck, ownCliUsable, renameCell, repairOwnCli, setCellProfile, setDefaultCell, setupAgentsWindow, startAgentHost, startCell, startCellHere, stopCell,
+  CellCommandDeps, copyCellLaunch, dailyUpdate, forgetCell, installCli, newCell, openCellOnWeb, openCellPolicy, ownCliCheck, ownCliUsable, renameCell, repairOwnCli, setCellProfile, setDefaultCell, setupAgentsWindow, startAgentHost, startCell, stopAgentHost, startCellHere, stopCell,
   updateCliInTerminal,
 } from "./cellCommands";
 import {
   CellsLoad, CellsProvider, CELLS_EMPTY, CELLS_NO_CLI, CliOutput, CliResolution, CliRunner, CMD_COPY_CELL_LAUNCH, CMD_DEFAULT_CELL, CMD_FORGET_CELL, CMD_INSTALL_CLI,
-  CMD_NEW_CELL, CMD_OPEN_CELL, CMD_OPEN_CELL_POLICY, CMD_REFRESH_CELLS, CMD_RENAME_CELL, CMD_SET_CELL_PROFILE, CMD_SETUP_AGENTS_WINDOW, CMD_START_AGENT_HOST, CMD_START_CELL, CMD_START_CELL_HERE, CMD_STOP_CELL, CMD_UPDATE_CLI, LocalCellItem, MeshGroupItem,
+  CMD_NEW_CELL, CMD_OPEN_CELL, CMD_OPEN_CELL_POLICY, CMD_REFRESH_CELLS, CMD_RENAME_CELL, CMD_SET_CELL_PROFILE, CMD_SETUP_AGENTS_WINDOW, CMD_START_AGENT_HOST, CMD_START_CELL, CMD_START_CELL_HERE, CMD_STOP_AGENT_HOST, CMD_STOP_CELL, CMD_UPDATE_CLI, LocalCellItem, MeshGroupItem,
   RemoteCellItem,
   VIEW_CELLS,
 } from "./cellsView";
@@ -94,7 +94,7 @@ export const CMD_DUPLICATE_PROFILE = "a4sx.duplicateProfile";
 export const CMD_SET_DEFAULT_PROFILE = "a4sx.setDefaultProfile";
 export { CMD_OPEN_LISTING, CMD_CREATE_MESH, CMD_OPEN_MESH, CMD_OPEN_MESHES, CMD_REDEEM_INVITE, CMD_REFRESH_MESHES, CMD_START_IN_MESH };
 export {
-  CMD_REFRESH_CELLS, CMD_NEW_CELL, CMD_START_CELL, CMD_START_CELL_HERE, CMD_START_AGENT_HOST, CMD_SETUP_AGENTS_WINDOW, CMD_DEFAULT_CELL, CMD_FORGET_CELL, CMD_OPEN_CELL, CMD_INSTALL_CLI, CMD_UPDATE_CLI, CMD_STOP_CELL, CMD_RENAME_CELL,
+  CMD_REFRESH_CELLS, CMD_NEW_CELL, CMD_START_CELL, CMD_START_CELL_HERE, CMD_START_AGENT_HOST, CMD_STOP_AGENT_HOST, CMD_SETUP_AGENTS_WINDOW, CMD_DEFAULT_CELL, CMD_FORGET_CELL, CMD_OPEN_CELL, CMD_INSTALL_CLI, CMD_UPDATE_CLI, CMD_STOP_CELL, CMD_RENAME_CELL,
   CMD_COPY_CELL_LAUNCH, CMD_SET_CELL_PROFILE, CMD_OPEN_CELL_POLICY, VIEW_CELLS,
 };
 export const VIEW_SESSIONS = "a4sx.sessions";
@@ -1210,6 +1210,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_CELL_FROM_SAVED, (item?: LocalCellItem) => startCellFromSaved(actionDeps, item, { sessions: librarySessions(auth) })),
     vscode.commands.registerCommand(CMD_CELL_OPEN_AGENTS, (item?: LocalCellItem) => openCellInAgentsWindow(actionDeps, item)),
     vscode.commands.registerCommand(CMD_START_AGENT_HOST, () => startAgentHost(cellDeps)),
+    vscode.commands.registerCommand(CMD_STOP_AGENT_HOST, () => stopAgentHost(cellDeps)),
     vscode.commands.registerCommand(CMD_SETUP_AGENTS_WINDOW, () => setupAgentsWindow(cellDeps)),
     vscode.commands.registerCommand(CMD_DEFAULT_CELL, (item?: LocalCellItem) => setDefaultCell(cellDeps, item)),
     vscode.commands.registerCommand(CMD_FORGET_CELL, (item?: LocalCellItem) => forgetCell(cellDeps, item)),
