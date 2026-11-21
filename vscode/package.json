@@ -2,7 +2,7 @@
   "name": "a4sx",
   "displayName": "a4sx",
   "description": "Use a4sx from VS Code: sign in, browse and resume your saved sessions or run them as mesh cells, sort them into folders, manage your launch profiles, start and manage the mesh cells on this computer, see your meshes, search the marketplace, and add the a4sx MCP servers for agent mode.",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "publisher": "crossvaultGmbH",
   "license": "Apache-2.0",
   "homepage": "https://session-exchange.com",
@@ -349,22 +349,6 @@
     "views": {
       "a4sx": [
         {
-          "id": "a4sx.sessions",
-          "name": "My sessions",
-          "icon": "media/icon.png"
-        },
-        {
-          "id": "a4sx.profiles",
-          "name": "Launch profiles",
-          "icon": "media/icon.png",
-          "visibility": "visible"
-        },
-        {
-          "id": "a4sx.marketplace",
-          "name": "Marketplace",
-          "icon": "media/icon.png"
-        },
-        {
           "id": "a4sx.cells",
           "name": "Cells",
           "icon": "media/icon.png",
@@ -375,6 +359,24 @@
           "name": "Meshes",
           "icon": "media/icon.png",
           "when": "a4sx.signedIn && a4sx.meshesAvailable"
+        },
+        {
+          "id": "a4sx.sessions",
+          "name": "My sessions",
+          "icon": "media/icon.png",
+          "visibility": "collapsed"
+        },
+        {
+          "id": "a4sx.profiles",
+          "name": "Launch profiles",
+          "icon": "media/icon.png",
+          "visibility": "visible"
+        },
+        {
+          "id": "a4sx.marketplace",
+          "name": "Marketplace",
+          "icon": "media/icon.png",
+          "visibility": "collapsed"
         }
       ]
     },
