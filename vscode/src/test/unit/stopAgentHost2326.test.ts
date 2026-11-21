@@ -108,7 +108,7 @@ describe("#2326: Stop agent host", () => {
     assert.strictEqual(old.label, "Stop agent host (needs a4sx 0.59.15)");
     assert.strictEqual(old.command, undefined);
     assert.strictEqual((old.iconPath as any).color?.id, "disabledForeground");
-    assert.strictEqual(old.tooltip, "Your a4sx CLI is 0.59.2; stopping the agent host from here needs 0.59.15 or newer, which isn't released yet. Until then, Ctrl+C in its terminal \"a4sx: agent host\" stops it.");
+    assert.strictEqual(old.tooltip, "Your a4sx CLI is 0.59.2; stopping the agent host from here needs 0.59.15 or newer (`a4sx update` gets it once released). Until then, Ctrl+C in its terminal \"a4sx: agent host\" stops it.");
     for (const v of ["0.59.15", "0.60.0", undefined]) {
       const row = thisComputerChildren(host, v).find((i) => String(i.label).startsWith("Stop agent host"))!;
       assert.strictEqual(row.label, "Stop agent host", String(v));
