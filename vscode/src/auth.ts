@@ -172,17 +172,37 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
 
   /** #2309: the mesh-only key, if it was issued by the current server and has not expired. */
   async meshKey(): Promise<Stored | undefined> {
-    const s = await this.read(MESH_SECRET_KEY);
+    const s = await this.read(MESH_SECRET_KEY) as (Stored & { forId?: string }) | undefined;
+    if (!s) {
+      return undefined;
+    }
     let base: string;
     try {
       base = this.client().base;
     } catch {
       return undefined;
     }
-    if (!s || s.server !== base || (s.expiresAt && Date.parse(s.expiresAt) <= Date.now())) {
+    const main = await this.current();
+    // review: a mesh key belongs to the sign-in it was made for (another account's, after a new sign-in: never)
+    if (!main || s.forId !== main.id || s.server !== base || (s.expiresAt && Date.parse(s.expiresAt) <= Date.now())) {
+      await this.dropMesh();
       return undefined;
     }
     return s;
+  }
+
+  /** review: revokes (best-effort) and forgets the mesh-only key. */
+  private async dropMesh(): Promise<void> {
+    const old = await this.read(MESH_SECRET_KEY);
+    if (!old) {
+      return;
+    }
+    await this.secrets.delete(MESH_SECRET_KEY);
+    try {
+      await this.revoke(old);
+    } catch {
+      // best-effort: it is forgotten here either way
+    }
   }
 
   /**
@@ -200,7 +220,7 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
   /** #2309: forgets the mesh-only key (a 401 for it, or sign-out). The sign-in stays. */
   async clearMesh(): Promise<void> {
     if (await this.secrets.get(MESH_SECRET_KEY)) {
-      await this.secrets.delete(MESH_SECRET_KEY);
+      await this.secrets.delete(MESH_SECRET_KEY);   // a 401: the server refused it already, nothing to revoke
       this.changed.fire({ added: [], removed: [], changed: [] });
     }
   }
@@ -209,9 +229,10 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
     if (!(await this.current())) {
       throw new ApiError("unauthorized", "Sign in to a4sx first.");
     }
+    const main = await this.current();
     const stored = await this.login(this.client(), { scopes: [SCOPE_MESH_READ], fallback: false, adding: SCOPE_MESH_READ });
     const old = await this.read(MESH_SECRET_KEY);
-    await this.secrets.store(MESH_SECRET_KEY, JSON.stringify(stored));
+    await this.secrets.store(MESH_SECRET_KEY, JSON.stringify({ ...stored, forId: main?.id }));   // tied to the sign-in
     this.changed.fire({ added: [], removed: [], changed: [] });   // the views read their keys again
     if (old && old.token !== stored.token && old.server === stored.server) {
       await this.revoke(old);   // only the replaced mesh key; the sign-in is never touched
@@ -266,6 +287,7 @@ export class A4sxAuthProvider implements vscode.AuthenticationProvider, vscode.D
   /** Forgets the token on this machine (sign-out, or a 401 from the server). */
   async clear(): Promise<void> {
     const old = await this.read();
+    await this.dropMesh();   // review: the mesh key never outlives the sign-in it belongs to
     await this.secrets.delete(SECRET_KEY);
     if (old) {
       this.changed.fire({ added: [], removed: [this.toSession(old)], changed: [] });

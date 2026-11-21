@@ -30,7 +30,8 @@ export const MESHES_AVAILABLE = "a4sx.meshesAvailable";
 
 export interface MeshTokenSource {
   token(): Promise<string | undefined>;
-  clear(): Promise<void>;
+  /** Forgets the key that got a 401; "mesh" when only the mesh-only key was forgotten (the sign-in stays). */
+  clear(): Promise<void | "mesh">;
 }
 
 const cellCount = (n: number) => (n === 1 ? "1 cell" : `${n} cells`);
@@ -129,8 +130,8 @@ export class MeshesProvider implements vscode.TreeDataProvider<vscode.TreeItem>,
     if ((await this.auth.token()) !== token) {
       return;
     }
-    await this.auth.clear();
-    void vscode.window.showWarningMessage(MESH_TEXTS.signedOut);
+    const which = await this.auth.clear();
+    void vscode.window.showWarningMessage(which === "mesh" ? MESH_TEXTS.meshKeyEnded : MESH_TEXTS.signedOut);
   }
 
   get load(): MeshLoad | undefined {

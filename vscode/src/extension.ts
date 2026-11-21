@@ -1039,7 +1039,13 @@ export function activate(context: vscode.ExtensionContext): void {
   // Hidden until GET /meshes answers: a server without meshes (404) never shows the view.
   setContext(MESHES_AVAILABLE, false);
   // #2309: the Meshes view reads with the mesh-only key ("Allow mesh read" signs in for one apart)
-  const meshes = new MeshesProvider({ token: () => auth.meshToken(), clear: async () => ((await auth.meshKey()) ? auth.clearMesh() : auth.clear()) }, client,
+  const meshes = new MeshesProvider({ token: () => auth.meshToken(), clear: async () => {
+    if (await auth.meshKey()) {
+      await auth.clearMesh();
+      return "mesh" as const;
+    }
+    await auth.clear();
+  } }, client,
     (available) => setContext(MESHES_AVAILABLE, available));
   const meshesView = vscode.window.createTreeView(VIEW_MESHES, { treeDataProvider: meshes });
   const meshPoller = new VisibilityPoller(() => meshes.tick());

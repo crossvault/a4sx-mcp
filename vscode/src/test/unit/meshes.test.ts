@@ -1180,30 +1180,50 @@ describe("meshes: manifest", () => {
 
 describe("#2309: the mesh-only key", () => {
   beforeEach(resetCalls);
+  const meshKey = (forId = "t1") => JSON.stringify({ token: "mesh_tok", server: BASE, id: "m1", scopes: ["mesh:read"], forId });
+  const revokes = (net: any) => net.seen.filter((r: any) => new URL(r.url).pathname === "/library/keys/self/revoke");
 
-  it("a refused mesh-read sign-in says the server's reason, never \"not available on this server\"", async () => {
-    const { sb } = await activateWith({ "GET /meshes": [SCOPE_DENIED] }, ["library:read"]);
-    ext.runtime.login = async () => { throw new api.ApiError("bad-scopes", "this key kind isn't offered here"); };
+  it("a refused mesh-read sign-in (a server without mesh scopes) says meshes aren't available there", async () => {
+    await activateWith({ "GET /meshes": [SCOPE_DENIED] }, ["library:read"]);
+    ext.runtime.login = async () => { throw new api.ApiError("bad-scopes", "x"); };
     await calls.commands.get(ext.CMD_ALLOW_SCOPE)!("mesh:read");
     await flush();
-    assert.ok(calls.errors.some((e) => e.message === MESH_TEXTS.meshReadRefused("this key kind isn't offered here")), JSON.stringify(calls.errors));
-    assert.ok(!calls.errors.some((e) => e.message === MESH_TEXTS.notSupported));
-    void sb;
+    assert.ok(calls.errors.some((e) => e.message === MESH_TEXTS.notSupported), JSON.stringify(calls.errors));
   });
 
-  it("a 401 for the mesh key forgets only it; sign-out revokes and forgets both", async () => {
-    // after the mesh key is forgotten the view reads again with the sign-in, which lacks mesh:read: the 403
-    const { ctx, sb } = await activateWith({ "GET /meshes": [ok(MESHES), { status: 401, body: { error: { code: "not_logged_in" } } }, SCOPE_DENIED],
-      "POST /library/keys/self/revoke": [{ status: 200, body: { status: "revoked" } }, { status: 200, body: { status: "revoked" } }] },
+  it("a 401 for the mesh key forgets only it and says so; the sign-in stays", async () => {
+    const { ctx, sb } = await activateWith({ "GET /meshes": [ok(MESHES), { status: 401, body: { error: { code: "not_logged_in" } } }, SCOPE_DENIED] },
       ["library:read"]);
-    await ctx.secrets.store(MESH_SECRET_KEY, JSON.stringify({ token: "mesh_tok", server: BASE, id: "m1", scopes: ["mesh:read"] }));
+    await ctx.secrets.store(MESH_SECRET_KEY, meshKey());
     await sb.meshes.refresh();
     await flush();
-    assert.strictEqual(ctx.secrets.store_.get(MESH_SECRET_KEY), undefined, "the mesh key is forgotten");
+    assert.strictEqual(ctx.secrets.store_.get(MESH_SECRET_KEY), undefined);
     assert.ok(ctx.secrets.store_.get(SECRET_KEY), "the sign-in stays");
-    await ctx.secrets.store(MESH_SECRET_KEY, JSON.stringify({ token: "mesh_tok", server: BASE, id: "m1", scopes: ["mesh:read"] }));
+    assert.ok(calls.warnings.includes(MESH_TEXTS.meshKeyEnded), JSON.stringify(calls.warnings));
+  });
+
+  it("the mesh key never outlives its sign-in: forgotten (and revoked) with it, and never another account's", async () => {
+    const REV = { status: 200, body: { status: "revoked" } };
+    const { ctx, sb, net } = await activateWith({ "GET /meshes": [ok(MESHES), ok(MESHES), ok(MESHES)], "POST /library/keys/self/revoke": [REV, REV, REV] },
+      ["library:read"]);
+    await ctx.secrets.store(MESH_SECRET_KEY, meshKey());
+    await sb.auth.clear();                                   // a 401 elsewhere, or an expired sign-in
+    assert.strictEqual(ctx.secrets.store_.get(MESH_SECRET_KEY), undefined);
+    assert.strictEqual(revokes(net).length, 1, "the mesh key is revoked on the server");
+    // a new sign-in (another id): an old mesh key isn't used, and is dropped
+    await ctx.secrets.store(SECRET_KEY, JSON.stringify({ token: "other", server: BASE, id: "t9", scopes: ["library:read"] }));
+    await ctx.secrets.store(MESH_SECRET_KEY, meshKey("t1"));
+    assert.strictEqual(await sb.auth.meshToken(), "other");
+    assert.strictEqual(ctx.secrets.store_.get(MESH_SECRET_KEY), undefined);
+  });
+
+  it("sign-out revokes both keys and forgets both", async () => {
+    const REV = { status: 200, body: { status: "revoked" } };
+    const { ctx, sb, net } = await activateWith({ "GET /meshes": [ok(MESHES)], "POST /library/keys/self/revoke": [REV, REV] }, ["library:read"]);
+    await ctx.secrets.store(MESH_SECRET_KEY, meshKey());
     await sb.auth.signOut();
     assert.strictEqual(ctx.secrets.store_.get(MESH_SECRET_KEY), undefined);
     assert.strictEqual(ctx.secrets.store_.get(SECRET_KEY), undefined);
+    assert.strictEqual(revokes(net).length, 2);
   });
 });
