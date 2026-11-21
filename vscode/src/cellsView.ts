@@ -8,7 +8,7 @@
 // offers "Install a4sx CLI". An a4sx CLI older than 0.25.0 still lists its cells, under an "update" line.
 import * as vscode from "vscode";
 import { CELLS_LIST_ARGS, LocalCell, localCellDescription, localCellTooltip, showText, startableCell } from "./cells";
-import { CliGate, cliGate, IN_SESSION_MESSAGE, MeshPolicy, parseCellsAnswer, parseCliError, parseCliVersion, parsePeersAnswer, peersArgs, RemoteCell, VERSION_ARGS } from "./cliJson";
+import { CliGate, cliGate, IN_SESSION_MESSAGE, MeshPolicy, parseCellsAnswer, parseCliError, parseCliVersion, parsePeersAnswer, peerPresence, peersArgs, RemoteCell, VERSION_ARGS } from "./cliJson";
 import { MessageItem } from "./sessionsView";
 import { AGENT_HOST_STATUS_ARGS, AGENT_HOST_TEXTS, AgentHostStatus, agentsWindowSetUp, isOpen, lacksAgentHost, parseAgentHostStatus } from "./agentHostStatus";
 
@@ -50,7 +50,45 @@ export const CELL_TEXTS = {
   peersFailed: "Could not read the cells on other machines.",
   remoteTooltip: "On another machine: read-only here.",
   yoursRemoteTooltip: "Yours, on another machine. Start on this computer moves it here once it no longer runs there.",
+  othersLabel: "Other members' cells",
+  othersCount: (n: number, online: number) => `${n} on other machines${online ? ` · ${online} online` : ""}`,
+  othersTooltip: "The cells of this mesh's other members, on their machines: read-only here. Your own cells on other machines stay listed above.",
 };
+
+/**
+ * cell01 (#2301, the looks): a row's state at a glance, as its icon's colour. Only VS Code's own theme colours, so
+ * every theme (and high contrast) decides how they look; the words in the description stay as they are.
+ */
+export const CELL_ICON_COLORS = { running: "charts.green", open: "charts.blue", attention: "charts.yellow", away: "disabledForeground" } as const;
+
+function themed(id: string, color?: string): vscode.ThemeIcon {
+  return color ? new vscode.ThemeIcon(id, new vscode.ThemeColor(color)) : new vscode.ThemeIcon(id);
+}
+
+/**
+ * A stored cell's icon: open in the Agents window (blue), running here (green), waiting for an admin or stored twice
+ * (yellow), else the plain one. The registry's word alone never colours a row: a cell of another account reads
+ * "revoked" for the signed-in one and still works.
+ */
+export function localCellIcon(cell: LocalCell, open = false): vscode.ThemeIcon {
+  if (open) {
+    return themed("comment-discussion", CELL_ICON_COLORS.open);
+  }
+  if (cell.localState === "running") {
+    return themed("debug-start", CELL_ICON_COLORS.running);
+  }
+  return themed(cell.isDefault ? "star-full" : startableCell(cell) ? "terminal" : "circle-outline",
+    cell.needsApproval || cell.duplicate ? CELL_ICON_COLORS.attention : undefined);
+}
+
+/** A cell on another machine: yours or not by the shape, online (green) or offline (dimmed) by the colour. */
+export function remoteCellIcon(peer: Pick<RemoteCell, "own" | "state" | "presence">): vscode.ThemeIcon {
+  const now = peerPresence(peer);
+  return themed(peer.own ? "vm-active" : "vm", now === "online" ? CELL_ICON_COLORS.running : now === "offline" ? CELL_ICON_COLORS.away : undefined);
+}
+
+/** More other members' cells than this in one mesh are folded into one row (your own cells elsewhere never are). */
+export const FOLD_OTHERS_ABOVE = 3;
 
 /** The view's states: what getChildren shows. */
 export type CellsLoad =
@@ -126,7 +164,7 @@ export class LocalCellItem extends vscode.TreeItem {
     this.description = localCellDescription(cell, server, true);
     this.tooltip = localCellTooltip(cell, server);
     this.contextValue = cellContext(cell, legacy);
-    this.iconPath = new vscode.ThemeIcon(cell.localState === "running" ? "debug-start" : cell.isDefault ? "star-full" : startableCell(cell) ? "terminal" : "circle-outline");
+    this.iconPath = localCellIcon(cell);
   }
 }
 
@@ -165,6 +203,9 @@ export class ThisComputerItem extends vscode.TreeItem {
 export function thisComputerChildren(host: AgentHostStatus): vscode.TreeItem[] {
   const state = new MessageItem(host.running && host.address ? AGENT_HOST_TEXTS.running(host.address) : AGENT_HOST_TEXTS.stopped,
     host.running ? "pass" : "circle-slash");
+  if (host.running) {
+    state.iconPath = themed("pass", CELL_ICON_COLORS.running);
+  }
   state.tooltip = host.running && host.address ? AGENT_HOST_TEXTS.runningTooltip(host.address) : AGENT_HOST_TEXTS.stoppedTooltip;
   const out: vscode.TreeItem[] = [state];
   const setUp = agentsWindowSetUp(host);
@@ -178,6 +219,7 @@ export function thisComputerChildren(host: AgentHostStatus): vscode.TreeItem[] {
   }
   if (host.lastError) {
     const err = new MessageItem(AGENT_HOST_TEXTS.lastError(host.lastError.text), "warning");
+    err.iconPath = themed("warning", CELL_ICON_COLORS.attention);
     err.tooltip = AGENT_HOST_TEXTS.lastErrorTooltip(host.lastError.text, host.lastError.at);
     out.push(err);
   }
@@ -188,13 +230,28 @@ export class RemoteCellItem extends vscode.TreeItem {
   constructor(public readonly meshId: string, public readonly peer: RemoteCell) {
     super(peer.name, vscode.TreeItemCollapsibleState.None);
     this.id = `remoteCell:${meshId}/${peer.instanceId}`;
-    this.description = [peer.own ? CELL_TEXTS.yoursOnAnotherMachine : CELL_TEXTS.onAnotherMachine, peer.state, peer.tier].filter(Boolean).join(" · ");
+    // cell01: connected now or not comes first (the registry's word and the isolation follow)
+    this.description = [peer.own ? CELL_TEXTS.yoursOnAnotherMachine : CELL_TEXTS.onAnotherMachine, peer.presence, peer.state, peer.tier].filter(Boolean).join(" · ");
     this.tooltip = [
-      `Cell: ${peer.name}`, peer.own ? CELL_TEXTS.yoursRemoteTooltip : CELL_TEXTS.remoteTooltip, ...(peer.aid ? [`Address: ${peer.aid}`] : []), ...(peer.state ? [`State: ${peer.state}`] : []),
+      `Cell: ${peer.name}`, peer.own ? CELL_TEXTS.yoursRemoteTooltip : CELL_TEXTS.remoteTooltip, ...(peer.aid ? [`Address: ${peer.aid}`] : []), ...(peer.presence ? [`Now: ${peer.presence}`] : []), ...(peer.state ? [`State: ${peer.state}`] : []),
       ...(peer.tier ? [`Isolation: ${peer.tier}`] : []), `ID: ${peer.instanceId}`,
     ].join("\n");
     this.contextValue = peer.own ? REMOTE_OWN_CELL_CONTEXT : REMOTE_CELL_CONTEXT;
-    this.iconPath = new vscode.ThemeIcon(peer.own ? "vm-active" : "vm");
+    this.iconPath = remoteCellIcon(peer);
+  }
+}
+
+export const OTHER_CELLS_CONTEXT = "a4sx.otherCells";
+
+/** cell01 (#2301, the looks): the other members' cells of one mesh, folded into one row that opens on a click. */
+export class OtherCellsItem extends vscode.TreeItem {
+  constructor(public readonly meshId: string, public readonly peers: readonly RemoteCell[]) {
+    super(CELL_TEXTS.othersLabel, vscode.TreeItemCollapsibleState.Collapsed);
+    this.id = `otherCells:${meshId}`;
+    this.description = CELL_TEXTS.othersCount(peers.length, peers.filter((p) => peerPresence(p) === "online").length);
+    this.tooltip = CELL_TEXTS.othersTooltip;
+    this.contextValue = OTHER_CELLS_CONTEXT;
+    this.iconPath = new vscode.ThemeIcon("organization");
   }
 }
 
@@ -233,6 +290,9 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
   /** #2301 E2: the agent host's status, read once per refresh when This computer's rows are asked for. */
   private host: Promise<AgentHostStatus | { failed: string } | undefined> | undefined;
   private hostSeen: AgentHostStatus | undefined;
+  /** cell01 (the status bar): fires when the cells were read again or the agent host's status became known. */
+  private readonly summaryChanged = new vscode.EventEmitter<void>();
+  readonly onDidChangeSummary = this.summaryChanged.event;
   readonly versions: CliVersions;
 
   constructor(private readonly deps: CellsDeps) {
@@ -255,7 +315,13 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
     }
     this.deps.onState(this.load);
     this.changed.fire();
+    this.summaryChanged.fire();
     return this.load;
+  }
+
+  /** The agent host's status as last read for This computer's rows (undefined: not read since the last refresh). */
+  get hostKnown(): AgentHostStatus | undefined {
+    return this.hostSeen;
   }
 
   private async read(): Promise<CellsLoad> {
@@ -293,6 +359,9 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
   async getChildren(parent?: vscode.TreeItem): Promise<vscode.TreeItem[]> {
     if (parent instanceof MeshGroupItem) {
       return this.groupChildren(parent);
+    }
+    if (parent instanceof OtherCellsItem) {
+      return parent.peers.map((p) => new RemoteCellItem(parent.meshId, p));
     }
     if (parent instanceof ThisComputerItem) {
       const host = await this.hostStatus();
@@ -377,6 +446,7 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
             if (s.open.length || had) {
               this.changed.fire();   // the open marks on the cell rows
             }
+            this.summaryChanged.fire();
           }
           return s;
         });
@@ -394,6 +464,7 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
         // cell01: first, so the default width never cuts it; and in the tooltip
         item.description = [AGENT_HOST_TEXTS.openMark, item.description].filter(Boolean).join(" · ");
         item.tooltip = `${AGENT_HOST_TEXTS.openTooltip}\n${String(item.tooltip ?? "")}`;
+        item.iconPath = localCellIcon(c, true);
       }
       return item;
     });
@@ -407,7 +478,11 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
     // `own` is the caller's account, not this computer: a cell stored here is already listed above.
     const here = new Set(group.all.map((c) => c.instanceId));
     const elsewhere = peers.peers.filter((p) => !here.has(p.instanceId)).sort((a, b) => Number(b.own) - Number(a.own) || a.name.localeCompare(b.name));
-    return [...local, ...elsewhere.map((p) => new RemoteCellItem(group.meshId!, p))];
+    // cell01 (the looks): your own cells elsewhere stay rows; many other members' cells fold into one row
+    const others = elsewhere.filter((p) => !p.own);
+    const shown = others.length > FOLD_OTHERS_ABOVE ? elsewhere.filter((p) => p.own) : elsewhere;
+    return [...local, ...shown.map((p) => new RemoteCellItem(group.meshId!, p)),
+      ...(others.length > FOLD_OTHERS_ABOVE ? [new OtherCellsItem(group.meshId, others)] : [])];
   }
 
   private peersOf(meshId: string): Promise<PeersLoad> {
@@ -432,5 +507,6 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
 
   dispose(): void {
     this.changed.dispose();
+    this.summaryChanged.dispose();
   }
 }
