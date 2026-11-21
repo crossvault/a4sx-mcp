@@ -5,7 +5,7 @@ import * as path from "path";
 import { calls, fakeMemento, resetCalls } from "../fakeVscode";
 import { AGENT_HOST_TEXTS } from "../../agentHostStatus";
 import { CELL_CMD_TEXTS, CellCommandDeps, stopAgentHost } from "../../cellCommands";
-import { CellsProvider, CliOutput } from "../../cellsView";
+import { CellsProvider, CliOutput, thisComputerChildren } from "../../cellsView";
 
 const BASE = "https://session-exchange.com";
 const CLI = "/opt/a4sx/a4sx";
@@ -100,6 +100,20 @@ describe("#2326: Stop agent host", () => {
     assert.ok(AGENT_HOST_TEXTS.stopping.startsWith("Stopping the a4sx agent host…"));
     assert.ok(AGENT_HOST_TEXTS.stopNeedsUpdate.indexOf("0.59.15") < 60);
     assert.ok(AGENT_HOST_TEXTS.stopNoAnswer.indexOf("45 s") < 60);
+  });
+
+  it("#2309 F2: with a CLI before 0.59.15 the row is greyed, has no action and says why; 0.59.15+ is the action", () => {
+    const host = { running: true, address: "ws://127.0.0.1:8765/", open: [], editors: { stable: "ok" } } as any;
+    const old = thisComputerChildren(host, "0.59.2").find((i) => String(i.label).startsWith("Stop agent host"))!;
+    assert.strictEqual(old.label, "Stop agent host (needs a4sx 0.59.15)");
+    assert.strictEqual(old.command, undefined);
+    assert.strictEqual((old.iconPath as any).color?.id, "disabledForeground");
+    assert.strictEqual(old.tooltip, "Your a4sx CLI is 0.59.2; stopping the agent host from here needs 0.59.15 or newer, which isn't released yet. Until then, Ctrl+C in its terminal \"a4sx: agent host\" stops it.");
+    for (const v of ["0.59.15", "0.60.0", undefined]) {
+      const row = thisComputerChildren(host, v).find((i) => String(i.label).startsWith("Stop agent host"))!;
+      assert.strictEqual(row.label, "Stop agent host", String(v));
+      assert.strictEqual(row.command!.command, "a4sx.stopAgentHost");
+    }
   });
 
   it("the command is contributed with its title", () => {

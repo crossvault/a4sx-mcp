@@ -132,6 +132,10 @@ export const AGENT_HOST_TEXTS = {
   stopDone: "a4sx agent host stopped. Start it again to use your cells in the Agents window.",
   stopNeedsUpdate: "Update a4sx to stop the agent host from here (needs CLI 0.59.15+). Nothing was stopped; Ctrl+C in its terminal \"a4sx: agent host\" stops it now.",
   stopWhat: "stop the agent host",
+  // #2309 F2: an a4sx CLI before 0.59.15 has no `agent-host stop`: the row is shown greyed, without an action
+  MIN_STOP_CLI: "0.59.15",
+  stopOld: "Stop agent host (needs a4sx 0.59.15)",
+  stopOldTooltip: (v: string) => `Your a4sx CLI is ${v}; stopping the agent host from here needs 0.59.15 or newer, which isn't released yet. Until then, Ctrl+C in its terminal "a4sx: agent host" stops it.`,
   stopNoAnswer: "No answer from `a4sx agent-host stop` in 45 s. If it got as far as asking, the agent host may still stop; This computer shows when it has, and Ctrl+C in its terminal \"a4sx: agent host\" stops it at once.",
   stopAsk: (names: string[], plain = 0) => {
     const what = [...names.map((n) => `«${n}»`), ...(plain ? [plain === 1 ? "1 plain conversation" : `${plain} plain conversations`] : [])];
