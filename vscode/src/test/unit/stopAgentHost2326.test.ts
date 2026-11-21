@@ -11,11 +11,11 @@ const BASE = "https://session-exchange.com";
 const CLI = "/opt/a4sx/a4sx";
 const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "package.json"), "utf8"));
 
-function harness(answer: CliOutput) {
+function harness(answer: CliOutput, status: CliOutput = { code: 0, stdout: JSON.stringify({ running: true, address: "ws://127.0.0.1:8765/", open: [] }), stderr: "" }) {
   const runs: { args: string; ms?: number }[] = [];
   const run = async (_cli: string, args: readonly string[], ms?: number): Promise<CliOutput> => {
     runs.push({ args: args.join(" "), ms });
-    return args.join(" ") === "agent-host stop" ? answer : { code: 0, stdout: "", stderr: "" };
+    return args.join(" ") === "agent-host stop" ? answer : args.join(" ") === "agent-host status --json" ? status : { code: 0, stdout: "", stderr: "" };
   };
   let rereads = 0;
   const provider = new CellsProvider({ resolve: () => ({ kind: "found", path: CLI }), run, server: () => BASE, onState: () => undefined });
@@ -34,12 +34,28 @@ describe("#2326: Stop agent host", () => {
   it("runs `a4sx agent-host stop` once, without a terminal, with a progress while it waits; says it stopped", async () => {
     const h = harness({ code: 0, stdout: "a4sx agent host: asked it to stop (pid 42). …\na4sx agent host: stopped (pid 42)\n", stderr: "" });
     assert.strictEqual(await stopAgentHost(h.deps), true);
-    assert.deepStrictEqual(h.runs.map((r) => r.args), ["agent-host stop"]);
-    assert.ok((h.runs[0].ms ?? 0) >= 35_000, "longer than the CLI's own 30 s wait");
+    assert.deepStrictEqual(h.runs.map((r) => r.args), ["agent-host status --json", "agent-host stop"]);
+    assert.ok((h.runs[1].ms ?? 0) >= 35_000, "longer than the CLI's own 30 s wait");
+    assert.deepStrictEqual(calls.modals, [], "no cell runs in it: no question");
     assert.strictEqual(calls.terminals.length, 0);
     assert.deepStrictEqual(calls.progress.map((p) => p.title), [AGENT_HOST_TEXTS.stopping]);
     assert.deepStrictEqual(calls.infos, [AGENT_HOST_TEXTS.stopDone]);
     assert.strictEqual(h.rereads(), 1, "the node reads the status again");
+  });
+
+  it("cells run in it: asks first, naming them (as the deck's S); Cancel stops nothing, Stop it stops", async () => {
+    const st = { code: 0, stdout: JSON.stringify({ running: true, address: "ws://127.0.0.1:8765/", open: ["build (Team mesh)", "docs (Team mesh)", "x (plain)"] }), stderr: "" };
+    const h = harness({ code: 0, stdout: "a4sx agent host: stopped (pid 42)\n", stderr: "" }, st);
+    calls.modalChoices.push(undefined);   // Cancel
+    assert.strictEqual(await stopAgentHost(h.deps), false);
+    assert.deepStrictEqual(calls.modals.map((m) => [m.kind, m.message, m.items]),
+      [["warning", "Stop the a4sx agent host? «build», «docs» end (VS Code is told first).", ["Stop it"]]]);
+    assert.deepStrictEqual(h.runs.map((r) => r.args), ["agent-host status --json"], "nothing stopped");
+    resetCalls();
+    calls.modalChoices.push(AGENT_HOST_TEXTS.stopIt);
+    assert.strictEqual(await stopAgentHost(h.deps), true);
+    assert.deepStrictEqual(h.runs.map((r) => r.args).slice(-1), ["agent-host stop"]);
+    assert.deepStrictEqual(calls.infos, [AGENT_HOST_TEXTS.stopDone]);
   });
 
   it("not running: says so, not that it stopped", async () => {

@@ -10,7 +10,7 @@ import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
 import { CLI_NAME } from "./cli";
-import { AGENT_HOST_SETUP_ARGS, AGENT_HOST_START_ARGS, AGENT_HOST_STOP_ARGS, AGENT_HOST_TEXTS, directLaunch, lacksAgentHost } from "./agentHostStatus";
+import { AGENT_HOST_SETUP_ARGS, AGENT_HOST_START_ARGS, AGENT_HOST_STATUS_ARGS, AGENT_HOST_STOP_ARGS, AGENT_HOST_TEXTS, directLaunch, lacksAgentHost, parseAgentHostStatus } from "./agentHostStatus";
 import { CellStartPlan, cellStartPlan, isDirectory, lastPromptFolder } from "./cellResume";
 import {
   CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellProfileArgs, cellRenameArgs, cellsListDir, cellStopArgs, LocalCell, MIN_CELL_CONSENT_CLI, NEW_CELL_ARGS,
@@ -691,6 +691,13 @@ export async function startAgentHost(deps: CellCommandDeps): Promise<vscode.Term
 export async function stopAgentHost(deps: CellCommandDeps): Promise<boolean> {
   const cli = await ensureCli(deps);
   if (!cli) {
+    return false;
+  }
+  // coordinator (as the deck's S): ask first when cells run in it; with none, stop without asking
+  const now = await deps.run(cli, AGENT_HOST_STATUS_ARGS, 15_000);
+  const open = (now.code === 0 ? parseAgentHostStatus(now.stdout)?.open : undefined) ?? [];
+  if (open.length && (await vscode.window.showWarningMessage(AGENT_HOST_TEXTS.stopAsk(open.map((o) => o.name)), { modal: true },
+    AGENT_HOST_TEXTS.stopIt)) !== AGENT_HOST_TEXTS.stopIt) {
     return false;
   }
   const out = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: AGENT_HOST_TEXTS.stopping },

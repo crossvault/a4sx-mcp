@@ -132,6 +132,8 @@ export const AGENT_HOST_TEXTS = {
   stopNeedsUpdate: "This a4sx CLI can't stop the agent host from here (that needs CLI 0.59.15 or newer). Update a4sx, or stop it with Ctrl+C in its terminal \"a4sx: agent host\"; nothing was stopped.",
   stopWhat: "stop the agent host",
   stopNoAnswer: "`a4sx agent-host stop` didn't finish within 45 seconds. The agent host has the request and may still stop; This computer shows when it has, and Ctrl+C in its terminal \"a4sx: agent host\" stops it at once.",
+  stopAsk: (names: string[]) => `Stop the a4sx agent host? ${names.map((n) => `«${n}»`).join(", ")} end (VS Code is told first).`,
+  stopIt: "Stop it",
   stopNotRunning: "The a4sx agent host wasn't running, so there was nothing to stop.",
   setup: "Set up the Agents window",
   setupTooltip: "Runs `a4sx agent-host setup-vscode` in a terminal: it points VS Code's Agents window at the agent host on this computer, says what it changed, and starts the agent host there when it isn't running.",
