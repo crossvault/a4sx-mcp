@@ -86,7 +86,8 @@ export function directLaunch(cli: string, read: (p: string) => string | undefine
   const text = read(cli);
   // the CLI's launcher (`@"py" "script" %*`) or the extension's own (provision.ts: `@echo off` and `"py" "script" %*`)
   const body = text?.trim().replace(/^@echo off\s*\r?\n/i, "@");
-  const m = body ? /^@"([^"\r\n]+)"\s+"([^"\r\n]+)"\s+%\*\s*$/.exec(body) : null;
+  // review: only spaces or tabs between the parts, and no % in a path (provision.ts refuses one too)
+  const m = body ? /^@"([^"\r\n%]+)"[ \t]+"([^"\r\n%]+)"[ \t]+%\*\s*$/.exec(body) : null;
   if (!m || !/^[A-Za-z]:\\/.test(m[1]) || !/^[A-Za-z]:\\/.test(m[2]) || !exists(m[1]) || !exists(m[2])) {
     return undefined;
   }
@@ -127,11 +128,11 @@ export const AGENT_HOST_TEXTS = {
   start: "Start agent host",
   stop: "Stop agent host",
   stopTooltip: "Runs `a4sx agent-host stop`: the same stop as Ctrl+C in the host's terminal. It tells the Agents window first, then ends the cells it started.",
-  stopping: "Stopping the a4sx agent host (it tells the Agents window first and ends the cells it started)…",
+  stopping: "Stopping the a4sx agent host… (the Agents window is told first, then its cells end)",
   stopDone: "a4sx agent host stopped. Start it again to use your cells in the Agents window.",
-  stopNeedsUpdate: "This a4sx CLI can't stop the agent host from here (that needs CLI 0.59.15 or newer). Update a4sx, or stop it with Ctrl+C in its terminal \"a4sx: agent host\"; nothing was stopped.",
+  stopNeedsUpdate: "Update a4sx to stop the agent host from here (needs CLI 0.59.15+). Nothing was stopped; Ctrl+C in its terminal \"a4sx: agent host\" stops it now.",
   stopWhat: "stop the agent host",
-  stopNoAnswer: "`a4sx agent-host stop` didn't finish within 45 seconds. If it got as far as asking, the agent host may still stop; This computer shows when it has, and Ctrl+C in its terminal \"a4sx: agent host\" stops it at once.",
+  stopNoAnswer: "No answer from `a4sx agent-host stop` in 45 s. If it got as far as asking, the agent host may still stop; This computer shows when it has, and Ctrl+C in its terminal \"a4sx: agent host\" stops it at once.",
   stopAsk: (names: string[], plain = 0) => {
     const what = [...names.map((n) => `«${n}»`), ...(plain ? [plain === 1 ? "1 plain conversation" : `${plain} plain conversations`] : [])];
     return `Stop the a4sx agent host? ${what.join(", ")} ${what.length === 1 && !(names.length === 0 && plain > 1) ? "ends" : "end"} (VS Code is told first).`;
