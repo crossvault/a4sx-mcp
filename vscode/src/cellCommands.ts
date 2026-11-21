@@ -10,7 +10,7 @@ import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
 import { CLI_NAME } from "./cli";
-import { AGENT_HOST_SETUP_ARGS, AGENT_HOST_START_ARGS, AGENT_HOST_STATUS_ARGS, AGENT_HOST_STOP_ARGS, AGENT_HOST_TEXTS, directLaunch, lacksAgentHost, parseAgentHostStatus } from "./agentHostStatus";
+import { AGENT_HOST_SETUP_ARGS, AGENT_HOST_START_ARGS, AGENT_HOST_STATUS_ARGS, AGENT_HOST_STOP_ARGS, AGENT_HOST_TEXTS, directLaunch, isOpen, lacksAgentHost, parseAgentHostStatus } from "./agentHostStatus";
 import { CellStartPlan, cellStartPlan, isDirectory, lastPromptFolder } from "./cellResume";
 import {
   CELL_NAME, cellDefaultArgs, cellForgetArgs, cellLaunchArgs, cellPageUrl, cellProfileArgs, cellRenameArgs, cellsListDir, cellStopArgs, LocalCell, MIN_CELL_CONSENT_CLI, NEW_CELL_ARGS,
@@ -91,6 +91,10 @@ export const CELL_CMD_TEXTS = {
   stopDetail: "Its agent session ends. You can start the cell again from here.",
   stop: "Stop",
   stopped: (name: string) => `Stopped the cell «${name}».`,
+  // #2309 F1: a cell the agent host runs is stopped through the host (CLI 0.59.16); an older CLI can't
+  MIN_HOST_CELL_STOP_CLI: "0.59.16",
+  stopHostOld: (name: string, v: string) =>
+    `Needs a4sx 0.59.16 to stop a cell in the agent host: «${name}» runs there and your a4sx CLI is ${v}. Close its session in VS Code's Agents window to end it; nothing was stopped.`,
   renameTitle: (name: string) => `Rename the cell «${name}»`,
   renamePrompt: "New name: lowercase letters, digits and -",
   renameInvalid: "Use up to 48 lowercase letters, digits and -, starting and ending with a letter or digit.",
@@ -839,20 +843,29 @@ export async function stopCell(deps: CellCommandDeps, item: LocalCellItem | unde
   if (!args) {
     return false;
   }
-  const choice = await vscode.window.showWarningMessage(CELL_CMD_TEXTS.stopTitle(item.cell.name), { modal: true, detail: CELL_CMD_TEXTS.stopDetail }, CELL_CMD_TEXTS.stop);
-  if (choice !== CELL_CMD_TEXTS.stop) {
-    return false;
-  }
   const cli = await ensureCli(deps);
   if (!cli) {
     return false;
   }
+  const host = deps.provider.hostKnown;
+  if (host && isOpen(host, item.cell)) {   // F1: in the agent host, only a CLI that stops it through the host
+    const v = await deps.provider.versions.version(cli);
+    if (v !== undefined && !versionAtLeast(v, CELL_CMD_TEXTS.MIN_HOST_CELL_STOP_CLI)) {
+      // cell01: no question for something that can't be done; only the explanation
+      await vscode.window.showErrorMessage(CELL_CMD_TEXTS.stopHostOld(item.cell.name, v));
+      return false;
+    }
+  }
+  const choice = await vscode.window.showWarningMessage(CELL_CMD_TEXTS.stopTitle(item.cell.name), { modal: true, detail: CELL_CMD_TEXTS.stopDetail }, CELL_CMD_TEXTS.stop);
+  if (choice !== CELL_CMD_TEXTS.stop) {
+    return false;
+  }
   const out = await deps.run(cli, args, 30_000);
-  await deps.provider.refresh();
-  if (out.code !== 0) {
+  if (out.code !== 0) {   // F1: a failed stop changes nothing shown (no re-read: the row stays as it was)
     await vscode.window.showErrorMessage(CELL_CMD_TEXTS.cliFailed("stop the cell", cliErrorText(out)));
     return false;
   }
+  await deps.provider.refresh();
   void vscode.window.showInformationMessage(CELL_CMD_TEXTS.stopped(item.cell.name));
   return true;
 }

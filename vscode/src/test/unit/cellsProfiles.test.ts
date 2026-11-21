@@ -467,6 +467,33 @@ describe("Cells view: grouped by mesh, with the other machines' cells", () => {
     assert.strictEqual(calls.clipboard, line);
   });
 
+  it("#2309 F1: a failed Stop changes nothing shown; a cell in the agent host with a CLI before 0.59.16: said, nothing runs", async () => {
+    const h = harness({ "mesh cell stop build": out("", 1, "a4sx: «build» isn't running on this host: no a4sx launch running here has this cell\n") });
+    const { build } = Object.fromEntries((await localItems(h)).map((i) => [i.cell.name, i]));
+    const reads = () => h.runs.filter((r) => r === "mesh cells --json").length;
+    const before = reads();
+    calls.modalChoices.push(CELL_CMD_TEXTS.stop);
+    assert.ok(!(await stopCell(h.deps, build)));
+    assert.strictEqual(reads(), before, "no re-read after a failure: the row stays as it was");
+    assert.strictEqual(calls.errors.length, 1);
+    resetCalls();
+    const inHost = harness();
+    const { build: b2 } = Object.fromEntries((await localItems(inHost)).map((i) => [i.cell.name, i]));
+    Object.defineProperty(inHost.provider, "hostKnown", { get: () => ({ running: true, address: "ws://127.0.0.1:8765/", open: [{ name: "build", mesh: "Team mesh" }] }) });
+    assert.ok(!(await stopCell(inHost.deps, b2)));
+    assert.ok(!inHost.runs.includes("mesh cell stop build"), "the old CLI isn't asked: it can't stop a cell there");
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [CELL_CMD_TEXTS.stopHostOld("build", "0.40.3")]);
+    assert.strictEqual(CELL_CMD_TEXTS.stopHostOld("build", "0.59.2"), "Needs a4sx 0.59.16 to stop a cell in the agent host: «build» runs there and your a4sx CLI is 0.59.2. Close its session in VS Code's Agents window to end it; nothing was stopped.");
+    assert.deepStrictEqual(calls.modals, [], "cell01: no question for something that can't be done");
+    resetCalls();
+    const fresh = harness({ "--version": out("a4sx 0.59.16") });
+    const { build: b3 } = Object.fromEntries((await localItems(fresh)).map((i) => [i.cell.name, i]));
+    Object.defineProperty(fresh.provider, "hostKnown", { get: () => ({ running: true, address: "ws://127.0.0.1:8765/", open: [{ name: "build", mesh: "Team mesh" }] }) });
+    calls.modalChoices.push(CELL_CMD_TEXTS.stop);
+    assert.ok(await stopCell(fresh.deps, b3));
+    assert.ok(fresh.runs.includes("mesh cell stop build"), "0.59.16 stops it through the host");
+  });
+
   it("Rename isn't offered for a standalone cell: no box, nothing runs", async () => {
     const h = harness();
     const spare = (await localItems(h)).find((i) => i.cell.name === "spare")!;

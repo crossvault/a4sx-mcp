@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.5
+
+From a from-scratch run on 0.9.4 with the released a4sx CLI 0.59.2 (a4sx #2309 F1, F2):
+- **Stop on a cell running in the Agents window.** A failed Stop no longer changes the row. Before, the Cells view read the list again after the failure and showed the cell as stopped while it still ran. a4sx CLI 0.59.16 stops a cell the agent host runs through the host, so VS Code is told. With an older CLI, Stop on such a cell asks nothing: it says at once that it needs a4sx 0.59.16 and to close the cell's session in the Agents window, and runs nothing.
+- **Stop agent host with an older CLI.** It needs a4sx CLI 0.59.15 or newer. With an older one the row is greyed, without an action, and its tooltip says why and that Ctrl+C in the host's terminal stops it. Before, the button failed with "Update a4sx", which didn't help while 0.59.15 isn't released.
+
 ## 0.9.4
 
 - **The browser sign-in pages name VS Code.** Sign in to a4sx tells the server that VS Code started it. With an a4sx server that has #2324, the pages then say to compare the code with the one in VS Code's a4sx sign-in notification and to return to VS Code, not to your terminal. The warning to compare the code is the same as before. Older servers ignore the hint.
