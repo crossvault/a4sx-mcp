@@ -91,7 +91,8 @@ export const CELL_PROFILE_TEXTS = {
 /** The mesh policy's name as the summary line shows it (spec §25.11, draft for owner approval). */
 export const CELL_POLICY_TEXTS = {
   labels: { open: "Open", own: "Own cells", closed: "Closed" } as Record<MeshPolicy, string>,
-  summary: (label: string, canTalkTo: number | null) => (canTalkTo === null ? label : `${label} · can talk to ${canTalkTo}`),
+  // #2301 (cell01): "traffic: " says what the bare preset label is; the approved labels themselves are unchanged
+  summary: (label: string, canTalkTo: number | null) => (canTalkTo === null ? `traffic: ${label}` : `traffic: ${label} · can talk to ${canTalkTo}`),
   tagsLine: (tags: readonly string[]) => `Tags: ${tags.join(", ")}`,
   openPolicy: "Open policy in browser",
 };
@@ -410,17 +411,17 @@ export const REGISTRY_TEXTS: { description: Record<RegistryState, string>; toolt
   description: {
     reserved: "registry reserved",
     active: "registry active",
-    not_in_account: "not in the signed-in account",
-    other_account: "another account's (its key works)",
+    not_in_account: "other account",
+    other_account: "other account (its key works)",
     revoked: "registry revoked",
     unknown: "registry unknown",
   },
   tooltip: {
     reserved: "Registry: reserved",
     active: "Registry: active",
-    not_in_account: "Registry: the account you're signed in to doesn't list this cell. It may belong to another of your accounts and still work; a4sx mesh cells --refresh in a terminal asks with the cell's own key.",
-    other_account: "Registry: this cell belongs to another account than the one you're signed in to. Its own key works.",
-    revoked: "Registry: revoked. The server doesn't list this cell for the account you're signed in to, or refuses its key. If it still starts and connects, it belongs to another of your accounts (a4sx CLI 0.59.7 and later say so).",
+    not_in_account: "Registry: the account you're signed in to doesn't list this cell. It may belong to another account and still work; a4sx mesh cells --refresh in a terminal asks with the cell's own key.",
+    other_account: "Registry: the account you're signed in to doesn't list this cell, and its own key works: it belongs to another account.",
+    revoked: "Registry: revoked. The server doesn't list this cell for the account you're signed in to, or refuses its key. If it still starts and connects, it belongs to another account (a4sx CLI 0.59.7 and later say so).",
     unknown: "Registry: unknown",
   },
 };
@@ -443,7 +444,7 @@ export function localCellDescription(cell: LocalCell, defaultServer: string, gro
     cell.registryState ? REGISTRY_TEXTS.description[cell.registryState] : undefined,
     cell.path ? `path ${cell.path}` : undefined,
     shownTags(cell).join(" ") || undefined,
-    cellPolicySummary(cell),
+    // cell01: the row was cut at the default width; the traffic preset is in the tooltip (and the mesh's row)
     cell.needsApproval ? "waits for an admin" : undefined,
     cell.duplicate ? "stored twice" : undefined,
   ].filter(Boolean).join(" · ");
@@ -459,7 +460,7 @@ export function localCellTooltip(cell: LocalCell, defaultServer: string): string
     ...(cell.routeModel ? [CELL_PROFILE_TEXTS.routeLine(cell.routeModel, cell.routeEffort)] : []),
     ...(cell.localState ? [`On this computer: ${cell.localState}${cell.pid ? ` (pid ${cell.pid})` : ""}`] : []),
     ...(cell.registryState ? [REGISTRY_TEXTS.tooltip[cell.registryState]] : []),
-    ...(cell.localState ? [`Path: ${cell.path ?? "none"}`] : []),
+    ...(cell.localState && cell.path ? [`Connection path: ${cell.path}`] : []),   // #2301 (cell01): never "Path: none"
     ...(shownTags(cell).length ? [CELL_POLICY_TEXTS.tagsLine(shownTags(cell))] : []),
     ...(cellPolicySummary(cell) ? [cellPolicySummary(cell)!] : []),
     `ID: ${cell.instanceId}`,
