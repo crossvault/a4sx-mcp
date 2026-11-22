@@ -33,6 +33,12 @@ export interface AgentHostStatus {
    * stop then follows from the CLI's own `agent-host stop --help`). The gates read this, not versions.
    */
   stopRequest?: number;
+  /**
+   * the CLI's `ended_why` (its next release), only while the host doesn't run: why its last start ended unasked. "terminal closed": its
+   * terminal went away (SIGHUP, or CTRL_CLOSE_EVENT on Windows), usually because VS Code was closed with it. Absent
+   * when no reason is known (then the old text stays).
+   */
+  endedWhy?: "terminal closed";
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -100,7 +106,8 @@ export function parseAgentHostStatus(stdout: string): AgentHostStatus | undefine
     ...(isoTime(raw.stopped_at) ? { stoppedAt: raw.stopped_at as string } : {}),
     ...(running && typeof raw.answering === "boolean" ? { answering: raw.answering } : {}),
     ...(running && raw.stop_request !== undefined ? { stopRequest: Number.isInteger(raw.stop_request) && (raw.stop_request as number) >= 0
-      && (raw.stop_request as number) <= 9 ? raw.stop_request as number : 0 } : {}) };
+      && (raw.stop_request as number) <= 9 ? raw.stop_request as number : 0 } : {}),
+    ...(!running && raw.ended_why === "terminal closed" ? { endedWhy: "terminal closed" as const } : {}) };
 }
 
 /** Whether `cell` is one of the open ones: its name, and its mesh by name or id (the CLI's "name (mesh)"). */
@@ -159,6 +166,8 @@ export const AGENT_HOST_TEXTS = {
   failed: (why: string) => `agent host: \`a4sx agent-host status\` failed: ${why}`,
   running: (address: string) => `agent host running · ${address.replace(/^ws:\/\//, "").replace(/\/$/, "")}`,
   stopped: "agent host not running",
+  /** the CLI's `ended_why`: the host recorded that its terminal went away, the usual case being VS Code closed. */
+  endedClosed: "agent host ended when VS Code was closed",
   runningTooltip: (address: string) => `The a4sx agent host runs on this computer at ${address}. VS Code's Agents window reaches your cells through it.`,
   stoppedTooltip: "The a4sx agent host doesn't run on this computer, so VS Code's Agents window can't reach your cells. Start it in a terminal: it runs until you stop it (Ctrl+C) or close that terminal.",
   start: "Start agent host",
