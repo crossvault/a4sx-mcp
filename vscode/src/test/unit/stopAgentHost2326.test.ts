@@ -3,7 +3,7 @@ import * as assert from "assert";
 import * as fs from "fs";
 import * as path from "path";
 import { calls, fakeMemento, resetCalls } from "../fakeVscode";
-import { AGENT_HOST_TEXTS } from "../../agentHostStatus";
+import { AGENT_HOST_TEXTS, parseAgentHostStatus } from "../../agentHostStatus";
 import { CELL_CMD_TEXTS, CellCommandDeps, stopAgentHost } from "../../cellCommands";
 import { CellsProvider, CliOutput, thisComputerChildren } from "../../cellsView";
 
@@ -79,7 +79,7 @@ describe("#2326: Stop agent host", () => {
     const old = harness({ code: 2, stdout: "", stderr: "a4sx agent-host: error: argument agent_host_cmd: invalid choice: 'stop'\n" });
     assert.strictEqual(await stopAgentHost(old.deps), false);
     assert.deepStrictEqual(calls.errors.map((e) => e.message), [AGENT_HOST_TEXTS.stopNeedsUpdate]);
-    assert.strictEqual(AGENT_HOST_TEXTS.stopNeedsUpdate, "Update a4sx to stop the agent host from here (needs CLI 0.59.15+). Nothing was stopped; Ctrl+C in its terminal \"a4sx: agent host\" stops it now.");
+    assert.strictEqual(AGENT_HOST_TEXTS.stopNeedsUpdate, "Update a4sx to stop the agent host from here (needs a4sx 0.59.10 or newer). Nothing was stopped; Ctrl+C in its terminal \"a4sx: agent host\" stops it now.");
     resetCalls();
     const refused = harness({ code: 1, stdout: "", stderr: "a4sx: the agent host (pid 42) hasn't stopped within 30 s: it is still ending its cells\n" });
     assert.strictEqual(await stopAgentHost(refused.deps), false);
@@ -98,20 +98,28 @@ describe("#2326: Stop agent host", () => {
     assert.ok(AGENT_HOST_TEXTS.stopDone.split(". ")[0].length <= 30);
     // review of #40: the other messages of the command also give their point within the first ~60 characters
     assert.ok(AGENT_HOST_TEXTS.stopping.startsWith("Stopping the a4sx agent host…"));
-    assert.ok(AGENT_HOST_TEXTS.stopNeedsUpdate.indexOf("0.59.15") < 60);
+    assert.ok(AGENT_HOST_TEXTS.stopNeedsUpdate.startsWith("Update a4sx to stop the agent host from here"));
     assert.ok(AGENT_HOST_TEXTS.stopNoAnswer.indexOf("45 s") < 60);
   });
 
-  it("#2309 F2: with a CLI before 0.59.15 the row is greyed, has no action and says why; 0.59.15+ is the action", () => {
-    const host = { running: true, address: "ws://127.0.0.1:8765/", open: [], editors: { stable: "ok" } } as any;
-    const old = thisComputerChildren(host, "0.59.2").find((i) => String(i.label).startsWith("Stop agent host"))!;
-    assert.strictEqual(old.label, "Stop agent host (needs a4sx 0.59.15)");
-    assert.strictEqual(old.command, undefined);
-    assert.strictEqual((old.iconPath as any).color?.id, "disabledForeground");
-    assert.strictEqual(old.tooltip, "Your a4sx CLI is 0.59.2; stopping the agent host from here needs 0.59.15 or newer (a4sx update gets it once it is released). Until then, Ctrl+C in its terminal \"a4sx: agent host\" stops it.");
-    for (const v of ["0.59.15", "0.60.0", undefined]) {
-      const row = thisComputerChildren(host, v).find((i) => String(i.label).startsWith("Stop agent host"))!;
-      assert.strictEqual(row.label, "Stop agent host", String(v));
+  it("#2309 F2, by capability (stop_request): a host that can't be asked is greyed with the reason; one that can is the action", () => {
+    const at = (stop_request?: number) => parseAgentHostStatus(JSON.stringify({ running: true, address: "ws://127.0.0.1:8765/", open: [],
+      vscode: { editors: { stable: "ok" } }, ...(stop_request === undefined ? {} : { stop_request }) }))!;
+    assert.strictEqual(at().stopRequest, undefined, "a CLI that doesn't say");
+    assert.strictEqual(parseAgentHostStatus(JSON.stringify({ running: true, address: "ws://127.0.0.1:8765/", stop_request: "2" }))!.stopRequest, 0);
+    // review of #43: a CLI that doesn't say but has `agent-host stop` (#2326 without #2338) offers it
+    assert.strictEqual(thisComputerChildren(at(), true).find((i) => String(i.label).startsWith("Stop agent host"))!.command!.command,
+      "a4sx.stopAgentHost");
+    for (const [sr, can] of [[undefined, false], [0, false], [0, true]] as [number | undefined, boolean][]) {
+      const old = thisComputerChildren(at(sr), can).find((i) => String(i.label).startsWith("Stop agent host"))!;
+      assert.strictEqual(old.label, "Stop agent host (needs a4sx 0.59.10)");
+      assert.strictEqual(old.command, undefined);
+      assert.strictEqual((old.iconPath as any).color?.id, "disabledForeground");
+      assert.strictEqual(old.tooltip, "This a4sx CLI, or the agent host it started, can't be asked to stop from here: that needs a4sx 0.59.10 or newer for both. Run a4sx update, then start the agent host again. Until then, Ctrl+C in its terminal \"a4sx: agent host\" stops it.");
+    }
+    for (const sr of [1, 2]) {
+      const row = thisComputerChildren(at(sr)).find((i) => String(i.label).startsWith("Stop agent host"))!;
+      assert.strictEqual(row.label, "Stop agent host", String(sr));
       assert.strictEqual(row.command!.command, "a4sx.stopAgentHost");
     }
   });

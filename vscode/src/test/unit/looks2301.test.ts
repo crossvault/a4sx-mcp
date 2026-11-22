@@ -44,6 +44,9 @@ function harness(others: number, host: string = hostJson(), cells: unknown = CEL
     runs.push(key);
     const stdout = key === "--version" ? "a4sx 0.59.2  (server 0.752.0)" : key === "mesh cells --json" ? JSON.stringify(cells)
       : key === `mesh peers ${MESH} --json` ? peersJson(others) : key === "agent-host status --json" ? host : "";
+    if (key === "agent-host stop --help") {   // the released 0.59.2 has no `agent-host stop`
+      return { code: 2, stdout: "", stderr: "a4sx agent-host: error: argument agent_host_cmd: invalid choice: 'stop'\n" };
+    }
     return { code: 0, stdout, stderr: "" };
   };
   const provider = new CellsProvider({ resolve: () => ({ kind: "found", path: CLI }), run, server: () => BASE, onState: () => undefined });
@@ -187,7 +190,8 @@ describe("#2301 looks: the status bar item", () => {
     await new Promise((r) => setImmediate(r));
     assert.strictEqual(item.text, "$(vm) a4sx: 4 cells · 1 running · 1 open");
     assert.match(String(item.tooltip), /1 open in the Agents window\)\nAgent host: running on ws:\/\/127\.0\.0\.1:8799\//);
-    assert.deepStrictEqual(h.runs, ["--version", "mesh cells --json", "agent-host status --json"], "only what the view itself read");
+    assert.deepStrictEqual(h.runs, ["--version", "mesh cells --json", "agent-host status --json", "agent-host stop --help"],
+      "only what the view itself read (the stop probe: 0.59.2 doesn't report stop_request)");
     assert.strictEqual(typeof item.tooltip, "string");
     bar.dispose();
     assert.strictEqual(item.disposed, true);

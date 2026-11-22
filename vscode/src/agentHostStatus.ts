@@ -10,7 +10,7 @@ import { CELL_NAME, showText } from "./cells";
 export const AGENT_HOST_STATUS_ARGS = ["agent-host", "status", "--json"] as const;
 export const AGENT_HOST_START_ARGS = ["agent-host"] as const;
 export const AGENT_HOST_SETUP_ARGS = ["agent-host", "setup-vscode"] as const;
-/** a4sx #2326 (CLI 0.59.15): the same stop as Ctrl-C in the host's terminal, asked from here. */
+/** a4sx #2326 (the CLI's capability stop_request >= 1): the same stop as Ctrl-C in the host's terminal, asked from here. */
 export const AGENT_HOST_STOP_ARGS = ["agent-host", "stop"] as const;
 
 export interface AgentHostStatus {
@@ -24,6 +24,12 @@ export interface AgentHostStatus {
   lastError?: { at?: string; text: string };
   /** CLI 0.40.1+: false while the host process runs but didn't answer the CLI's probe in time (null/absent: unknown). */
   answering?: boolean;
+  /**
+   * #2309: what the running host can be asked from outside (the CLI's `stop_request`): 1 `agent-host stop`, 2 also
+   * `mesh cell stop` of one of its cells; 0 when neither; undefined when the CLI doesn't say (before #2338: the host
+   * stop then follows from the CLI's own `agent-host stop --help`). The gates read this, not versions.
+   */
+  stopRequest?: number;
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -64,7 +70,9 @@ export function parseAgentHostStatus(stdout: string): AgentHostStatus | undefine
   const at = e ? showText(e.at, 40) : undefined;
   const running = raw.running && !!address;   // running without an address it can name: not shown as running
   return { running, address: running ? address : undefined, open: running ? open : [], editors,
-    lastError: text ? { at, text } : undefined, ...(running && typeof raw.answering === "boolean" ? { answering: raw.answering } : {}) };
+    lastError: text ? { at, text } : undefined, ...(running && typeof raw.answering === "boolean" ? { answering: raw.answering } : {}),
+    ...(running && raw.stop_request !== undefined ? { stopRequest: Number.isInteger(raw.stop_request) && (raw.stop_request as number) >= 0
+      && (raw.stop_request as number) <= 9 ? raw.stop_request as number : 0 } : {}) };
 }
 
 /** Whether `cell` is one of the open ones: its name, and its mesh by name or id (the CLI's "name (mesh)"). */
@@ -130,12 +138,11 @@ export const AGENT_HOST_TEXTS = {
   stopTooltip: "Runs `a4sx agent-host stop`: the same stop as Ctrl+C in the host's terminal. It tells the Agents window first, then ends the cells it started.",
   stopping: "Stopping the a4sx agent host… (the Agents window is told first, then its cells end)",
   stopDone: "a4sx agent host stopped. Start it again to use your cells in the Agents window.",
-  stopNeedsUpdate: "Update a4sx to stop the agent host from here (needs CLI 0.59.15+). Nothing was stopped; Ctrl+C in its terminal \"a4sx: agent host\" stops it now.",
+  stopNeedsUpdate: "Update a4sx to stop the agent host from here (needs a4sx 0.59.10 or newer). Nothing was stopped; Ctrl+C in its terminal \"a4sx: agent host\" stops it now.",
   stopWhat: "stop the agent host",
-  // #2309 F2: an a4sx CLI before 0.59.15 has no `agent-host stop`: the row is shown greyed, without an action
-  MIN_STOP_CLI: "0.59.15",
-  stopOld: "Stop agent host (needs a4sx 0.59.15)",
-  stopOldTooltip: (v: string) => `Your a4sx CLI is ${v}; stopping the agent host from here needs 0.59.15 or newer (a4sx update gets it once it is released). Until then, Ctrl+C in its terminal "a4sx: agent host" stops it.`,
+  // #2309 F2: a CLI or a running host that can't be asked to stop: the row is shown greyed, without an action
+  stopOld: "Stop agent host (needs a4sx 0.59.10)",
+  stopOldTooltip: "This a4sx CLI, or the agent host it started, can't be asked to stop from here: that needs a4sx 0.59.10 or newer for both. Run a4sx update, then start the agent host again. Until then, Ctrl+C in its terminal \"a4sx: agent host\" stops it.",
   stopNoAnswer: "No answer from `a4sx agent-host stop` in 45 s. If it got as far as asking, the agent host may still stop; This computer shows when it has, and Ctrl+C in its terminal \"a4sx: agent host\" stops it at once.",
   stopAsk: (names: string[], plain = 0) => {
     const what = [...names.map((n) => `«${n}»`), ...(plain ? [plain === 1 ? "1 plain conversation" : `${plain} plain conversations`] : [])];
