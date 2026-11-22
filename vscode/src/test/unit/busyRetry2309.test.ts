@@ -7,7 +7,7 @@ import * as assert from "assert";
 import * as api from "../../api";
 import { BUSY_BACKOFF_MS, BusyRetry } from "../../busyRetry";
 import { SessionsProvider } from "../../sessionsView";
-import { CellsProvider, CliOutput } from "../../cellsView";
+import { CellsProvider, CliOutput, peersErrorLooksTemporary } from "../../cellsView";
 
 const BASE = "https://session-exchange.com";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -65,20 +65,38 @@ describe("#2309: busy answers are read again by themselves", () => {
     p.dispose();
   });
 
-  it("Cells: a failed read of the other machines' cells is read again, and not kept until a Refresh", async () => {
-    const MESH = "msh_0123456789abcdef0123456789abcdef";
+  it("Cells: a failed read stays cached (redraws don't read again); its own mesh's timer reads it again", async () => {
+    const A = "msh_0123456789abcdef0123456789abcdef", B = "msh_fedcba9876543210fedcba9876543210";
     let fails = true;
-    const run = async (_c: string, args: readonly string[]): Promise<CliOutput> => (args[0] === "mesh" && args[1] === "peers"
-      ? (fails ? { code: 1, stdout: "", stderr: "a4sx: the server is busy\n" }
-        : { code: 0, stdout: JSON.stringify({ v: 1, mesh_id: MESH, peers: [] }), stderr: "" })
-      : { code: 0, stdout: "", stderr: "" });
+    let reads = 0;
+    const run = async (_c: string, args: readonly string[]): Promise<CliOutput> => {
+      if (args[0] === "mesh" && args[1] === "peers") {
+        reads++;
+        const m = args[2];
+        return m === A && fails ? { code: 1, stdout: "", stderr: "a4sx: the a4sx server is busy right now (HTTP 503)\n" }
+          : { code: 0, stdout: JSON.stringify({ v: 1, mesh_id: m, peers: [] }), stderr: "" };
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    };
     const p = new CellsProvider({ resolve: () => ({ kind: "found", path: "/x/a4sx" }), run, server: () => BASE, onState: () => undefined });
-    assert.strictEqual((await (p as any).peersOf(MESH)).kind, "error");
-    assert.ok(p.peersRetry.pending, "a retry is planned");
-    assert.ok(!(p as any).peers.has(MESH), "the failure isn't kept");
+    assert.strictEqual((await (p as any).peersOf(A)).kind, "error");
+    await (p as any).peersOf(A);
+    await (p as any).peersOf(A);
+    assert.strictEqual(reads, 1, "a redraw doesn't read a failing mesh again");
+    assert.ok(p.peersRetryPending(A));
+    assert.strictEqual((await (p as any).peersOf(B)).kind, "ok");
+    assert.ok(p.peersRetryPending(A), "mesh B working doesn't cancel mesh A's retry");
     fails = false;
-    assert.strictEqual((await (p as any).peersOf(MESH)).kind, "ok");
-    assert.ok(!p.peersRetry.pending);
+    (p as any).peersRetry.get(A).reread();   // what its timer does: drop A's cache and redraw
+    assert.strictEqual((await (p as any).peersOf(A)).kind, "ok");
+    assert.ok(!p.peersRetryPending(A));
     p.dispose();
+  });
+
+  it("only temporary-looking errors are retried", () => {
+    assert.ok(peersErrorLooksTemporary({ code: 1, stdout: "", stderr: "a4sx: HTTP 503\n" }));
+    assert.ok(peersErrorLooksTemporary({ code: null, stdout: "", stderr: "" }), "a timeout");
+    assert.ok(!peersErrorLooksTemporary({ code: 1, stdout: JSON.stringify({ error: { code: "not_member", message: "x" } }), stderr: "" }));
+    assert.ok(!peersErrorLooksTemporary({ code: 2, stdout: "", stderr: "a4sx: error: argument mesh_cmd: invalid choice: 'peers'\n" }));
   });
 });
