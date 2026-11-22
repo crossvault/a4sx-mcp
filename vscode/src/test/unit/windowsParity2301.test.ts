@@ -164,29 +164,29 @@ describe("#2301 E2: This computer", () => {
     const down = thisComputerChildren(parseAgentHostStatus(JSON.stringify({
       running: false, address: null, open: [], vscode: null, last_error: { at: "2026-11-21T16:00:00Z", text: "port 8765 is taken" },
     }))!);
-    // review: not set up and stopped: only Set up (it starts the host too), never two terminals
-    assert.deepStrictEqual(down.map((i) => i.label), [AGENT_HOST_TEXTS.stopped, AGENT_HOST_TEXTS.setup,
-      "Last error 11-21 16:00 UTC: port 8765 is taken"]);
-    assert.strictEqual(down[2].tooltip, "Last error of the agent host (2026-11-21T16:00:00Z): port 8765 is taken");
+    // review: not set up and stopped: only Set up (it starts the host too), never two terminals; #2309 (p): the last
+    // error is the state row's description, its whole text in the tooltip
+    assert.deepStrictEqual(down.map((i) => i.label), [AGENT_HOST_TEXTS.stopped, AGENT_HOST_TEXTS.setup]);
+    assert.strictEqual(down[0].description, "Last error 11-21 16:00 UTC: port 8765 is taken");
+    assert.ok(String(down[0].tooltip).endsWith("\n\nLast error of the agent host (2026-11-21T16:00:00Z): port 8765 is taken"));
+    assert.strictEqual((down[0].iconPath as any).color?.id, "charts.yellow");
     const long = "x".repeat(250);
     assert.strictEqual(AGENT_HOST_TEXTS.lastError(long).length, "Last error: ".length + 48, "cell01: short at the default width");
     // cell01 (#2309): an unclean end is said; an error from before a start that ran is greyed as earlier
     const unclean = thisComputerChildren(parseAgentHostStatus(JSON.stringify({ running: false, address: null, open: [],
       vscode: { editors: { stable: "ok" } }, started_at: "2026-11-21T08:00:00Z", stopped_at: null, last_error: null }))!);
-    assert.ok(unclean.some((i) => i.label === "agent host ended without a clean stop (e.g. a restart)"));
+    assert.deepStrictEqual(unclean.map((i) => i.label), ["agent host ended without a clean stop (e.g. a restart)", AGENT_HOST_TEXTS.start]);
     const clean = thisComputerChildren(parseAgentHostStatus(JSON.stringify({ running: false, address: null, open: [],
       vscode: { editors: { stable: "ok" } }, started_at: "2026-11-21T08:00:00Z", stopped_at: "2026-11-21T09:00:00Z" }))!);
     assert.ok(!clean.some((i) => String(i.label).includes("without a clean stop")));
     const later = thisComputerChildren(parseAgentHostStatus(JSON.stringify({ ...RUNNING, started_at: "2026-11-22T08:00:00Z",
       last_error: { at: "2026-11-21T16:00:00Z", text: "port 8765 is taken" } }))!);
-    const old = later.find((i) => String(i.label).startsWith("Earlier error"))!;
-    assert.strictEqual(old.label, "Earlier error 11-21 16:00 UTC: port 8765 is taken");
+    assert.strictEqual(later.length, 2);
+    assert.strictEqual(later[0].description, "Earlier error 11-21 16:00 UTC: port 8765 is taken");
     // review: parsed times, any offset; a missing fraction compares right too
     const off = thisComputerChildren(parseAgentHostStatus(JSON.stringify({ ...RUNNING, started_at: "2026-11-22T09:00:00+01:00",
       last_error: { at: "2026-11-22T08:30:00.5Z", text: "x" } }))!);
-    assert.ok(off.some((i) => String(i.label) === "Last error 11-22 08:30 UTC: x"), "08:30Z is after 08:00Z: not earlier");
-    assert.strictEqual((old.iconPath as any).color?.id, "disabledForeground");
-    assert.ok(!later.some((i) => String(i.label).startsWith("Last error")));
+    assert.strictEqual(off[0].description, "Last error 11-22 08:30 UTC: x", "08:30Z is after 08:00Z: not earlier");
     assert.strictEqual(down[1].command!.command, "a4sx.setupAgentsWindow");
     const setUpStopped = thisComputerChildren(parseAgentHostStatus(JSON.stringify({
       running: false, address: null, open: [], vscode: { editors: { stable: "ok" } }, last_error: null }))!);
@@ -239,10 +239,11 @@ describe("#2301 E2: This computer", () => {
           : { code: 0, stdout: JSON.stringify({ v: 1, default: null, cells: [row("active")] }), stderr: "" };
     const p = new CellsProvider({ resolve: () => ({ kind: "found", path: CLI }), run, server: () => BASE, onState: () => undefined });
     const rows = await p.getChildren((await p.getChildren())[0]);
-    assert.deepStrictEqual(rows.map((i) => i.label), [AGENT_HOST_TEXTS.failed("the state folder can't be read")]);
+    assert.deepStrictEqual(rows.map((i) => i.label), [AGENT_HOST_TEXTS.failed("the state folder can't be read"), AGENT_HOST_TEXTS.readAgain]);
+    assert.strictEqual(rows[1].command!.command, "a4sx.refreshCells");
   });
 
-  it("an older CLI without `agent-host status`: one row that says so", async () => {
+  it("an older CLI without `agent-host status`: a row that says so, and the update (two rows, #2309 p)", async () => {
     const run = async (_c: string, args: readonly string[]): Promise<CliOutput> =>
       args.join(" ") === "agent-host status --json" ? { code: 2, stdout: "", stderr: "invalid choice: 'agent-host'" }
         : args.join(" ") === "--version" ? { code: 0, stdout: "a4sx 0.30.0\n", stderr: "" }
@@ -250,7 +251,7 @@ describe("#2301 E2: This computer", () => {
     const p = new CellsProvider({ resolve: () => ({ kind: "found", path: CLI }), run, server: () => BASE, onState: () => undefined });
     const top = await p.getChildren();
     const rows = await p.getChildren(top[0]);
-    assert.deepStrictEqual(rows.map((i) => i.label), [AGENT_HOST_TEXTS.unknown]);
+    assert.deepStrictEqual(rows.map((i) => i.label), [AGENT_HOST_TEXTS.unknown, "Update the a4sx CLI"]);
   });
 });
 

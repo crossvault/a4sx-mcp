@@ -233,56 +233,63 @@ export class ThisComputerItem extends vscode.TreeItem {
   }
 }
 
-/** The rows under This computer: whether the agent host runs, the actions that apply, and the last error. */
+/**
+ * The rows under This computer. a4sx #2309 (p), cell01: the cell rows below shifted by one whenever this node gained
+ * or lost a row (a Stop that came and went, an error row), so a click right after a Refresh could land on the wrong
+ * cell. It is always exactly two rows now: the state (an unclean end in its label; the last error in its description,
+ * the whole text in its tooltip), and the one action that applies.
+ */
 export function thisComputerChildren(host: AgentHostStatus, cliCanStop = false): vscode.TreeItem[] {
-  const state = new MessageItem(host.running && host.address ? AGENT_HOST_TEXTS.running(host.address)
-    : host.endedWhy === "terminal closed" ? AGENT_HOST_TEXTS.endedClosed : AGENT_HOST_TEXTS.stopped,
-    host.running ? "pass" : "circle-slash");
+  const unclean = !host.running && !!host.startedAt && !host.stoppedAt && !host.endedWhy;   // a restart, a kill
+  const label = host.running && host.address ? AGENT_HOST_TEXTS.running(host.address)
+    : host.endedWhy === "terminal closed" ? AGENT_HOST_TEXTS.endedClosed
+      : unclean ? AGENT_HOST_TEXTS.uncleanEnd : AGENT_HOST_TEXTS.stopped;
+  const state = new MessageItem(label, host.running ? "pass" : unclean ? "debug-disconnect" : "circle-slash");
   if (host.running) {
     state.iconPath = themed("pass", CELL_ICON_COLORS.running);
+  } else if (unclean) {
+    state.iconPath = themed("debug-disconnect", CELL_ICON_COLORS.attention);
   }
-  state.tooltip = host.running && host.address ? AGENT_HOST_TEXTS.runningTooltip(host.address) : AGENT_HOST_TEXTS.stoppedTooltip;
-  const out: vscode.TreeItem[] = [state];
-  // review of #43: a CLI that doesn't report the field yet (#2326 without #2338) but has `agent-host stop` can stop it
-  if (host.running && (host.stopRequest ?? (cliCanStop ? 1 : 0)) < 1) {
-    // #2309 F2: greyed, no action, the reason in the tooltip (the button failed with "update" on CLI 0.59.2); by the
-    // host's own capability (coordinator), so right whatever version the CLI change lands at
-    const old = new MessageItem(AGENT_HOST_TEXTS.stopOld, "debug-stop");
-    old.iconPath = themed("debug-stop", "disabledForeground");
-    old.tooltip = AGENT_HOST_TEXTS.stopOldTooltip;
-    out.push(old);
-  } else if (host.running) {   // a4sx #2326: the host's own stop, from here
-    const stop = new MessageItem(AGENT_HOST_TEXTS.stop, "debug-stop", { command: CMD_STOP_AGENT_HOST, title: AGENT_HOST_TEXTS.stop });
-    stop.tooltip = AGENT_HOST_TEXTS.stopTooltip;
-    out.push(stop);
-  }
-  const setUp = agentsWindowSetUp(host);
-  if (!host.running && setUp) {   // review: set-up starts the host too, so not both
-    out.push(new MessageItem(AGENT_HOST_TEXTS.start, "play", { command: CMD_START_AGENT_HOST, title: AGENT_HOST_TEXTS.start }));
-  }
-  if (!setUp) {
-    const setup = new MessageItem(AGENT_HOST_TEXTS.setup, "settings-gear", { command: CMD_SETUP_AGENTS_WINDOW, title: AGENT_HOST_TEXTS.setup });
-    setup.tooltip = AGENT_HOST_TEXTS.setupTooltip;
-    out.push(setup);
-  }
-  // cell01: an unclean end (a restart, a kill) is said; not when the host said why (Windows ends it ~5 s after a close)
-  if (!host.running && host.startedAt && !host.stoppedAt && !host.endedWhy) {
-    const gone = new MessageItem(AGENT_HOST_TEXTS.uncleanEnd, "debug-disconnect");
-    gone.iconPath = themed("debug-disconnect", CELL_ICON_COLORS.attention);
-    gone.tooltip = AGENT_HOST_TEXTS.uncleanEndTooltip(host.startedAt);
-    out.push(gone);
+  const tips = [host.running && host.address ? AGENT_HOST_TEXTS.runningTooltip(host.address) : AGENT_HOST_TEXTS.stoppedTooltip];
+  if (unclean) {
+    tips.push(AGENT_HOST_TEXTS.uncleanEndTooltip(host.startedAt));
   }
   if (host.lastError) {
     const at = shortTime(host.lastError.at);
-    // cell01: an error from before a start that then ran is stale: greyed and named so
+    // cell01: an error from before a start that then ran is stale: named so
     const stale = host.running && isBefore(host.lastError.at, host.startedAt);
-    const err = new MessageItem(stale ? AGENT_HOST_TEXTS.earlierError(host.lastError.text, at) : AGENT_HOST_TEXTS.lastError(host.lastError.text, at), "warning");
-    err.iconPath = themed("warning", stale ? "disabledForeground" : CELL_ICON_COLORS.attention);
-    err.tooltip = stale ? AGENT_HOST_TEXTS.earlierErrorTooltip(host.lastError.text, host.lastError.at)
-      : AGENT_HOST_TEXTS.lastErrorTooltip(host.lastError.text, host.lastError.at);
-    out.push(err);
+    state.description = stale ? AGENT_HOST_TEXTS.earlierError(host.lastError.text, at) : AGENT_HOST_TEXTS.lastError(host.lastError.text, at);
+    tips.push(stale ? AGENT_HOST_TEXTS.earlierErrorTooltip(host.lastError.text, host.lastError.at)
+      : AGENT_HOST_TEXTS.lastErrorTooltip(host.lastError.text, host.lastError.at));
+    if (!stale && !unclean) {   // review: a fresh error stands out, also while the host runs (its row was yellow)
+      state.iconPath = themed("warning", CELL_ICON_COLORS.attention);
+    }
   }
-  return out;
+  state.tooltip = tips.join("\n\n");
+  return [state, thisComputerAction(host, cliCanStop)];
+}
+
+/** #2309 (p): the one action row under This computer: Set up (it starts the host too), else Stop, else Start. */
+function thisComputerAction(host: AgentHostStatus, cliCanStop: boolean): vscode.TreeItem {
+  if (!agentsWindowSetUp(host)) {
+    const setup = new MessageItem(AGENT_HOST_TEXTS.setup, "settings-gear", { command: CMD_SETUP_AGENTS_WINDOW, title: AGENT_HOST_TEXTS.setup });
+    setup.tooltip = AGENT_HOST_TEXTS.setupTooltip;
+    return setup;
+  }
+  if (!host.running) {
+    return new MessageItem(AGENT_HOST_TEXTS.start, "play", { command: CMD_START_AGENT_HOST, title: AGENT_HOST_TEXTS.start });
+  }
+  // review of #43: a CLI that doesn't report the field yet (#2326 without #2338) but has `agent-host stop` can stop it
+  if ((host.stopRequest ?? (cliCanStop ? 1 : 0)) < 1) {
+    // #2309 F2: greyed, no action, the reason in the tooltip; by the host's own capability, not a version number
+    const old = new MessageItem(AGENT_HOST_TEXTS.stopOld, "debug-stop");
+    old.iconPath = themed("debug-stop", "disabledForeground");
+    old.tooltip = AGENT_HOST_TEXTS.stopOldTooltip;
+    return old;
+  }
+  const stop = new MessageItem(AGENT_HOST_TEXTS.stop, "debug-stop", { command: CMD_STOP_AGENT_HOST, title: AGENT_HOST_TEXTS.stop });
+  stop.tooltip = AGENT_HOST_TEXTS.stopTooltip;
+  return stop;
 }
 
 export class RemoteCellItem extends vscode.TreeItem {
@@ -445,8 +452,11 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
     }
     if (parent instanceof ThisComputerItem) {
       const host = await this.hostStatus();
-      return !host ? [new MessageItem(AGENT_HOST_TEXTS.unknown, "question")]
-        : "failed" in host ? [new MessageItem(AGENT_HOST_TEXTS.failed(host.failed), "warning")]
+      // #2309 (p): two rows in every state, so the cell rows below never move when this one changes
+      return !host ? [new MessageItem(AGENT_HOST_TEXTS.unknown, "question"),
+        new MessageItem(CELL_TEXTS.updateCli, "cloud-download", { command: CMD_UPDATE_CLI, title: CELL_TEXTS.updateCli })]
+        : "failed" in host ? [new MessageItem(AGENT_HOST_TEXTS.failed(host.failed), "warning"),
+          new MessageItem(AGENT_HOST_TEXTS.readAgain, "refresh", { command: CMD_REFRESH_CELLS, title: AGENT_HOST_TEXTS.readAgain })]
           : thisComputerChildren(host, host.stopRequest === undefined && host.running ? await this.cliCanStopHost() : false);
     }
     if (parent) {
