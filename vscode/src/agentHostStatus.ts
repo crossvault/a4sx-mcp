@@ -166,6 +166,8 @@ export const AGENT_HOST_TEXTS = {
   failed: (why: string) => `agent host: \`a4sx agent-host status\` failed: ${why}`,
   running: (address: string) => `agent host running · ${address.replace(/^ws:\/\//, "").replace(/\/$/, "")}`,
   stopped: "agent host not running",
+  /** #2309 (p): the second row when `agent-host status` failed (This computer always has two rows). */
+  readAgain: "Read it again",
   /** the CLI's `ended_why`: the host recorded that its terminal went away, the usual case being VS Code closed. */
   endedClosed: "agent host ended when its terminal or VS Code was closed",
   runningTooltip: (address: string) => `The a4sx agent host runs on this computer at ${address}. VS Code's Agents window reaches your cells through it.`,

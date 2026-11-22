@@ -100,12 +100,14 @@ describe("#2301 looks: the state as the icon's colour", () => {
     }
   });
 
-  it("in the view: the rows carry them; the open mark turns the row blue; This computer's running row is green, its last error yellow", async () => {
+  it("in the view: the rows carry them; the open mark turns the row blue; This computer's running row is green, its last error in its description", async () => {
     const h = harness(1, hostJson({ open: ["docs (Team mesh)"], last_error: { at: "2026-11-21T18:19:09.997Z", text: "it stopped" } }));
     const top = await h.provider.getChildren();
     assert.ok(top[0] instanceof ThisComputerItem);
     const here = await h.provider.getChildren(top[0]);
-    assert.deepStrictEqual(here.map(icon), [["pass", CELL_ICON_COLORS.running], ["debug-stop", "disabledForeground"], ["warning", CELL_ICON_COLORS.attention]]);
+    // #2309 (p): two rows, the error folded into the state row (it shifted the cell rows below)
+    assert.deepStrictEqual(here.map(icon), [["pass", CELL_ICON_COLORS.running], ["debug-stop", "disabledForeground"]]);
+    assert.match(String(here[0].description), /^Last error 11-21 18:19 UTC: it stopped$/);
     const team = await h.provider.getChildren(top.find((g) => g instanceof MeshGroupItem && g.meshId === MESH)!);
     assert.deepStrictEqual(team.filter((i) => i instanceof LocalCellItem).map((i) => [i.label, ...icon(i)]), [
       ["build", "debug-start", CELL_ICON_COLORS.running],

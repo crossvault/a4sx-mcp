@@ -477,6 +477,17 @@ export function localCellTooltip(cell: LocalCell, defaultServer: string): string
  * Where the CLI keeps its cell list (`<state home>/a4sx/cells.json`): $XDG_STATE_HOME or ~/.local/state;
  * on Windows $XDG_STATE_HOME or %LOCALAPPDATA%. Used only to notice a change; the file is never read here.
  */
+/**
+ * a4sx #2309 F10 (cell01): the folders the CLI keeps its sign-in in (`~/.config/a4sx`, the older `~/.config/agent-mdx`;
+ * on Windows under the user profile, as the CLI's _cfg_dirs). The extension only watches the `session` file there for
+ * a change (a login, a logout) and reads Cells and Launch profiles again; it never opens it.
+ */
+export function cliSignInDirs(platform: NodeJS.Platform = process.platform, home: string = os.homedir()): string[] {
+  const p = platform === "win32" ? path.win32 : path.posix;
+  return [p.join(home, ".config", "a4sx"), p.join(home, ".config", "agent-mdx")];
+}
+export const CLI_SIGN_IN_FILE = "session";
+
 export function cellsListDir(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, home: string = os.homedir()): string | undefined {
   const p = platform === "win32" ? path.win32 : path.posix;
   // on Windows without LOCALAPPDATA, ~\AppData\Local, as the CLI's _win_local

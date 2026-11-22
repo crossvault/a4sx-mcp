@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **This computer always has two rows**: the agent host's state and the one action that applies (Set up the Agents window, Stop agent host or Start agent host). An unclean end is in the state row's text; the last error is its description, with the whole text in its tooltip. Before, the node gained or lost a row when the host's state changed or an error came or went, so the cells below moved and a click right after a Refresh could land on the wrong cell. When `agent-host status` fails, the second row is **Read it again**; with an a4sx CLI without that command, it is **Update the a4sx CLI**.
+- **Cells and Launch profiles follow the CLI's sign-in.** After `a4sx login` (or a logout) in a terminal, both views read again by themselves. Before, Launch profiles kept saying there was no a4sx sign-in until a Refresh. The extension watches the CLI's sign-in file for a change and never opens it.
 - **This computer says when the agent host ended because its terminal or VS Code was closed:** "agent host ended when its terminal or VS Code was closed". This needs an a4sx CLI that records that the host's terminal went away (the next CLI release); closing VS Code closes that terminal too. When no reason is recorded (an older CLI, Ctrl+C, a crash), the texts stay as before. The "ended without a clean stop" row is not shown when the reason is known.
 
 ## 0.9.6
