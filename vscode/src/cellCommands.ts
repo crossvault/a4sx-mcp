@@ -677,7 +677,6 @@ export async function startCellHere(deps: CellCommandDeps, item: RemoteCellItem 
   return terminal;
 }
 
-/** #2301 E2: `a4sx agent-host` in a terminal (it runs there until Ctrl+C or the terminal closes). */
 /**
  * #2309 F4 (cell01, Restricted Mode): VS Code refuses a terminal in an untrusted window, and from a notification it did
  * so silently (no trust question, no terminal). Asked here first, on every path, so it is never silent.
@@ -693,6 +692,7 @@ export async function ensureTrusted(what: string): Promise<boolean> {
   return false;
 }
 
+/** #2301 E2: `a4sx agent-host` in a terminal (it runs there until Ctrl+C or the terminal closes). */
 export async function startAgentHost(deps: CellCommandDeps): Promise<vscode.Terminal | undefined> {
   if (!(await ensureTrusted(CELL_CMD_TEXTS.whatHost))) {
     return undefined;
