@@ -476,13 +476,15 @@ export function localCellTooltip(cell: LocalCell, defaultServer: string): string
 /**
  * a4sx #2309 F10 (cell01): the CLI keeps its sign-in in `~/.config/a4sx` (the older `~/.config/agent-mdx`; on Windows
  * under the user profile, as the CLI's _cfg_dirs), as the file `session` (or `apikey`). The extension only watches
- * them for a change (a login, a logout) and reads Cells and Launch profiles again; it never opens them. Watched from
- * `~/.config` (review: the a4sx folder may not exist before the first login).
+ * them for a change (a login, a logout) and reads Cells and Launch profiles again; it never opens them. One watcher per
+ * folder with a pattern without "/" (review: a pattern with a path segment is watched recursively, here all of
+ * ~/.config); VS Code watches a folder that doesn't exist yet once it is created.
  */
-export function cliConfigRoot(platform: NodeJS.Platform = process.platform, home: string = os.homedir()): string {
-  return (platform === "win32" ? path.win32 : path.posix).join(home, ".config");
+export function cliSignInDirs(platform: NodeJS.Platform = process.platform, home: string = os.homedir()): string[] {
+  const p = platform === "win32" ? path.win32 : path.posix;
+  return [p.join(home, ".config", "a4sx"), p.join(home, ".config", "agent-mdx")];
 }
-export const CLI_SIGN_IN_GLOB = "{a4sx,agent-mdx}/{session,apikey}";
+export const CLI_SIGN_IN_GLOB = "{session,apikey}";
 
 /**
  * Where the CLI keeps its cell list (`<state home>/a4sx/cells.json`): $XDG_STATE_HOME or ~/.local/state;
