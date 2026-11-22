@@ -19,6 +19,12 @@ export const CMD_NEW_CELL = "a4sx.newCell";
 export const CMD_START_CELL_HERE = "a4sx.startCellHere";
 /** #2309 review: the one extra cell-list read after a host change. */
 export const CELLS_REREAD_AFTER_MS = 5_000;
+/**
+ * #2309 (l), cell01: a cell this view started in a terminal stayed "stored" until a Refresh: its start changes no file
+ * the view watches, and the CLI records that it runs only once the launch is up. The cell list is read again a few
+ * times after such a start (the launch's sign-in and Claude Code's start take a few seconds to half a minute).
+ */
+export const CELLS_LAUNCH_REREADS_MS: readonly number[] = [4_000, 12_000, 30_000];
 export const CMD_START_AGENT_HOST = "a4sx.startAgentHost";
 export const CMD_SETUP_AGENTS_WINDOW = "a4sx.setupAgentsWindow";
 export const CMD_STOP_AGENT_HOST = "a4sx.stopAgentHost";
@@ -350,6 +356,8 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
   private host: Promise<AgentHostStatus | { failed: string } | undefined> | undefined;
   /** #35 review: the delayed re-reads still to come (cleared on dispose), and their delay (tests shorten it). */
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
+  /** #2309 (l): the pending re-reads after a cell start from here (also in `timers`); a new start replaces them. */
+  private readonly launchTimers = new Set<ReturnType<typeof setTimeout>>();
   rereadAfterMs = CELLS_REREAD_AFTER_MS;
   /** #2309: the last host state seen (running and the open set), across refreshes: a change re-reads the cells. */
   private hostKey: string | undefined;
@@ -482,6 +490,36 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
     if (this.load?.kind === "ok" && this.load.cells.length && !this.load.legacy) {
       this.host = undefined;
       this.changed.fire();
+    }
+  }
+
+  /**
+   * #2309 (l): after a cell start in a terminal from here, the cell list is read again a few times, keeping the host
+   * status it had (no open-mark flicker). Cancelled on dispose, like the other delayed reads.
+   */
+  rereadCellsSoon(delays: readonly number[] = CELLS_LAUNCH_REREADS_MS): void {
+    // review: a second start replaces the first one's re-reads (each refresh also reads the other machines again)
+    this.launchTimers.forEach((t) => {
+      clearTimeout(t);
+      this.timers.delete(t);
+    });
+    this.launchTimers.clear();
+    for (const ms of delays) {
+      const t = setTimeout(() => {
+        this.timers.delete(t);
+        this.launchTimers.delete(t);
+        const keep = this.hostSeen;
+        void this.refresh().then(() => {
+          if (!this.hostSeen && keep) {
+            this.hostSeen = keep;
+            this.changed.fire();
+            this.summaryChanged.fire();
+          }
+        }, () => undefined);
+      }, ms);
+      t.unref?.();
+      this.timers.add(t);
+      this.launchTimers.add(t);
     }
   }
 
