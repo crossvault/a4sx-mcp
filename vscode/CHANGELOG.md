@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **This computer says when the agent host ended because its terminal or VS Code was closed:** "agent host ended when its terminal or VS Code was closed". This needs an a4sx CLI that records that the host's terminal went away (the next CLI release); closing VS Code closes that terminal too. When no reason is recorded (an older CLI, Ctrl+C, a crash), the texts stay as before. The "ended without a clean stop" row is not shown when the reason is known.
+
 ## 0.9.6
 
 From the from-scratch run on 0.9.4 (a4sx #2309 F4, F5, F12):
