@@ -703,8 +703,8 @@ export async function startAgentHost(deps: CellCommandDeps): Promise<vscode.Term
   }
   const direct = directLaunch(cli, readSmall, (p) => fs.existsSync(p), deps.platform ?? process.platform);
   const t = direct
-    ? openCommandTerminal(AGENT_HOST_TEXTS.startTerminal, direct.exe, "python", [...direct.pre, ...AGENT_HOST_START_ARGS], deps.home ?? os.homedir(), undefined, undefined, true)
-    : openCommandTerminal(AGENT_HOST_TEXTS.startTerminal, cli, CLI_NAME, [...AGENT_HOST_START_ARGS], deps.home ?? os.homedir(), undefined, undefined, true);
+    ? openCommandTerminal(AGENT_HOST_TEXTS.startTerminal, direct.exe, "python", [...direct.pre, ...AGENT_HOST_START_ARGS], deps.home ?? os.homedir(), undefined, undefined, "survives-reload")
+    : openCommandTerminal(AGENT_HOST_TEXTS.startTerminal, cli, CLI_NAME, [...AGENT_HOST_START_ARGS], deps.home ?? os.homedir(), undefined, undefined, "survives-reload");
   deps.provider.rereadHostSoon();
   return track(deps, t);
 }
@@ -772,8 +772,8 @@ export async function setupAgentsWindow(deps: CellCommandDeps): Promise<vscode.T
   }
   const direct = directLaunch(cli, readSmall, (p) => fs.existsSync(p), deps.platform ?? process.platform);
   const t = direct
-    ? openCommandTerminal(AGENT_HOST_TEXTS.setupTerminal, direct.exe, "python", [...direct.pre, ...AGENT_HOST_SETUP_ARGS], deps.home ?? os.homedir(), undefined, undefined, true)
-    : openCommandTerminal(AGENT_HOST_TEXTS.setupTerminal, cli, CLI_NAME, [...AGENT_HOST_SETUP_ARGS], deps.home ?? os.homedir(), undefined, undefined, true);
+    ? openCommandTerminal(AGENT_HOST_TEXTS.setupTerminal, direct.exe, "python", [...direct.pre, ...AGENT_HOST_SETUP_ARGS], deps.home ?? os.homedir(), undefined, undefined, "survives-reload")
+    : openCommandTerminal(AGENT_HOST_TEXTS.setupTerminal, cli, CLI_NAME, [...AGENT_HOST_SETUP_ARGS], deps.home ?? os.homedir(), undefined, undefined, "survives-reload");
   deps.provider.rereadHostSoon();   // setup-vscode starts the host too
   return track(deps, t);
 }

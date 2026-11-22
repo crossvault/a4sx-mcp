@@ -135,14 +135,18 @@ export function openCommandTerminal(
    * 0.9.2: VS Code doesn't revive the terminal after a restart. A cell's terminal is: a revived one would keep the
    * env and folder of its first start (an A4SX_CLAUDE that a Claude Code update since removed, for one).
    */
-  transient?: boolean,
+  transient?: boolean | "survives-reload",
 ): vscode.Terminal {
   const kind = shellKind(vscode.env.shell);
   const line = kind && commandLine(programName(found, programBase), args, kind);
   // `env` holds nothing secret (the Cells view passes only A4SX_CLAUDE, a path).
-  const extra = {
-    ...(cwd === undefined ? {} : { cwd }), ...(env ? { env } : {}), ...(message ? { message } : {}), ...(transient ? { isTransient: true } : {}),
-  };
+  const base = { ...(cwd === undefined ? {} : { cwd }), ...(env ? { env } : {}), ...(message ? { message } : {}) };
+  // #2309 H1 (cell01): "survives-reload": a shell terminal that is not transient keeps its process across Developer:
+  // Reload Window (VS Code's persistent terminal sessions), so the agent host and its cells live on. After a full
+  // restart VS Code revives only the shell, never the command. A terminal that IS the process (an unknown shell) stays
+  // transient: its revival after a restart would start the program again by itself.
+  const keep = transient === "survives-reload" && !!line;
+  const extra = { ...base, ...(transient && !keep ? { isTransient: true } : {}) };
   if (line) {
     const terminal = vscode.window.createTerminal({ name, ...extra });
     terminal.sendText(line, true);

@@ -4,6 +4,7 @@
 
 From the from-scratch run on 0.9.4 (a4sx #2309 F4, F5, F12):
 - **After the server was busy** (a deploy, a restart), My sessions, Launch profiles and the cells on other machines read again by themselves. They wait as long as the server's Retry-After says, or 5, 10, 20, 40 and then 60 seconds, and the message goes once a read works. Before, "a4sx is busy right now…" stayed until you pressed Refresh.
+- **The agent host survives Developer: Reload Window.** The agent host that **Start agent host** or **Set up the Agents window** started ran in a terminal that VS Code ended at every window reload (for example after an extension update), and its cells with it. Its terminal is now kept across a reload, like your own terminals (VS Code's persistent terminal sessions, on by default). After a full restart of VS Code the host still doesn't start by itself.
 - **The Agents window's set-up question is a dialog**, not a notification that vanished after a few seconds with the only way forward on it.
 - **This computer's last error has its time** ("Last error 11-21 16:00 UTC: …"). An error from before a start that then ran is greyed and reads **Earlier error**. After the agent host ended without a clean stop (a restart of the computer, a kill), the node says so: "agent host ended without a clean stop (e.g. a restart)".
 - **The status bar shows the counts from the start.** VS Code reads the cells once, a few seconds after it starts, so the status bar has them before the a4sx view is opened.
