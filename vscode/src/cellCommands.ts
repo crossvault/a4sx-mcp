@@ -91,10 +91,9 @@ export const CELL_CMD_TEXTS = {
   stopDetail: "Its agent session ends. You can start the cell again from here.",
   stop: "Stop",
   stopped: (name: string) => `Stopped the cell «${name}».`,
-  // #2309 F1: a cell the agent host runs is stopped through the host (CLI 0.59.16); an older CLI can't
-  MIN_HOST_CELL_STOP_CLI: "0.59.16",
-  stopHostOld: (name: string, v: string) =>
-    `Needs a4sx 0.59.16 to stop a cell in the agent host: «${name}» runs there and your a4sx CLI is ${v}. Close its session in VS Code's Agents window to end it; nothing was stopped.`,
+  // #2309 F1: a cell the agent host runs is stopped through the host; a CLI or host that can't do it is said
+  stopHostOld: (name: string) =>
+    `Needs a newer a4sx to stop a cell in the agent host: «${name}» runs there, and this a4sx CLI or the agent host it started can't stop one cell. Close its session in VS Code's Agents window to end it; nothing was stopped.`,
   renameTitle: (name: string) => `Rename the cell «${name}»`,
   renamePrompt: "New name: lowercase letters, digits and -",
   renameInvalid: "Use up to 48 lowercase letters, digits and -, starting and ending with a letter or digit.",
@@ -688,7 +687,7 @@ export async function startAgentHost(deps: CellCommandDeps): Promise<vscode.Term
 }
 
 /**
- * a4sx #2326: `a4sx agent-host stop` (CLI 0.59.15+), the same stop as Ctrl+C in the host's terminal, with a progress
+ * a4sx #2326: `a4sx agent-host stop` (a4sx #2326), the same stop as Ctrl+C in the host's terminal, with a progress
  * notification while it waits (at most about 30 s). Says the CLI's own line on a refusal, and "update" for a CLI
  * without the command. Resolves true when the host stopped (or wasn't running).
  */
@@ -848,13 +847,10 @@ export async function stopCell(deps: CellCommandDeps, item: LocalCellItem | unde
     return false;
   }
   const host = deps.provider.hostKnown;
-  if (host && isOpen(host, item.cell)) {   // F1: in the agent host, only a CLI that stops it through the host
-    const v = await deps.provider.versions.version(cli);
-    if (v !== undefined && !versionAtLeast(v, CELL_CMD_TEXTS.MIN_HOST_CELL_STOP_CLI)) {
-      // cell01: no question for something that can't be done; only the explanation
-      await vscode.window.showErrorMessage(CELL_CMD_TEXTS.stopHostOld(item.cell.name, v));
-      return false;
-    }
+  if (host && isOpen(host, item.cell) && host.stopRequest < 2) {
+    // F1, by the host's capability (coordinator): no question for something that can't be done; only the explanation
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.stopHostOld(item.cell.name));
+    return false;
   }
   const choice = await vscode.window.showWarningMessage(CELL_CMD_TEXTS.stopTitle(item.cell.name), { modal: true, detail: CELL_CMD_TEXTS.stopDetail }, CELL_CMD_TEXTS.stop);
   if (choice !== CELL_CMD_TEXTS.stop) {

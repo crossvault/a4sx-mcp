@@ -140,7 +140,7 @@ import { LocalCellItem, MeshGroupItem, ThisComputerItem, thisComputerChildren } 
 // what `agent-host status --json` prints (review: "name (mesh)" entries, the editor keys stable/insiders/…)
 const RUNNING = { running: true, proved: true, answering: true, pid: 4242, address: "ws://127.0.0.1:8765/",
   open: ["build (Team mesh)", "notes (plain)"], vscode: { address: "ws://127.0.0.1:8765", editors: { stable: "ok" } },
-  last_error: null, cells: [] };
+  last_error: null, cells: [], stop_request: 1 };
 
 describe("#2301 E2: This computer", () => {
   beforeEach(resetCalls);
@@ -148,7 +148,7 @@ describe("#2301 E2: This computer", () => {
   it("reads `agent-host status --json`; anything else is no answer", () => {
     const s = parseAgentHostStatus(JSON.stringify(RUNNING))!;
     assert.deepStrictEqual(s, { running: true, address: "ws://127.0.0.1:8765/", open: [{ name: "build", mesh: "Team mesh" }],
-      editors: { stable: "ok" }, lastError: undefined, answering: true });   // a plain session is no cell row
+      editors: { stable: "ok" }, lastError: undefined, answering: true, stopRequest: 1 });   // a plain session is no cell row
     assert.strictEqual(parseAgentHostStatus("usage: a4sx …"), undefined);
     assert.strictEqual(parseAgentHostStatus(JSON.stringify({ v: 1 })), undefined);
     const odd = parseAgentHostStatus(JSON.stringify({ ...RUNNING, address: "ws://x/; rm", open: ["../x (m)", "ok (m)"] }))!;

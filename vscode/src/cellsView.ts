@@ -8,7 +8,7 @@
 // offers "Install a4sx CLI". An a4sx CLI older than 0.25.0 still lists its cells, under an "update" line.
 import * as vscode from "vscode";
 import { CELLS_LIST_ARGS, LocalCell, localCellDescription, localCellTooltip, showText, startableCell } from "./cells";
-import { CliGate, cliGate, versionAtLeast, IN_SESSION_MESSAGE, MeshPolicy, parseCellsAnswer, parseCliError, parseCliVersion, parsePeersAnswer, peerPresence, peersArgs, RemoteCell, VERSION_ARGS } from "./cliJson";
+import { CliGate, cliGate, IN_SESSION_MESSAGE, MeshPolicy, parseCellsAnswer, parseCliError, parseCliVersion, parsePeersAnswer, peerPresence, peersArgs, RemoteCell, VERSION_ARGS } from "./cliJson";
 import { MessageItem } from "./sessionsView";
 import { AGENT_HOST_STATUS_ARGS, AGENT_HOST_TEXTS, AgentHostStatus, agentsWindowSetUp, isOpen, lacksAgentHost, parseAgentHostStatus } from "./agentHostStatus";
 
@@ -203,7 +203,7 @@ export class ThisComputerItem extends vscode.TreeItem {
 }
 
 /** The rows under This computer: whether the agent host runs, the actions that apply, and the last error. */
-export function thisComputerChildren(host: AgentHostStatus, cliVersion?: string): vscode.TreeItem[] {
+export function thisComputerChildren(host: AgentHostStatus): vscode.TreeItem[] {
   const state = new MessageItem(host.running && host.address ? AGENT_HOST_TEXTS.running(host.address) : AGENT_HOST_TEXTS.stopped,
     host.running ? "pass" : "circle-slash");
   if (host.running) {
@@ -211,11 +211,12 @@ export function thisComputerChildren(host: AgentHostStatus, cliVersion?: string)
   }
   state.tooltip = host.running && host.address ? AGENT_HOST_TEXTS.runningTooltip(host.address) : AGENT_HOST_TEXTS.stoppedTooltip;
   const out: vscode.TreeItem[] = [state];
-  if (host.running && cliVersion !== undefined && !versionAtLeast(cliVersion, AGENT_HOST_TEXTS.MIN_STOP_CLI)) {
-    // #2309 F2: greyed, no action, the reason in the tooltip (the button failed with "update" on CLI 0.59.2)
+  if (host.running && host.stopRequest < 1) {
+    // #2309 F2: greyed, no action, the reason in the tooltip (the button failed with "update" on CLI 0.59.2); by the
+    // host's own capability (coordinator), so right whatever version the CLI change lands at
     const old = new MessageItem(AGENT_HOST_TEXTS.stopOld, "debug-stop");
     old.iconPath = themed("debug-stop", "disabledForeground");
-    old.tooltip = AGENT_HOST_TEXTS.stopOldTooltip(cliVersion);
+    old.tooltip = AGENT_HOST_TEXTS.stopOldTooltip;
     out.push(old);
   } else if (host.running) {   // a4sx #2326: the host's own stop, from here
     const stop = new MessageItem(AGENT_HOST_TEXTS.stop, "debug-stop", { command: CMD_STOP_AGENT_HOST, title: AGENT_HOST_TEXTS.stop });
@@ -338,12 +339,6 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
     return this.load;
   }
 
-  /** The CLI's version for the rows' version gates (undefined: unknown, or no CLI). */
-  async cliVersion(): Promise<string | undefined> {
-    const cli = this.deps.resolve();
-    return cli.kind === "found" ? this.versions.version(cli.path) : undefined;
-  }
-
   /** The agent host's status as last read for This computer's rows (undefined: not read since the last refresh). */
   get hostKnown(): AgentHostStatus | undefined {
     return this.hostSeen;
@@ -392,7 +387,7 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
       const host = await this.hostStatus();
       return !host ? [new MessageItem(AGENT_HOST_TEXTS.unknown, "question")]
         : "failed" in host ? [new MessageItem(AGENT_HOST_TEXTS.failed(host.failed), "warning")]
-          : thisComputerChildren(host, await this.cliVersion());
+          : thisComputerChildren(host);
     }
     if (parent) {
       return [];
