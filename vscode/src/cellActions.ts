@@ -21,10 +21,11 @@ import * as vscode from "vscode";
 import { SessionRow } from "./api";
 import { CELL_CMD_TEXTS, CellCommandDeps, cliErrorText, ensureCli, setupAgentsWindow, startAgentHost } from "./cellCommands";
 import { cellStartPlan } from "./cellResume";
-import { CELL_NAME, cellsListDir, cellStopArgs, CLI_MESH_ID, INSTANCE_ID, LocalCell, showText, startableCell } from "./cells";
+import { CELL_NAME, CELLS_LIST_ARGS, cellsListDir, cellStopArgs, CLI_MESH_ID, INSTANCE_ID, LocalCell, showText, startableCell } from "./cells";
 import { AgentHostStatus, AGENT_HOST_STATUS_ARGS, AGENT_HOST_TEXTS, agentsWindowSetUp, isOpen, lacksAgentHost, parseAgentHostStatus } from "./agentHostStatus";
 import { CMD_STOP_CELL, LocalCellItem, RemoteCellItem } from "./cellsView";
 import { CLI_NAME } from "./cli";
+import { parseCellsAnswer } from "./cliJson";
 import { findLocalSession, librarySlug } from "./localSession";
 import { claudeProjectsDir } from "./nativeSeed";
 import { openCommandTerminal } from "./resume";
@@ -90,9 +91,16 @@ export const CELL_ACTION_TEXTS = {
   stopIt: "Stop it",
   /** a4sx #2309 (m), cell01: terminal → Agents window took three steps; one action does the stop and the open */
   moveIt: "Move it into the Agents window",
-  moving: (name: string) => `Moving «${name}» into the Agents window: stopping it in its terminal, then opening it there…`,
+  moving: (name: string) => `Moving «${name}» into the Agents window: stopping it in its terminal, then opening it in the Agents window…`,
   moveStillRunning: (name: string) =>
     `«${name}» still runs in its terminal after the stop, so the Agents window wasn't opened. Close that terminal, then choose Open in Agents window again.`,
+  // review: a stop that worked, then no cell list to confirm it: said, never a silent end
+  moveUnread: (name: string) =>
+    `Stopped «${name}», but the cell list couldn't be read, so the Agents window wasn't opened. Choose Open in Agents window again.`,
+  moveGone: (name: string) =>
+    `Stopped «${name}», but it is no longer in this computer's cell list, so the Agents window wasn't opened. Refresh the Cells view.`,
+  moveCancelled: (name: string) =>
+    `Stopped waiting. «${name}» may already be stopped; choose Open in Agents window again to open it there.`,
   agentsStarting: (name: string) => `Starting the a4sx agent host, then opening «${name}» in the Agents window…`,
   agentsHostEnded: (why: string) =>
     `The a4sx agent host stopped before it answered (${why}), so the Agents window wasn't opened. Its terminal "a4sx: agent host" has the details; choose Open in Agents window again once that is fixed.`,
@@ -418,34 +426,47 @@ export const MOVE_WAIT_MS = 20_000;
 const MOVE_POLL_MS = 1_000;
 
 /**
- * #2309 (m): the stop half of a move: `a4sx mesh cell stop`, then the cell list read again until the cell no longer
- * runs. The fresh row of the cell (stored, not running), or undefined after saying why (a failed stop, still running).
+ * #2309 (m): the stop half of a move: `a4sx mesh cell stop`, then `mesh cells --json` read again (this computer's own
+ * file, no server call) until the cell no longer runs; the Cells view is refreshed once at the end. The fresh row of
+ * the cell (stored, not running), or the message that says why nothing opens (shown by the caller, after the progress
+ * notification is gone), or nothing when there is nothing to say.
  */
-async function stopForMove(deps: CellActionDeps, cli: string, item: LocalCellItem): Promise<LocalCellItem | undefined> {
+async function stopForMove(deps: CellActionDeps, cli: string, item: LocalCellItem,
+  cancelled: () => boolean): Promise<LocalCellItem | { error: string } | undefined> {
   const args = cellStopArgs(item.cell, item.all);
   if (!args) {
     return undefined;
   }
+  const t = CELL_ACTION_TEXTS;
   const out = await deps.run(cli, args, 30_000);
   if (out.code !== 0) {   // F1: a failed stop changes nothing shown
-    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.cliFailed("stop the cell", cliErrorText(out)));
-    return undefined;
+    return { error: CELL_CMD_TEXTS.cliFailed("stop the cell", cliErrorText(out)) };
   }
   const end = Date.now() + (deps.moveWait?.ms ?? MOVE_WAIT_MS);
-  for (;;) {
-    const load = await deps.provider.refresh();
-    const cells = load.kind === "ok" ? load.cells : [];
-    const now = cells.find((c) => c.instanceId === item.cell.instanceId);
-    if (now && now.localState !== "running") {
-      return new LocalCellItem(now, cells, deps.server());
-    }
-    if (!now || Date.now() >= end) {
-      if (now) {
-        await vscode.window.showErrorMessage(CELL_ACTION_TEXTS.moveStillRunning(item.cell.name));
+  try {
+    for (;;) {
+      if (cancelled()) {
+        return { error: t.moveCancelled(item.cell.name) };
       }
-      return undefined;
+      const read = await deps.run(cli, CELLS_LIST_ARGS, 30_000);
+      const cells = read.code === 0 ? parseCellsAnswer(read.stdout)?.cells : undefined;
+      if (!cells) {
+        return { error: t.moveUnread(item.cell.name) };
+      }
+      const now = cells.find((c) => c.instanceId === item.cell.instanceId);
+      if (!now) {
+        return { error: t.moveGone(item.cell.name) };
+      }
+      if (now.localState !== "running") {
+        return new LocalCellItem(now, cells, deps.server());
+      }
+      if (Date.now() >= end) {
+        return { error: t.moveStillRunning(item.cell.name) };
+      }
+      await new Promise((r) => setTimeout(r, deps.moveWait?.pollMs ?? MOVE_POLL_MS));
     }
-    await new Promise((r) => setTimeout(r, deps.moveWait?.pollMs ?? MOVE_POLL_MS));
+  } finally {
+    void deps.provider.refresh();   // review: the view once, not a peers re-read per poll
   }
 }
 
@@ -493,9 +514,13 @@ export async function openCellInAgentsWindow(deps: CellActionDeps, item: LocalCe
     }
     // #2309 (m): the person chose the move, so no second question: stop it, wait until it no longer runs, then open it
     // here (the cell continues its last conversation in the Agents window, a4sx 0.59.6+)
-    const moved = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: t.moving(cell.name) },
-      () => stopForMove(deps, cli, item));
-    if (!moved) {
+    const moved = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: t.moving(cell.name), cancellable: true },
+      (_p, token) => stopForMove(deps, cli, item, () => token.isCancellationRequested));
+    if (!(moved instanceof LocalCellItem)) {
+      if (moved) {   // review: said after the progress notification is gone, not behind it
+        await vscode.window.showErrorMessage(moved.error);
+      }
       return false;
     }
     return openCellInAgentsWindow(deps, moved);

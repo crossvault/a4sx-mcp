@@ -3,6 +3,7 @@ import * as assert from "assert";
 import { calls, fakeMemento, resetCalls } from "../fakeVscode";
 import { CELL_ACTION_TEXTS, CellActionDeps, openCellInAgentsWindow } from "../../cellActions";
 import { CELL_CMD_TEXTS } from "../../cellCommands";
+import { cellStopArgs } from "../../cells";
 import { CellsProvider, CliOutput, LocalCellItem } from "../../cellsView";
 import { parseCellsAnswer } from "../../cliJson";
 
@@ -13,7 +14,7 @@ const INS = "ins_fc319f874d0d16d0b38ae01af3af0728";
 const STATUS = JSON.stringify({ running: true, proved: true, answering: true, pid: 4242, address: "ws://127.0.0.1:8799/",
   open: [], vscode: { address: "ws://127.0.0.1:8799", editors: { stable: "ok" } }, last_error: null, cells: [] });
 
-function harness(opts: { stopCode?: number; stopsAfter?: number } = {}) {
+function harness(opts: { stopCode?: number; stopsAfter?: number; listFailsAfterStop?: boolean } = {}) {
   const runs: string[] = [];
   let state = "running";
   let reads = 0;
@@ -34,6 +35,9 @@ function harness(opts: { stopCode?: number; stopsAfter?: number } = {}) {
     }
     if (line === "mesh cells --json") {
       reads++;
+      if (opts.listFailsAfterStop && runs.some((r) => r.startsWith("mesh cell stop"))) {
+        return { code: 1, stdout: "", stderr: "a4sx: cells.json unreadable\n" };
+      }
       if (runs.some((r) => r.startsWith("mesh cell stop")) && reads > (opts.stopsAfter ?? 1)) {
         state = "stored";
       }
@@ -60,7 +64,9 @@ describe("#2309 (m): Move it into the Agents window", () => {
     calls.nextInfoChoice = CELL_ACTION_TEXTS.moveIt;
     assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), true);
     assert.deepStrictEqual(calls.modals, [], "the move was the person's choice: no Stop «build»? modal");
-    assert.ok(h.runs.includes(`mesh cell stop build`) || h.runs.some((r) => r.startsWith("mesh cell stop build")));
+    assert.strictEqual(h.runs.filter((r) => r.startsWith("mesh cell stop")).length, 1);
+    assert.strictEqual(h.runs.find((r) => r.startsWith("mesh cell stop")), cellStopArgs(h.item.cell, h.item.all)!.join(" "));
+    assert.strictEqual(calls.progress[0].options.cancellable, true, "a move can be cancelled");
     assert.deepStrictEqual(calls.opened, [`vscode://agents/agent-host-session/ahp-session/a4sx-cell-${INS}`]);
     assert.deepStrictEqual(calls.executed, [], "not through the Stop command (which asks)");
   });
@@ -86,6 +92,24 @@ describe("#2309 (m): Move it into the Agents window", () => {
     calls.nextInfoChoice = CELL_ACTION_TEXTS.moveIt;
     assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), false);
     assert.strictEqual(calls.errors[0].message, CELL_ACTION_TEXTS.moveStillRunning("build"));
+    assert.deepStrictEqual(calls.opened, []);
+  });
+
+  it("review: a stop that worked, then an unreadable cell list: said, not a silent end; nothing opens", async () => {
+    const h = harness({ listFailsAfterStop: true });
+    calls.nextInfoChoice = CELL_ACTION_TEXTS.moveIt;
+    assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), false);
+    assert.strictEqual(calls.errors.length, 1);
+    assert.strictEqual(calls.errors[0].message, CELL_ACTION_TEXTS.moveUnread("build"));
+    assert.deepStrictEqual(calls.opened, []);
+  });
+
+  it("review: cancelling the wait says the cell may already be stopped; nothing opens", async () => {
+    const h = harness({ stopsAfter: 10_000 });
+    calls.nextInfoChoice = CELL_ACTION_TEXTS.moveIt;
+    calls.cancelProgress = true;
+    assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), false);
+    assert.strictEqual(calls.errors[0].message, CELL_ACTION_TEXTS.moveCancelled("build"));
     assert.deepStrictEqual(calls.opened, []);
   });
 });
