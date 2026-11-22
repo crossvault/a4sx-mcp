@@ -113,7 +113,6 @@ export interface CliOutput {
 export type CliRunner = (cli: string, args: readonly string[], timeoutMs?: number) => Promise<CliOutput>;
 export type CliResolution = { kind: "found"; path: string } | { kind: "no-cli" } | { kind: "bad-config" } | { kind: "remote-local" } | { kind: "in-session" };
 
-/** `a4sx --version` once per CLI path until cleared (Refresh, an update, a settings change). Never rejects. */
 /**
  * #2309 review: whether a failed `mesh peers --json` looks temporary (the server busy or unreachable, a timeout), so
  * it is worth reading again by itself; a refusal (not a member, no such mesh, an older CLI) isn't.
@@ -126,6 +125,7 @@ export function peersErrorLooksTemporary(out: CliOutput): boolean {
   return out.code === null || !code || /busy|rate|unavailable|warm|timeout|unreachable|503|502|504|429/i.test(code + " " + out.stderr);
 }
 
+/** `a4sx --version` once per CLI path until cleared (Refresh, an update, a settings change). Never rejects. */
 export class CliVersions {
   private readonly seen = new Map<string, Promise<string | undefined>>();
   private readonly stop = new Map<string, Promise<boolean>>();
@@ -367,6 +367,8 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
       await this.inflight.catch(() => undefined);
     }
     this.peers = new Map();
+    this.peersRetry.forEach((r) => r.dispose());   // review: a Refresh starts clean, no old timer drops a fresh result
+    this.peersRetry.clear();
     this.host = undefined;
     this.hostSeen = undefined;
     this.inflight = this.read();
