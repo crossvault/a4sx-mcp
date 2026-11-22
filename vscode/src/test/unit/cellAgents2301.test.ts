@@ -172,6 +172,26 @@ describe("#2301: Open in Agents window", () => {
     assert.deepStrictEqual(calls.opened, []);
   });
 
+  it("#2309 F4: in Restricted Mode the setup and the host start ask about trust first, never silently; nothing starts", async () => {
+    const notSet = { code: 0, stdout: status({ running: false, vscode: null }), stderr: "" };
+    const h = harness(notSet);
+    calls.trusted = false;
+    calls.nextInfoChoice = AGENT_HOST_TEXTS.setup;
+    calls.modalChoices.push(CELL_CMD_TEXTS.manageTrust);
+    assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), false);
+    assert.deepStrictEqual(calls.modals.map((m) => [m.message, m.items]), [[
+      "VS Code's Restricted Mode doesn't let a4sx open the terminal that setting up the Agents window needs. Trust this window (Manage Workspace Trust), then choose it again; nothing was started.",
+      ["Manage Workspace Trust"]]]);
+    assert.deepStrictEqual(calls.executed.map((e) => e.id), ["workbench.trust.manage"]);
+    assert.strictEqual(calls.terminals.length, 0);
+    resetCalls();
+    calls.trusted = false;
+    const off = harness({ code: 0, stdout: status({ running: false, address: null }), stderr: "" });
+    assert.strictEqual(await openCellInAgentsWindow(off.deps, off.item), false);
+    assert.strictEqual(calls.modals[0].message, CELL_CMD_TEXTS.untrusted(CELL_CMD_TEXTS.whatHost));
+    assert.strictEqual(calls.terminals.length, 0);
+  });
+
   it("the Agents window not set up: offers Set up the Agents window first, even with the host stopped", async () => {
     const h = harness({ code: 0, stdout: status({ running: false, vscode: null }), stderr: "" });
     assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), false);   // the offer is declined
