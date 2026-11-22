@@ -1091,6 +1091,7 @@ export function activate(context: vscode.ExtensionContext): void {
       output.appendLine("");
       output.show(true);
     },
+    refreshSessions: () => sessions.refresh(),
   };
   ownCliDeps = cellDeps;
   const cellsView = vscode.window.createTreeView(VIEW_CELLS, { treeDataProvider: cells });

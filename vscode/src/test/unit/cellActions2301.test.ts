@@ -10,7 +10,7 @@ import * as path from "path";
 import { calls, fakeMemento, resetCalls } from "../fakeVscode";
 import {
   CELL_ACTION_TEXTS, CellActionDeps, cellLastMessages, cellWhyMessage, CMD_CELL_EXPLAIN, CMD_CELL_FROM_SAVED, CMD_CELL_MESSAGES, CMD_CELL_SAVE, deliveriesArgs, explainArgs,
-  saveCellConversation, savedSessionItems, senderChoices, shownOutput, startCellFromSaved,
+  SAVE_REREADS_MS, saveCellConversation, savedSessionItems, senderChoices, shownOutput, startCellFromSaved,
 } from "../../cellActions";
 import { CELL_CMD_TEXTS } from "../../cellCommands";
 import { CELL_LAST_SESSION_FILE } from "../../cellResume";
@@ -203,6 +203,18 @@ describe("#2301 E6: Save its conversation…", () => {
     assert.ok(t);
     assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}'\n`]);
     assert.ok(h.deps.terminals.has(t as any), "the view reads the cells again when it closes");
+  });
+
+  it("#2309 F12: My sessions is read again a few times after a save, so the entry shows without a Refresh", async () => {
+    const h = harness();
+    recordConversation(h, "docs", "ins_A2");
+    calls.modalChoices.push(CELL_ACTION_TEXTS.save);
+    let n = 0;
+    const deps = { ...h.deps, refreshSessions: () => { n++; }, saveRereads: [1, 5] };
+    assert.ok(await saveCellConversation(deps, h.local("docs"), { saved: async () => [] }));
+    await new Promise((r) => setTimeout(r, 30));
+    assert.strictEqual(n, 2);
+    assert.deepStrictEqual(SAVE_REREADS_MS, [8_000, 20_000, 45_000]);
   });
 
   it("a later save becomes a new version of the entry that holds this conversation", async () => {

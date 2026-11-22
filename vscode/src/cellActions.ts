@@ -92,6 +92,10 @@ export const CELL_ACTION_TEXTS = {
   agentsHostEnded: (why: string) =>
     `The a4sx agent host stopped before it answered (${why}), so the Agents window wasn't opened. Its terminal "a4sx: agent host" has the details; choose Open in Agents window again once that is fixed.`,
   agentsHostExited: (code: number | undefined) => (code === undefined ? "its terminal ended" : `its terminal ended with exit code ${code}`),
+  agentsSettingUp: (name: string) => `Setting up the Agents window and starting the a4sx agent host, then opening «${name}»…`,
+  agentsSetupCancelled: "Stopped waiting, so the Agents window wasn't opened. The setup goes on in its terminal \"a4sx: set up the Agents window\"; choose Open in Agents window again once it says it is done.",
+  agentsSetupSlow: (s: number) =>
+    `The Agents window wasn't set up for the a4sx agent host within ${s} seconds, so it wasn't opened. Its terminal "a4sx: set up the Agents window" says why; choose Open in Agents window again once it is done.`,
   agentsWaitCancelled: "Stopped waiting, so the Agents window wasn't opened. The agent host keeps starting in its terminal \"a4sx: agent host\"; choose Open in Agents window again once it runs.",
   agentsHostSlow: (s: number) =>
     `The a4sx agent host didn't answer within ${s} seconds, so the Agents window wasn't opened. Its terminal "a4sx: agent host" says why; choose Open in Agents window again once it runs.`,
@@ -102,7 +106,14 @@ export interface CellActionDeps extends CellCommandDeps {
   show(title: string, text: string): void;
   /** Tests: how long Open in Agents window waits for an agent host it started, and how often it asks. */
   agentsWait?: { ms: number; pollMs: number };
+  /** #2309 F12: My sessions reads the library again (after a save from here). */
+  refreshSessions?: () => void;
+  /** Tests: when My sessions is read again after a save (ms after the push started). */
+  saveRereads?: readonly number[];
 }
+
+/** F12 (cell01): a save's push takes a few seconds to a minute; My sessions is read again meanwhile, a few times. */
+export const SAVE_REREADS_MS: readonly number[] = [8_000, 20_000, 45_000];
 
 /** `mesh deliveries <instance id> --mesh <mesh id> --last N`; undefined for an id the CLI doesn't take. */
 export function deliveriesArgs(instanceId: string, meshId: string, last: number = MESSAGES_LAST): string[] | undefined {
@@ -272,6 +283,11 @@ export async function saveCellConversation(deps: CellActionDeps, item: LocalCell
   }
   const terminal = openCommandTerminal(t.saveTerminal(cell.name), cli, CLI_NAME, args, undefined, undefined, t.saveBanner(cell.name, short, showText(plan.cwd, 300) ?? plan.cwd));
   deps.terminals.add(terminal);
+  if (deps.refreshSessions) {   // F12: the new entry or version shows up in My sessions without a Refresh
+    for (const ms of deps.saveRereads ?? SAVE_REREADS_MS) {
+      setTimeout(() => deps.refreshSessions?.(), ms);
+    }
+  }
   return terminal;
 }
 
@@ -368,7 +384,7 @@ const AGENTS_POLL_MS = 1_000;
  * status call gets only the time that is left.
  */
 export async function waitForHost(deps: CellActionDeps, cli: string, ms: number, pollMs = AGENTS_POLL_MS,
-  gone: () => boolean = () => false): Promise<AgentHostStatus | { failed: string } | undefined> {
+  gone: () => boolean = () => false, ready: (s: AgentHostStatus) => boolean = () => true): Promise<AgentHostStatus | { failed: string } | undefined> {
   const began = Date.now();
   const until = began + ms;
   while (Date.now() < until && !gone()) {
@@ -379,7 +395,7 @@ export async function waitForHost(deps: CellActionDeps, cli: string, ms: number,
     }
     const out = await deps.run(cli, AGENT_HOST_STATUS_ARGS, Math.min(10_000, left));
     const s = out.code === 0 ? parseAgentHostStatus(out.stdout) : undefined;
-    if (s?.running && s.answering !== false) {
+    if (s?.running && s.answering !== false && ready(s)) {
       return s;
     }
     const at = s && !s.running && s.lastError?.at ? Date.parse(s.lastError.at) : NaN;
@@ -431,10 +447,39 @@ export async function openCellInAgentsWindow(deps: CellActionDeps, item: LocalCe
     return false;
   }
   if (!agentsWindowSetUp(host, vscode.env.uriScheme)) {
-    if ((await vscode.window.showInformationMessage(t.agentsNotSetUp, AGENT_HOST_TEXTS.setup)) === AGENT_HOST_TEXTS.setup) {
-      await setupAgentsWindow(deps);   // cell01: called directly, not through a command a notification may drop
+    if ((await vscode.window.showInformationMessage(t.agentsNotSetUp, AGENT_HOST_TEXTS.setup)) !== AGENT_HOST_TEXTS.setup) {
+      return false;
     }
-    return false;
+    // F5 (cell01): after the setup it goes on by itself: setup-vscode starts the host too; the cell opens once the host
+    // answers and the Agents window is set up for it
+    const scheme = vscode.env.uriScheme;
+    const got = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: t.agentsSettingUp(cell.name), cancellable: true },
+      async (_p, token) => {
+        const term = await setupAgentsWindow(deps);   // cell01: called directly, not through a command a notification may drop
+        if (!term) {
+          return "none" as const;
+        }
+        const up = await waitForHost(deps, cli, deps.agentsWait?.ms ?? AGENTS_WAIT_MS, deps.agentsWait?.pollMs,
+          () => token.isCancellationRequested, (s) => agentsWindowSetUp(s, scheme));
+        return up ?? (token.isCancellationRequested ? "cancelled" as const : undefined);
+      });
+    if (got === "none") {
+      return false;
+    }
+    if (got === "cancelled") {
+      await vscode.window.showInformationMessage(t.agentsSetupCancelled);
+      return false;
+    }
+    if (got && "failed" in got) {
+      await vscode.window.showErrorMessage(t.agentsHostEnded(got.failed));
+      return false;
+    }
+    if (!got) {
+      await vscode.window.showErrorMessage(t.agentsSetupSlow(Math.round((deps.agentsWait?.ms ?? AGENTS_WAIT_MS) / 1000)));
+      return false;
+    }
+    host = got;
   }
   if (!host.running) {
     // cell01 (#2309): one action: the host is started here, and the cell opens once it answers

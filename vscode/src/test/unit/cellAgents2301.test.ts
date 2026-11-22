@@ -156,6 +156,22 @@ describe("#2301: Open in Agents window", () => {
     assert.ok(asks.length > 0 && asks.every((a) => a.ms >= 200 && a.at + a.ms <= t0 + 400 + 30), "never past the end");
   });
 
+  it("#2309 F5: after Set up, it goes on by itself: once the host answers and is set up, the cell opens", async () => {
+    const notSet = { code: 0, stdout: status({ running: false, vscode: null }), stderr: "" };
+    const h = harness([notSet, notSet, { code: 0, stdout: status({}), stderr: "" }]);
+    calls.nextInfoChoice = AGENT_HOST_TEXTS.setup;
+    assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), true);
+    assert.deepStrictEqual(calls.terminals.map((t) => t.options.name), [AGENT_HOST_TEXTS.setupTerminal]);
+    assert.deepStrictEqual(calls.progress.map((p) => p.title), ["Setting up the Agents window and starting the a4sx agent host, then opening «build»…"]);
+    assert.deepStrictEqual(calls.opened, [`vscode://agents/agent-host-session/ahp-session/a4sx-cell-${INS}`], "no second click");
+    resetCalls();
+    const slow = harness(notSet);   // the setup never finishes in time
+    calls.nextInfoChoice = AGENT_HOST_TEXTS.setup;
+    assert.strictEqual(await openCellInAgentsWindow(slow.deps, slow.item), false);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [CELL_ACTION_TEXTS.agentsSetupSlow(1)]);
+    assert.deepStrictEqual(calls.opened, []);
+  });
+
   it("the Agents window not set up: offers Set up the Agents window first, even with the host stopped", async () => {
     const h = harness({ code: 0, stdout: status({ running: false, vscode: null }), stderr: "" });
     assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), false);   // the offer is declined
