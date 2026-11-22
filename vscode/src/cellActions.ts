@@ -17,6 +17,7 @@
 // There is no "Hand off" here on purpose: a scrubbed copy is not an exact copy, so a cell continued from it on
 // another computer may not read what really happened. It waits for the CLI's as-is mode (a4sx #2292).
 // Every CLI call is an argv array; what is read back is only shown, never run.
+import * as fs from "fs";
 import * as vscode from "vscode";
 import { SessionRow } from "./api";
 import { CELL_CMD_TEXTS, CellCommandDeps, cliErrorText, ensureCli, setupAgentsWindow, startAgentHost } from "./cellCommands";
@@ -61,6 +62,8 @@ export const CELL_ACTION_TEXTS = {
   saveGone: (name: string, short: string) =>
     `«${name}»'s last conversation (session ${short}) can't be found on this computer any more, so it can't be saved.`,
   saveTitle: (name: string) => `Save «${name}»'s conversation to your a4sx library?`,
+  saveBadEntry: (id: string) =>
+    `The library entry for this save has an id the a4sx CLI doesn't take ("${id}"), so nothing was saved. Update the a4sx CLI, then choose Save its conversation again.`,
   savePickTitle: (name: string) => `Save «${name}»'s conversation: which library entry?`,
   savePickPlaceholder: (label: string) => `Your library has more than one entry named «${label}». Choose the one that gets the new version`,
   saveDetail:
@@ -278,7 +281,11 @@ export async function saveCellConversation(deps: CellActionDeps, item: LocalCell
   let into: string | undefined;
   const label = cellBackupLabel(cell.name);
   let named: { label: string; title: string } | undefined;
-  if (options.library) {
+  if (!options.library) {   // review: never a push without knowing which entry it lands in (it could rename one)
+    await vscode.window.showErrorMessage(SAVE_TAB_TEXTS.libraryUnreadable("no library lookup"));
+    return undefined;
+  }
+  {
     let entries: SavedEntry[];
     try {
       const rows = await options.library();
@@ -288,7 +295,7 @@ export async function saveCellConversation(deps: CellActionDeps, item: LocalCell
         // a label would rename it. So when the conversation is already in an entry (one the person may have named),
         // the save is a new version of that entry, by its id, and nothing is renamed; only a conversation that is in
         // no entry yet makes «<cell>-backup».
-        entries = heldEntries(rows, slugOf(plan.sessionId));
+        entries = heldEntries(rows, transcriptSlug(plan.transcript) ?? slugOf(plan.sessionId));
         named = entries.length ? undefined : { label, title: cellBackupTitle(cell.name) };
       }
     } catch (e) {
@@ -310,12 +317,9 @@ export async function saveCellConversation(deps: CellActionDeps, item: LocalCell
     }
   }
   let args = pushArgs(plan.transcript, into !== undefined ? { into } : named ?? {});
-  if (!args) {
-    const again = await vscode.window.showErrorMessage(SAVE_TAB_TEXTS.badEntry((showText(into, 80) ?? "")), SAVE_TAB_TEXTS.saveAsNew);
-    if (again !== SAVE_TAB_TEXTS.saveAsNew) {
-      return undefined;
-    }
-    args = pushArgs(plan.transcript)!;   // review: never a label here, it would rename the entry of this conversation
+  if (!args) {   // review: no "Save as a new entry" here: a push without --into could rename this conversation's entry
+    await vscode.window.showErrorMessage(t.saveBadEntry(showText(into, 80) ?? ""));
+    return undefined;
   }
   const terminal = openCommandTerminal(t.saveTerminal(cell.name), cli, CLI_NAME, args, undefined, undefined, t.saveBanner(cell.name, short, showText(plan.cwd, 300) ?? plan.cwd));
   deps.terminals.add(terminal);
@@ -332,6 +336,36 @@ function newestEntries(rows: readonly SessionRow[]): SavedEntry[] {
   const when = (r: SessionRow) => (typeof r.updated_at === "string" ? r.updated_at : typeof r.created_at === "string" ? r.created_at : "");
   return [...rows].sort((a, b) => when(b).localeCompare(when(a)))
     .map((r) => ({ id: r.id, label: showText(r.label), title: [showText(r.title, 120), showText(when(r).replace("T", " ").slice(0, 16), 20)].filter(Boolean).join(" · ") || undefined }));
+}
+
+/**
+ * review: the slug the server files a push under: the first `sessionId` in the transcript (a seeded or forked
+ * transcript can start with another session's lines). Undefined when none is found in its first 256 KB.
+ */
+export function transcriptSlug(file: string): string | undefined {
+  let head: string;
+  try {
+    const fd = fs.openSync(file, "r");
+    try {
+      const buf = Buffer.alloc(256 * 1024);
+      head = buf.toString("utf8", 0, fs.readSync(fd, buf, 0, buf.length, 0));
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return undefined;
+  }
+  for (const line of head.split("\n")) {
+    try {
+      const sid = (JSON.parse(line) as { sessionId?: unknown })?.sessionId;
+      if (typeof sid === "string" && sid) {
+        return slugOf(sid);
+      }
+    } catch {
+      // a partial last line or a non-JSON line: the next one
+    }
+  }
+  return undefined;
 }
 
 /** a4sx #2309 (o): the library entries labelled exactly `label`, newest first (more than one: the person picks). */

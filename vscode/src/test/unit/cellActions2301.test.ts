@@ -245,10 +245,29 @@ describe("#2301 E6: Save its conversation…", () => {
     await saveCellConversation(h.deps, h.local("docs"), { library: async () => [{ id: "col-lib-zzzzzzzzzzzz", title: "docs-backup copy" }] });
     assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}' '--label' 'docs-backup' '--title' 'docs: backups'\n`]);
     const h2 = harness();
-    const file2 = recordConversation(h2, "docs", "ins_A2");
+    recordConversation(h2, "docs", "ins_A2");
     calls.modalChoices.push(CELL_ACTION_TEXTS.save);
-    await saveCellConversation(h2.deps, h2.local("docs"));
-    assert.deepStrictEqual(calls.terminals[1].sent, [`'${CLI}' 'push' '${file2}'\n`]);
+    assert.strictEqual(await saveCellConversation(h2.deps, h2.local("docs")), undefined, "no library lookup: nothing is pushed");
+    assert.strictEqual(calls.terminals.length, 1);
+  });
+
+  it("#2309 (o) review: the entry is found by the transcript's first sessionId, as the server files it", async () => {
+    const h = harness();
+    const file = recordConversation(h, "docs", "ins_A2");
+    fs.writeFileSync(file, '{"type":"summary"}\n{"type":"user","sessionId":"ffffeeee-0000-1111-2222-333344445555"}\n'
+      + '{"type":"user","sessionId":"' + SID + '"}\n');
+    calls.modalChoices.push(CELL_ACTION_TEXTS.save);
+    await saveCellConversation(h.deps, h.local("docs"), { library: async () => [{ id: "col-lib-ffffeeee0000", label: "seeded-from" }] });
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}' '--into' 'col-lib-ffffeeee0000'\n`]);
+  });
+
+  it("#2309 (o) review: an entry id the CLI doesn't take saves nothing (no plain-push fallback)", async () => {
+    const h = harness();
+    recordConversation(h, "docs", "ins_A2");
+    calls.modalChoices.push(CELL_ACTION_TEXTS.save);
+    assert.strictEqual(await saveCellConversation(h.deps, h.local("docs"), { library: async () => [{ id: "bad id; rm", label: "docs-backup" }] }), undefined);
+    assert.strictEqual(calls.terminals.length, 0);
+    assert.strictEqual(calls.errors[0].message, CELL_ACTION_TEXTS.saveBadEntry("bad id; rm"));
   });
 
   it("#2309 (o): two entries named «<cell>-backup»: the person picks (newest first), and no row adds a third", async () => {
