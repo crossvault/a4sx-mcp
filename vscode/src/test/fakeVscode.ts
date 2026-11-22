@@ -26,6 +26,8 @@ export interface Calls {
   progress: { title: string; messages: string[]; options: any }[];
   /** Commands run through executeCommand (other than setContext). */
   executed: { id: string; args: unknown[] }[];
+  /** vscode.workspace.isTrusted (false: Restricted Mode). */
+  trusted: boolean;
   /** Extension ids getExtension finds. */
   extensions: Set<string>;
   /** extensionPath of the extensions getExtension finds, by id (optional). */
@@ -93,6 +95,7 @@ export const calls: Calls = {
   treeProviders: new Map(),
   progress: [],
   executed: [],
+  trusted: true,
   extensions: new Set(),
   extensionPaths: new Map(),
   workspaceFolders: undefined,
@@ -125,6 +128,7 @@ export function resetCalls(): void {
   calls.commands.clear();
   calls.mcpProviders.clear();
   calls.terminals.length = 0;
+  calls.trusted = true;
   calls.errors.length = 0;
   calls.opened.length = 0;
   calls.config = {};
@@ -429,6 +433,9 @@ const fake = {
     },
   },
   workspace: {
+    get isTrusted() {
+      return calls.trusted;
+    },
     get workspaceFolders() {
       return calls.workspaceFolders;
     },

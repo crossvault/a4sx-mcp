@@ -91,6 +91,11 @@ export const CELL_CMD_TEXTS = {
   stopDetail: "Its agent session ends. You can start the cell again from here.",
   stop: "Stop",
   stopped: (name: string) => `Stopped the cell «${name}».`,
+  untrusted: (what: string) =>
+    `VS Code's Restricted Mode doesn't let a4sx open the terminal that ${what} needs. Trust this window (Manage Workspace Trust), then choose it again; nothing was started.`,
+  manageTrust: "Manage Workspace Trust",
+  whatHost: "the agent host",
+  whatSetup: "setting up the Agents window",
   // #2309 F1: a cell the agent host runs is stopped through the host; a CLI or host that can't do it is said
   stopHostOld: (name: string) =>
     `Needs a4sx 0.59.12 to stop a cell in the agent host: «${name}» runs there, and this a4sx CLI or the agent host it started is older. Close its session in VS Code's Agents window to end it; nothing was stopped.`,
@@ -672,8 +677,26 @@ export async function startCellHere(deps: CellCommandDeps, item: RemoteCellItem 
   return terminal;
 }
 
+/**
+ * #2309 F4 (cell01, Restricted Mode): VS Code refuses a terminal in an untrusted window, and from a notification it did
+ * so silently (no trust question, no terminal). Asked here first, on every path, so it is never silent.
+ */
+export async function ensureTrusted(what: string): Promise<boolean> {
+  if (vscode.workspace.isTrusted !== false) {
+    return true;
+  }
+  const pick = await vscode.window.showWarningMessage(CELL_CMD_TEXTS.untrusted(what), { modal: true }, CELL_CMD_TEXTS.manageTrust);
+  if (pick === CELL_CMD_TEXTS.manageTrust) {
+    await vscode.commands.executeCommand("workbench.trust.manage");
+  }
+  return false;
+}
+
 /** #2301 E2: `a4sx agent-host` in a terminal (it runs there until Ctrl+C or the terminal closes). */
 export async function startAgentHost(deps: CellCommandDeps): Promise<vscode.Terminal | undefined> {
+  if (!(await ensureTrusted(CELL_CMD_TEXTS.whatHost))) {
+    return undefined;
+  }
   const cli = await ensureCli(deps);
   if (!cli) {
     return undefined;
@@ -740,6 +763,9 @@ function readSmall(p: string): string | undefined {
 
 /** #2301 E2: `a4sx setup-vscode` in a terminal: it says what it changed. */
 export async function setupAgentsWindow(deps: CellCommandDeps): Promise<vscode.Terminal | undefined> {
+  if (!(await ensureTrusted(CELL_CMD_TEXTS.whatSetup))) {
+    return undefined;
+  }
   const cli = await ensureCli(deps);
   if (!cli) {
     return undefined;

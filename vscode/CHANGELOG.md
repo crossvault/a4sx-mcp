@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.6
+
+From the from-scratch run on 0.9.4 (a4sx #2309 F4, F5, F12):
+- **Restricted Mode.** VS Code doesn't let an extension start a terminal in a window you haven't trusted. Before, **Set up the Agents window** from a notification then did nothing at all. Setting up the Agents window and starting the agent host now say so first and offer **Manage Workspace Trust**; nothing starts until you trust the window.
+- **Open in Agents window goes on after the setup.** When the Agents window wasn't set up yet, choosing **Set up the Agents window** in its question now waits until the setup is done and the agent host answers, then opens the cell. There is no second click. A notification shows while it waits, and Cancel stops waiting. If the setup doesn't finish within 30 seconds, a message says so and names the setup's terminal.
+- **My sessions after Save its conversation.** My sessions reads your library again a few times while the save runs (after about 8, 20 and 45 seconds), so the new entry or version shows up without a Refresh. With a newer a4sx CLI the save's terminal also ends with one line instead of the server's raw answer.
+
 ## 0.9.5
 
 From a from-scratch run on 0.9.4 with the released a4sx CLI 0.59.2 (a4sx #2309 F1, F2):

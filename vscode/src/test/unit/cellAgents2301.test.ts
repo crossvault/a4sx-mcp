@@ -156,6 +156,54 @@ describe("#2301: Open in Agents window", () => {
     assert.ok(asks.length > 0 && asks.every((a) => a.ms >= 200 && a.at + a.ms <= t0 + 400 + 30), "never past the end");
   });
 
+  it("#2309 F5: after Set up, it goes on by itself: once the host answers and is set up, the cell opens", async () => {
+    const notSet = { code: 0, stdout: status({ running: false, vscode: null }), stderr: "" };
+    const h = harness([notSet, notSet, { code: 0, stdout: status({}), stderr: "" }]);
+    calls.nextInfoChoice = AGENT_HOST_TEXTS.setup;
+    assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), true);
+    assert.deepStrictEqual(calls.terminals.map((t) => t.options.name), [AGENT_HOST_TEXTS.setupTerminal]);
+    assert.deepStrictEqual(calls.progress.map((p) => p.title), ["Setting up the Agents window and starting the a4sx agent host, then opening «build»…"]);
+    assert.deepStrictEqual(calls.opened, [`vscode://agents/agent-host-session/ahp-session/a4sx-cell-${INS}`], "no second click");
+    resetCalls();
+    // review: a setup that ended at once (the host already ran) and worked: the last look opens the cell
+    const quick = harness([notSet, { code: 0, stdout: status({}), stderr: "" }]);
+    const vs = require("vscode") as any;
+    const make = vs.window.createTerminal;
+    vs.window.createTerminal = (o: unknown) => ({ ...make(o), exitStatus: { code: 0, reason: 2 } });
+    calls.nextInfoChoice = AGENT_HOST_TEXTS.setup;
+    try {
+      assert.strictEqual(await openCellInAgentsWindow(quick.deps, quick.item), true);
+    } finally {
+      vs.window.createTerminal = make;
+    }
+    resetCalls();
+    const slow = harness(notSet);   // the setup never finishes in time
+    calls.nextInfoChoice = AGENT_HOST_TEXTS.setup;
+    assert.strictEqual(await openCellInAgentsWindow(slow.deps, slow.item), false);
+    assert.deepStrictEqual(calls.errors.map((e) => e.message), [CELL_ACTION_TEXTS.agentsSetupSlow(1)]);
+    assert.deepStrictEqual(calls.opened, []);
+  });
+
+  it("#2309 F4: in Restricted Mode the setup and the host start ask about trust first, never silently; nothing starts", async () => {
+    const notSet = { code: 0, stdout: status({ running: false, vscode: null }), stderr: "" };
+    const h = harness(notSet);
+    calls.trusted = false;
+    calls.nextInfoChoice = AGENT_HOST_TEXTS.setup;
+    calls.modalChoices.push(CELL_CMD_TEXTS.manageTrust);
+    assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), false);
+    assert.deepStrictEqual(calls.modals.map((m) => [m.message, m.items]), [[
+      "VS Code's Restricted Mode doesn't let a4sx open the terminal that setting up the Agents window needs. Trust this window (Manage Workspace Trust), then choose it again; nothing was started.",
+      ["Manage Workspace Trust"]]]);
+    assert.deepStrictEqual(calls.executed.map((e) => e.id), ["workbench.trust.manage"]);
+    assert.strictEqual(calls.terminals.length, 0);
+    resetCalls();
+    calls.trusted = false;
+    const off = harness({ code: 0, stdout: status({ running: false, address: null }), stderr: "" });
+    assert.strictEqual(await openCellInAgentsWindow(off.deps, off.item), false);
+    assert.strictEqual(calls.modals[0].message, CELL_CMD_TEXTS.untrusted(CELL_CMD_TEXTS.whatHost));
+    assert.strictEqual(calls.terminals.length, 0);
+  });
+
   it("the Agents window not set up: offers Set up the Agents window first, even with the host stopped", async () => {
     const h = harness({ code: 0, stdout: status({ running: false, vscode: null }), stderr: "" });
     assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), false);   // the offer is declined
