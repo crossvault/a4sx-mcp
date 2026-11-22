@@ -115,6 +115,7 @@ export type CliResolution = { kind: "found"; path: string } | { kind: "no-cli" }
 /** `a4sx --version` once per CLI path until cleared (Refresh, an update, a settings change). Never rejects. */
 export class CliVersions {
   private readonly seen = new Map<string, Promise<string | undefined>>();
+  private readonly stop = new Map<string, Promise<boolean>>();
   constructor(private readonly run: CliRunner) {}
 
   /** The CLI's version ("0.26.5"), or undefined when it can't be read. */
@@ -131,8 +132,19 @@ export class CliVersions {
     return this.version(cli).then(cliGate);
   }
 
+  /** Review of #43: whether the CLI has `agent-host stop` (`agent-host stop --help` answers 0); once per path until cleared. */
+  canStopHost(cli: string): Promise<boolean> {
+    let p = this.stop.get(cli);
+    if (!p) {
+      p = this.run(cli, ["agent-host", "stop", "--help"], 15_000).then((o) => o.code === 0, () => false);
+      this.stop.set(cli, p);
+    }
+    return p;
+  }
+
   clear(): void {
     this.seen.clear();
+    this.stop.clear();
   }
 }
 
@@ -203,7 +215,7 @@ export class ThisComputerItem extends vscode.TreeItem {
 }
 
 /** The rows under This computer: whether the agent host runs, the actions that apply, and the last error. */
-export function thisComputerChildren(host: AgentHostStatus): vscode.TreeItem[] {
+export function thisComputerChildren(host: AgentHostStatus, cliCanStop = false): vscode.TreeItem[] {
   const state = new MessageItem(host.running && host.address ? AGENT_HOST_TEXTS.running(host.address) : AGENT_HOST_TEXTS.stopped,
     host.running ? "pass" : "circle-slash");
   if (host.running) {
@@ -211,7 +223,8 @@ export function thisComputerChildren(host: AgentHostStatus): vscode.TreeItem[] {
   }
   state.tooltip = host.running && host.address ? AGENT_HOST_TEXTS.runningTooltip(host.address) : AGENT_HOST_TEXTS.stoppedTooltip;
   const out: vscode.TreeItem[] = [state];
-  if (host.running && host.stopRequest < 1) {
+  // review of #43: a CLI that doesn't report the field yet (#2326 without #2338) but has `agent-host stop` can stop it
+  if (host.running && (host.stopRequest ?? (cliCanStop ? 1 : 0)) < 1) {
     // #2309 F2: greyed, no action, the reason in the tooltip (the button failed with "update" on CLI 0.59.2); by the
     // host's own capability (coordinator), so right whatever version the CLI change lands at
     const old = new MessageItem(AGENT_HOST_TEXTS.stopOld, "debug-stop");
@@ -339,6 +352,12 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
     return this.load;
   }
 
+  /** Whether this CLI has `agent-host stop` (CliVersions.canStopHost). */
+  cliCanStopHost(): Promise<boolean> {
+    const cli = this.deps.resolve();
+    return cli.kind === "found" ? this.versions.canStopHost(cli.path) : Promise.resolve(false);
+  }
+
   /** The agent host's status as last read for This computer's rows (undefined: not read since the last refresh). */
   get hostKnown(): AgentHostStatus | undefined {
     return this.hostSeen;
@@ -387,7 +406,7 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
       const host = await this.hostStatus();
       return !host ? [new MessageItem(AGENT_HOST_TEXTS.unknown, "question")]
         : "failed" in host ? [new MessageItem(AGENT_HOST_TEXTS.failed(host.failed), "warning")]
-          : thisComputerChildren(host);
+          : thisComputerChildren(host, host.stopRequest === undefined && host.running ? await this.cliCanStopHost() : false);
     }
     if (parent) {
       return [];

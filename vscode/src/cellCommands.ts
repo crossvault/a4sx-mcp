@@ -847,7 +847,7 @@ export async function stopCell(deps: CellCommandDeps, item: LocalCellItem | unde
     return false;
   }
   const host = deps.provider.hostKnown;
-  if (host && isOpen(host, item.cell) && host.stopRequest < 2) {
+  if (host && isOpen(host, item.cell) && (host.stopRequest ?? 0) < 2) {
     // F1, by the host's capability (coordinator): no question for something that can't be done; only the explanation
     await vscode.window.showErrorMessage(CELL_CMD_TEXTS.stopHostOld(item.cell.name));
     return false;

@@ -26,9 +26,10 @@ export interface AgentHostStatus {
   answering?: boolean;
   /**
    * #2309: what the running host can be asked from outside (the CLI's `stop_request`): 1 `agent-host stop`, 2 also
-   * `mesh cell stop` of one of its cells; 0 when neither (or a CLI that doesn't say). The gates read this, not versions.
+   * `mesh cell stop` of one of its cells; 0 when neither; undefined when the CLI doesn't say (before #2338: the host
+   * stop then follows from the CLI's own `agent-host stop --help`). The gates read this, not versions.
    */
-  stopRequest: number;
+  stopRequest?: number;
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -70,7 +71,8 @@ export function parseAgentHostStatus(stdout: string): AgentHostStatus | undefine
   const running = raw.running && !!address;   // running without an address it can name: not shown as running
   return { running, address: running ? address : undefined, open: running ? open : [], editors,
     lastError: text ? { at, text } : undefined, ...(running && typeof raw.answering === "boolean" ? { answering: raw.answering } : {}),
-    stopRequest: running && Number.isInteger(raw.stop_request) && (raw.stop_request as number) >= 0 && (raw.stop_request as number) <= 9 ? raw.stop_request as number : 0 };
+    ...(running && raw.stop_request !== undefined ? { stopRequest: Number.isInteger(raw.stop_request) && (raw.stop_request as number) >= 0
+      && (raw.stop_request as number) <= 9 ? raw.stop_request as number : 0 } : {}) };
 }
 
 /** Whether `cell` is one of the open ones: its name, and its mesh by name or id (the CLI's "name (mesh)"). */

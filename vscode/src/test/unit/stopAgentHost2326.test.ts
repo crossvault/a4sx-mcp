@@ -105,10 +105,13 @@ describe("#2326: Stop agent host", () => {
   it("#2309 F2, by capability (stop_request): a host that can't be asked is greyed with the reason; one that can is the action", () => {
     const at = (stop_request?: number) => parseAgentHostStatus(JSON.stringify({ running: true, address: "ws://127.0.0.1:8765/", open: [],
       vscode: { editors: { stable: "ok" } }, ...(stop_request === undefined ? {} : { stop_request }) }))!;
-    assert.strictEqual(at().stopRequest, 0, "a CLI that doesn't say: can't");
+    assert.strictEqual(at().stopRequest, undefined, "a CLI that doesn't say");
     assert.strictEqual(parseAgentHostStatus(JSON.stringify({ running: true, address: "ws://127.0.0.1:8765/", stop_request: "2" }))!.stopRequest, 0);
-    for (const sr of [undefined, 0]) {
-      const old = thisComputerChildren(at(sr)).find((i) => String(i.label).startsWith("Stop agent host"))!;
+    // review of #43: a CLI that doesn't say but has `agent-host stop` (#2326 without #2338) offers it
+    assert.strictEqual(thisComputerChildren(at(), true).find((i) => String(i.label).startsWith("Stop agent host"))!.command!.command,
+      "a4sx.stopAgentHost");
+    for (const [sr, can] of [[undefined, false], [0, false], [0, true]] as [number | undefined, boolean][]) {
+      const old = thisComputerChildren(at(sr), can).find((i) => String(i.label).startsWith("Stop agent host"))!;
       assert.strictEqual(old.label, "Stop agent host (needs a newer a4sx)");
       assert.strictEqual(old.command, undefined);
       assert.strictEqual((old.iconPath as any).color?.id, "disabledForeground");
