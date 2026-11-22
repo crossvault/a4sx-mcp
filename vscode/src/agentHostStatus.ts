@@ -44,10 +44,21 @@ function isoTime(v: unknown): v is string {
   return typeof v === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,6})?(Z|[+-]\d\d:\d\d)$/.test(v);
 }
 
-/** "11-21 16:00" (UTC) from an ISO time, for short rows; the tooltip has the whole time. */
+/** "11-21 16:00 UTC" from an ISO time (any offset), for short rows; the tooltip has the whole time. */
 export function shortTime(iso: string | undefined): string | undefined {
-  const m = iso ? /^\d{4}-(\d\d-\d\d)T(\d\d:\d\d)/.exec(iso) : null;
-  return m ? `${m[1]} ${m[2]}` : undefined;
+  const t = iso ? Date.parse(iso) : NaN;
+  if (Number.isNaN(t)) {
+    return undefined;
+  }
+  const d = new Date(t).toISOString();   // review: labelled UTC, so nobody reads it as local time
+  return `${d.slice(5, 10)} ${d.slice(11, 16)} UTC`;
+}
+
+/** Whether ISO time `a` is before `b` (parsed, not compared as text: offsets and fractions differ). */
+export function isBefore(a: string | undefined, b: string | undefined): boolean {
+  const x = a ? Date.parse(a) : NaN;
+  const y = b ? Date.parse(b) : NaN;
+  return !Number.isNaN(x) && !Number.isNaN(y) && x < y;
 }
 
 /** The status answer, or undefined when it isn't one (an older CLI, an error). */
