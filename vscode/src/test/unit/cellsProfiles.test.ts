@@ -486,7 +486,7 @@ describe("Cells view: grouped by mesh, with the other machines' cells", () => {
       assert.ok(!inHost.runs.includes("mesh cell stop build"), "not asked: it can't stop a cell there");
       assert.deepStrictEqual(calls.errors.map((e) => e.message), [CELL_CMD_TEXTS.stopHostOld("build")]);
     }
-    assert.strictEqual(CELL_CMD_TEXTS.stopHostOld("build"), "Needs a newer a4sx to stop a cell in the agent host: «build» runs there, and this a4sx CLI or the agent host it started can't stop one cell. Close its session in VS Code's Agents window to end it; nothing was stopped.");
+    assert.strictEqual(CELL_CMD_TEXTS.stopHostOld("build"), "Needs a4sx 0.59.12 to stop a cell in the agent host: «build» runs there, and this a4sx CLI or the agent host it started is older. Close its session in VS Code's Agents window to end it; nothing was stopped.");
     assert.deepStrictEqual(calls.modals, [], "cell01: no question for something that can't be done");
     resetCalls();
     const fresh = harness();

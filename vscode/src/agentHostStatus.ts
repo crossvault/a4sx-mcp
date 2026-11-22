@@ -138,11 +138,11 @@ export const AGENT_HOST_TEXTS = {
   stopTooltip: "Runs `a4sx agent-host stop`: the same stop as Ctrl+C in the host's terminal. It tells the Agents window first, then ends the cells it started.",
   stopping: "Stopping the a4sx agent host… (the Agents window is told first, then its cells end)",
   stopDone: "a4sx agent host stopped. Start it again to use your cells in the Agents window.",
-  stopNeedsUpdate: "Update a4sx to stop the agent host from here (this a4sx CLI has no agent-host stop). Nothing was stopped; Ctrl+C in its terminal \"a4sx: agent host\" stops it now.",
+  stopNeedsUpdate: "Update a4sx to stop the agent host from here (needs a4sx 0.59.10 or newer). Nothing was stopped; Ctrl+C in its terminal \"a4sx: agent host\" stops it now.",
   stopWhat: "stop the agent host",
   // #2309 F2: a CLI or a running host that can't be asked to stop: the row is shown greyed, without an action
-  stopOld: "Stop agent host (needs a newer a4sx)",
-  stopOldTooltip: "This a4sx CLI, or the agent host it started, can't be asked to stop from here: that needs a newer a4sx for both. Run a4sx update once it is released, then start the agent host again. Until then, Ctrl+C in its terminal \"a4sx: agent host\" stops it.",
+  stopOld: "Stop agent host (needs a4sx 0.59.10)",
+  stopOldTooltip: "This a4sx CLI, or the agent host it started, can't be asked to stop from here: that needs a4sx 0.59.10 or newer for both. Run a4sx update, then start the agent host again. Until then, Ctrl+C in its terminal \"a4sx: agent host\" stops it.",
   stopNoAnswer: "No answer from `a4sx agent-host stop` in 45 s. If it got as far as asking, the agent host may still stop; This computer shows when it has, and Ctrl+C in its terminal \"a4sx: agent host\" stops it at once.",
   stopAsk: (names: string[], plain = 0) => {
     const what = [...names.map((n) => `«${n}»`), ...(plain ? [plain === 1 ? "1 plain conversation" : `${plain} plain conversations`] : [])];

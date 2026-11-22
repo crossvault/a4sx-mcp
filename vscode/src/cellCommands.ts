@@ -93,7 +93,7 @@ export const CELL_CMD_TEXTS = {
   stopped: (name: string) => `Stopped the cell «${name}».`,
   // #2309 F1: a cell the agent host runs is stopped through the host; a CLI or host that can't do it is said
   stopHostOld: (name: string) =>
-    `Needs a newer a4sx to stop a cell in the agent host: «${name}» runs there, and this a4sx CLI or the agent host it started can't stop one cell. Close its session in VS Code's Agents window to end it; nothing was stopped.`,
+    `Needs a4sx 0.59.12 to stop a cell in the agent host: «${name}» runs there, and this a4sx CLI or the agent host it started is older. Close its session in VS Code's Agents window to end it; nothing was stopped.`,
   renameTitle: (name: string) => `Rename the cell «${name}»`,
   renamePrompt: "New name: lowercase letters, digits and -",
   renameInvalid: "Use up to 48 lowercase letters, digits and -, starting and ending with a letter or digit.",

@@ -79,7 +79,7 @@ describe("#2326: Stop agent host", () => {
     const old = harness({ code: 2, stdout: "", stderr: "a4sx agent-host: error: argument agent_host_cmd: invalid choice: 'stop'\n" });
     assert.strictEqual(await stopAgentHost(old.deps), false);
     assert.deepStrictEqual(calls.errors.map((e) => e.message), [AGENT_HOST_TEXTS.stopNeedsUpdate]);
-    assert.strictEqual(AGENT_HOST_TEXTS.stopNeedsUpdate, "Update a4sx to stop the agent host from here (this a4sx CLI has no agent-host stop). Nothing was stopped; Ctrl+C in its terminal \"a4sx: agent host\" stops it now.");
+    assert.strictEqual(AGENT_HOST_TEXTS.stopNeedsUpdate, "Update a4sx to stop the agent host from here (needs a4sx 0.59.10 or newer). Nothing was stopped; Ctrl+C in its terminal \"a4sx: agent host\" stops it now.");
     resetCalls();
     const refused = harness({ code: 1, stdout: "", stderr: "a4sx: the agent host (pid 42) hasn't stopped within 30 s: it is still ending its cells\n" });
     assert.strictEqual(await stopAgentHost(refused.deps), false);
@@ -112,10 +112,10 @@ describe("#2326: Stop agent host", () => {
       "a4sx.stopAgentHost");
     for (const [sr, can] of [[undefined, false], [0, false], [0, true]] as [number | undefined, boolean][]) {
       const old = thisComputerChildren(at(sr), can).find((i) => String(i.label).startsWith("Stop agent host"))!;
-      assert.strictEqual(old.label, "Stop agent host (needs a newer a4sx)");
+      assert.strictEqual(old.label, "Stop agent host (needs a4sx 0.59.10)");
       assert.strictEqual(old.command, undefined);
       assert.strictEqual((old.iconPath as any).color?.id, "disabledForeground");
-      assert.strictEqual(old.tooltip, "This a4sx CLI, or the agent host it started, can't be asked to stop from here: that needs a newer a4sx for both. Run a4sx update once it is released, then start the agent host again. Until then, Ctrl+C in its terminal \"a4sx: agent host\" stops it.");
+      assert.strictEqual(old.tooltip, "This a4sx CLI, or the agent host it started, can't be asked to stop from here: that needs a4sx 0.59.10 or newer for both. Run a4sx update, then start the agent host again. Until then, Ctrl+C in its terminal \"a4sx: agent host\" stops it.");
     }
     for (const sr of [1, 2]) {
       const row = thisComputerChildren(at(sr)).find((i) => String(i.label).startsWith("Stop agent host"))!;
