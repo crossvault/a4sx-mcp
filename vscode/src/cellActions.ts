@@ -21,7 +21,7 @@ import * as vscode from "vscode";
 import { SessionRow } from "./api";
 import { CELL_CMD_TEXTS, CellCommandDeps, cliErrorText, ensureCli, setupAgentsWindow, startAgentHost } from "./cellCommands";
 import { cellStartPlan } from "./cellResume";
-import { CELL_NAME, cellsListDir, CLI_MESH_ID, INSTANCE_ID, LocalCell, showText, startableCell } from "./cells";
+import { CELL_NAME, cellsListDir, cellStopArgs, CLI_MESH_ID, INSTANCE_ID, LocalCell, showText, startableCell } from "./cells";
 import { AgentHostStatus, AGENT_HOST_STATUS_ARGS, AGENT_HOST_TEXTS, agentsWindowSetUp, isOpen, lacksAgentHost, parseAgentHostStatus } from "./agentHostStatus";
 import { CMD_STOP_CELL, LocalCellItem, RemoteCellItem } from "./cellsView";
 import { CLI_NAME } from "./cli";
@@ -88,6 +88,11 @@ export const CELL_ACTION_TEXTS = {
   agentsRunningElsewhere: (name: string) =>
     `«${name}» is running in a terminal on this computer, so the Agents window can't start it too. Stop it there, then choose Open in Agents window again.`,
   stopIt: "Stop it",
+  /** a4sx #2309 (m), cell01: terminal → Agents window took three steps; one action does the stop and the open */
+  moveIt: "Move it into the Agents window",
+  moving: (name: string) => `Moving «${name}» into the Agents window: stopping it in its terminal, then opening it there…`,
+  moveStillRunning: (name: string) =>
+    `«${name}» still runs in its terminal after the stop, so the Agents window wasn't opened. Close that terminal, then choose Open in Agents window again.`,
   agentsStarting: (name: string) => `Starting the a4sx agent host, then opening «${name}» in the Agents window…`,
   agentsHostEnded: (why: string) =>
     `The a4sx agent host stopped before it answered (${why}), so the Agents window wasn't opened. Its terminal "a4sx: agent host" has the details; choose Open in Agents window again once that is fixed.`,
@@ -110,6 +115,8 @@ export interface CellActionDeps extends CellCommandDeps {
   refreshSessions?: () => void;
   /** Tests: when My sessions is read again after a save (ms after the push started). */
   saveRereads?: readonly number[];
+  /** Tests: how long a move (#2309 m) waits for the stopped cell, and how often it looks. */
+  moveWait?: { ms: number; pollMs: number };
 }
 
 /** F12 (cell01): a save's push takes a few seconds to a minute; My sessions is read again meanwhile, a few times. */
@@ -406,6 +413,42 @@ export async function waitForHost(deps: CellActionDeps, cli: string, ms: number,
   return undefined;
 }
 
+/** #2309 (m): how long a move waits for the stopped cell to leave the list of running cells (and how often it looks). */
+export const MOVE_WAIT_MS = 20_000;
+const MOVE_POLL_MS = 1_000;
+
+/**
+ * #2309 (m): the stop half of a move: `a4sx mesh cell stop`, then the cell list read again until the cell no longer
+ * runs. The fresh row of the cell (stored, not running), or undefined after saying why (a failed stop, still running).
+ */
+async function stopForMove(deps: CellActionDeps, cli: string, item: LocalCellItem): Promise<LocalCellItem | undefined> {
+  const args = cellStopArgs(item.cell, item.all);
+  if (!args) {
+    return undefined;
+  }
+  const out = await deps.run(cli, args, 30_000);
+  if (out.code !== 0) {   // F1: a failed stop changes nothing shown
+    await vscode.window.showErrorMessage(CELL_CMD_TEXTS.cliFailed("stop the cell", cliErrorText(out)));
+    return undefined;
+  }
+  const end = Date.now() + (deps.moveWait?.ms ?? MOVE_WAIT_MS);
+  for (;;) {
+    const load = await deps.provider.refresh();
+    const cells = load.kind === "ok" ? load.cells : [];
+    const now = cells.find((c) => c.instanceId === item.cell.instanceId);
+    if (now && now.localState !== "running") {
+      return new LocalCellItem(now, cells, deps.server());
+    }
+    if (!now || Date.now() >= end) {
+      if (now) {
+        await vscode.window.showErrorMessage(CELL_ACTION_TEXTS.moveStillRunning(item.cell.name));
+      }
+      return undefined;
+    }
+    await new Promise((r) => setTimeout(r, deps.moveWait?.pollMs ?? MOVE_POLL_MS));
+  }
+}
+
 /**
  * Open in Agents window: the cell's session in VS Code's Agents window, through that window's own link. The agent host
  * must run and the Agents window must be set up for it. Not set up: this says so, offers Set up the Agents window and
@@ -441,10 +484,21 @@ export async function openCellInAgentsWindow(deps: CellActionDeps, item: LocalCe
     return false;
   }
   if (cell.localState === "running" && !isOpen(host, cell)) {   // review: first: the host would refuse it in the window only
-    if ((await vscode.window.showInformationMessage(t.agentsRunningElsewhere(cell.name), t.stopIt)) === t.stopIt) {
+    const pick = await vscode.window.showInformationMessage(t.agentsRunningElsewhere(cell.name), t.moveIt, t.stopIt);
+    if (pick === t.stopIt) {
       await vscode.commands.executeCommand(CMD_STOP_CELL, item);
     }
-    return false;
+    if (pick !== t.moveIt) {
+      return false;
+    }
+    // #2309 (m): the person chose the move, so no second question: stop it, wait until it no longer runs, then open it
+    // here (the cell continues its last conversation in the Agents window, a4sx 0.59.6+)
+    const moved = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: t.moving(cell.name) },
+      () => stopForMove(deps, cli, item));
+    if (!moved) {
+      return false;
+    }
+    return openCellInAgentsWindow(deps, moved);
   }
   if (!agentsWindowSetUp(host, vscode.env.uriScheme)) {
     // cell01: a modal, not a toast that vanishes after a few seconds with the only way forward on it
