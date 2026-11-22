@@ -320,7 +320,7 @@ export async function saveCellConversation(deps: CellActionDeps, item: LocalCell
 export function backupEntries(rows: readonly SessionRow[], label: string): SavedEntry[] {
   const when = (r: SessionRow) => (typeof r.updated_at === "string" ? r.updated_at : typeof r.created_at === "string" ? r.created_at : "");
   return rows.filter((r) => r.label === label).sort((a, b) => when(b).localeCompare(when(a)))
-    .map((r) => ({ id: r.id, label: showText(r.label), title: showText(r.title, 120) }));
+    .map((r) => ({ id: r.id, label: showText(r.label), title: [showText(r.title, 120), showText(when(r).replace("T", " ").slice(0, 16), 20)].filter(Boolean).join(" · ") || undefined }));
 }
 
 /** The saved-session pick's rows: label (else title, else id); title and last change; newest first. */
