@@ -3,6 +3,9 @@
 ## 0.9.6
 
 From the from-scratch run on 0.9.4 (a4sx #2309 F4, F5, F12):
+- **The Agents window's set-up question is a dialog**, not a notification that vanished after a few seconds with the only way forward on it.
+- **This computer's last error has its time** ("Last error 11-21 16:00: …"). An error from before a start that then ran is greyed and reads **Earlier error**. After the agent host ended without a clean stop (a restart of the computer, a kill), the node says so: "agent host ended without a clean stop (e.g. a restart)".
+- **The status bar shows the counts from the start.** VS Code reads the cells once, a few seconds after it starts, so the status bar has them before the a4sx view is opened.
 - **Restricted Mode.** VS Code doesn't let an extension start a terminal in a window you haven't trusted. Before, **Set up the Agents window** from a notification then did nothing at all. Setting up the Agents window and starting the agent host now say so first and offer **Manage Workspace Trust**; nothing starts until you trust the window.
 - **Open in Agents window goes on after the setup.** When the Agents window wasn't set up yet, choosing **Set up the Agents window** in its question now waits until the setup is done and the agent host answers, then opens the cell. There is no second click. A notification shows while it waits, and Cancel stops waiting. If the setup doesn't finish within 30 seconds, a message says so and names the setup's terminal.
 - **My sessions after Save its conversation.** My sessions reads your library again a few times while the save runs (after about 8, 20 and 45 seconds), so the new entry or version shows up without a Refresh. With a newer a4sx CLI the save's terminal also ends with one line instead of the server's raw answer.

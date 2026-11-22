@@ -68,6 +68,8 @@ export const CMD_OPEN_LIBRARY = "a4sx.openLibrary";
 export const CMD_SIGN_IN = "a4sx.signIn";
 export const CMD_SIGN_OUT = "a4sx.signOut";
 export const CMD_REFRESH = "a4sx.refreshSessions";
+/** cell01: when the Cells data is first read after VS Code starts (for the status bar), before the view is opened. */
+export const STARTUP_READ_MS = 3_000;
 export const CMD_RESUME = "a4sx.resumeSession";
 export const CMD_RESUME_CLAUDE = "a4sx.resumeInClaude";
 export const CMD_OPEN_SESSION = "a4sx.openSessionOnWeb";
@@ -1100,6 +1102,9 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(hostStatusPoll(cellsView, () => cells.rereadHostNow()));
   // cell01 (#2301, the looks): the status bar shows what the Cells view last read; it runs nothing itself
   context.subscriptions.push(cellsStatusBar(cells));
+  // cell01 (#2309): the status bar showed its counts only after the a4sx view was opened once: one read at startup
+  const startupRead = setTimeout(() => void cells.refresh(), STARTUP_READ_MS);
+  context.subscriptions.push({ dispose: () => clearTimeout(startupRead) });
   const refreshCells = () => void cells.refresh();
   /** Refresh after an update or a settings change: the CLI's version is asked again too. */
   const refreshAll = () => {
