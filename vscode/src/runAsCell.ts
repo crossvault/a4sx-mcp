@@ -208,6 +208,7 @@ export async function runAsCell(deps: CellCommandDeps, session: RunAsCellSession
   }
   const terminal = openCommandTerminal(name, cli, CLI_NAME, args, cwd, claude.env, undefined, true);
   deps.terminals.add(terminal);
+  deps.provider.rereadCellsSoon();   // #2309 (l): the row shows the cell running without a Refresh
   if (claudeSignInHint(picked.choice, load.legacy === true, await deps.provider.versions.version(cli))) {
     void vscode.window.showInformationMessage(t.claudeSignIn);   // not awaited: it never blocks the start
   }
