@@ -403,6 +403,12 @@ function track(deps: CellCommandDeps, t: vscode.Terminal): vscode.Terminal {
   return t;
 }
 
+/** #2309 (l): a cell launch in a terminal from here: tracked, and the Cells view reads the list again soon after. */
+function launched(deps: CellCommandDeps, t: vscode.Terminal): vscode.Terminal {
+  deps.provider.rereadCellsSoon();
+  return track(deps, t);
+}
+
 /** The folder the user last started this cell in from here, when it is still there. */
 function rememberedFolder(state: State, cell: LocalCell): string | undefined {
   const all = state.get<unknown>(CELL_FOLDERS_KEY);
@@ -614,7 +620,7 @@ export async function startCell(deps: CellCommandDeps, item: LocalCellItem | und
   const args = cellLaunchArgs(cell, item.all, session)!;
   const short = plan.kind === "none" ? "" : plan.sessionId.slice(0, 8);
   const shownCwd = showText(cwd, 300) ?? cwd;
-  const terminal = track(deps, openCommandTerminal(
+  const terminal = launched(deps, openCommandTerminal(
     CELL_CMD_TEXTS.cellTerminal(cell.name), cli, CLI_NAME, args, cwd, claude.env, resuming ? t.banner(short, shownCwd) : undefined, true,
   ));
   await rememberFolder(deps.state, cell, cwd);
@@ -642,7 +648,7 @@ export async function newCell(deps: CellCommandDeps): Promise<vscode.Terminal | 
   if (cwd === undefined) {
     return undefined;
   }
-  return track(deps, openCommandTerminal(CELL_CMD_TEXTS.newCellTerminal, cli, CLI_NAME, NEW_CELL_ARGS, cwd, claude.env, undefined, true));
+  return launched(deps, openCommandTerminal(CELL_CMD_TEXTS.newCellTerminal, cli, CLI_NAME, NEW_CELL_ARGS, cwd, claude.env, undefined, true));
 }
 
 /**
@@ -672,7 +678,7 @@ export async function startCellHere(deps: CellCommandDeps, item: RemoteCellItem 
     return undefined;
   }
   const name = item.peer.name;
-  const terminal = track(deps, openCommandTerminal(CELL_CMD_TEXTS.startHereTerminal(name), cli, CLI_NAME, args, cwd, claude.env, undefined, true));
+  const terminal = launched(deps, openCommandTerminal(CELL_CMD_TEXTS.startHereTerminal(name), cli, CLI_NAME, args, cwd, claude.env, undefined, true));
   void vscode.window.showInformationMessage(CELL_CMD_TEXTS.startHereStarted(name, showText(cwd, 300) ?? cwd));
   return terminal;
 }

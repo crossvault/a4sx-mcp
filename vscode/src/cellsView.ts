@@ -19,6 +19,12 @@ export const CMD_NEW_CELL = "a4sx.newCell";
 export const CMD_START_CELL_HERE = "a4sx.startCellHere";
 /** #2309 review: the one extra cell-list read after a host change. */
 export const CELLS_REREAD_AFTER_MS = 5_000;
+/**
+ * #2309 (l), cell01: a cell this view started in a terminal stayed "stored" until a Refresh: its start changes no file
+ * the view watches, and the CLI records that it runs only once the launch is up. The cell list is read again a few
+ * times after such a start (the launch's sign-in and Claude Code's start take a few seconds to half a minute).
+ */
+export const CELLS_LAUNCH_REREADS_MS: readonly number[] = [4_000, 12_000, 30_000];
 export const CMD_START_AGENT_HOST = "a4sx.startAgentHost";
 export const CMD_SETUP_AGENTS_WINDOW = "a4sx.setupAgentsWindow";
 export const CMD_STOP_AGENT_HOST = "a4sx.stopAgentHost";
@@ -480,6 +486,28 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
     if (this.load?.kind === "ok" && this.load.cells.length && !this.load.legacy) {
       this.host = undefined;
       this.changed.fire();
+    }
+  }
+
+  /**
+   * #2309 (l): after a cell start in a terminal from here, the cell list is read again a few times, keeping the host
+   * status it had (no open-mark flicker). Cancelled on dispose, like the other delayed reads.
+   */
+  rereadCellsSoon(delays: readonly number[] = CELLS_LAUNCH_REREADS_MS): void {
+    for (const ms of delays) {
+      const t = setTimeout(() => {
+        this.timers.delete(t);
+        const keep = this.hostSeen;
+        void this.refresh().then(() => {
+          if (!this.hostSeen && keep) {
+            this.hostSeen = keep;
+            this.changed.fire();
+            this.summaryChanged.fire();
+          }
+        }, () => undefined);
+      }, ms);
+      t.unref?.();
+      this.timers.add(t);
     }
   }
 

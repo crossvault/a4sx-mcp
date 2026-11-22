@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **A cell you start from the Cells view shows as running without a Refresh.** After **Start**, **New cell** or **Start on this computer** opens the cell's terminal, the Cells view reads the cell list again after about 4, 12 and 30 seconds, until the launch has recorded that the cell runs. Before, the row read "stored" until you pressed Refresh.
+
 ## 0.9.6
 
 From the from-scratch run on 0.9.4 (a4sx #2309 F4, F5, F12):
