@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **This computer says when the agent host ended because its terminal or VS Code was closed:** "agent host ended when its terminal or VS Code was closed". This needs an a4sx CLI that records that the host's terminal went away (the next CLI release); closing VS Code closes that terminal too. When no reason is recorded (an older CLI, Ctrl+C, a crash), the texts stay as before. The "ended without a clean stop" row is not shown when the reason is known.
 - **A cell you start from the Cells view shows as running without a Refresh.** After **Start**, **New cell** or **Start on this computer** opens the cell's terminal, the Cells view reads the cell list again after about 4, 12 and 30 seconds, so the row shows the cell running once its launch has recorded that. This also applies to **Run as cell**, **Convert to a cell** and continuing a saved session in a cell. Before, the row read "stored" until you pressed Refresh.
 
 ## 0.9.6

@@ -235,7 +235,8 @@ export class ThisComputerItem extends vscode.TreeItem {
 
 /** The rows under This computer: whether the agent host runs, the actions that apply, and the last error. */
 export function thisComputerChildren(host: AgentHostStatus, cliCanStop = false): vscode.TreeItem[] {
-  const state = new MessageItem(host.running && host.address ? AGENT_HOST_TEXTS.running(host.address) : AGENT_HOST_TEXTS.stopped,
+  const state = new MessageItem(host.running && host.address ? AGENT_HOST_TEXTS.running(host.address)
+    : host.endedWhy === "terminal closed" ? AGENT_HOST_TEXTS.endedClosed : AGENT_HOST_TEXTS.stopped,
     host.running ? "pass" : "circle-slash");
   if (host.running) {
     state.iconPath = themed("pass", CELL_ICON_COLORS.running);
@@ -264,7 +265,8 @@ export function thisComputerChildren(host: AgentHostStatus, cliCanStop = false):
     setup.tooltip = AGENT_HOST_TEXTS.setupTooltip;
     out.push(setup);
   }
-  if (!host.running && host.startedAt && !host.stoppedAt) {   // cell01: an unclean end (a restart, a kill) is said
+  // cell01: an unclean end (a restart, a kill) is said; not when the host said why (Windows ends it ~5 s after a close)
+  if (!host.running && host.startedAt && !host.stoppedAt && !host.endedWhy) {
     const gone = new MessageItem(AGENT_HOST_TEXTS.uncleanEnd, "debug-disconnect");
     gone.iconPath = themed("debug-disconnect", CELL_ICON_COLORS.attention);
     gone.tooltip = AGENT_HOST_TEXTS.uncleanEndTooltip(host.startedAt);
@@ -272,7 +274,7 @@ export function thisComputerChildren(host: AgentHostStatus, cliCanStop = false):
   }
   if (host.lastError) {
     const at = shortTime(host.lastError.at);
-    // cell01: an error from before a start that then ran is stale: greyed and named so (ISO times compare as text)
+    // cell01: an error from before a start that then ran is stale: greyed and named so
     const stale = host.running && isBefore(host.lastError.at, host.startedAt);
     const err = new MessageItem(stale ? AGENT_HOST_TEXTS.earlierError(host.lastError.text, at) : AGENT_HOST_TEXTS.lastError(host.lastError.text, at), "warning");
     err.iconPath = themed("warning", stale ? "disabledForeground" : CELL_ICON_COLORS.attention);
