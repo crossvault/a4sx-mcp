@@ -5,6 +5,7 @@
 // profile's headers.
 import * as vscode from "vscode";
 import { ApiError, Client, listProfiles, MESSAGES, Profile, ProfilesState, SCOPE_ORGANIZE, SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE } from "./api";
+import { BusyRetry } from "./busyRetry";
 
 /** The scopes the "Sign in again to allow" item may offer (the step-up allow-list). */
 const STEP_UP_SCOPES: readonly string[] = [SCOPE_PROFILES_READ, SCOPE_PROFILES_WRITE, SCOPE_ORGANIZE];
@@ -286,6 +287,9 @@ export class ProfilesProvider implements vscode.TreeDataProvider<vscode.TreeItem
     private readonly onSource: (fromCli: boolean) => void = () => undefined,
   ) {}
 
+  /** #2309: a busy answer (a deploy, the server warming up) is read again by itself. */
+  readonly busy = new BusyRetry(() => this.refresh());
+
   refresh(): void {
     this.changed.fire();
   }
@@ -351,6 +355,11 @@ export class ProfilesProvider implements vscode.TreeDataProvider<vscode.TreeItem
       this.pending = undefined;
     } catch (e) {
       this.data = undefined;
+      if (e instanceof ApiError && e.code === "busy") {
+        this.busy.busy(e.retryAfterMs);
+      } else {
+        this.busy.settled();
+      }
       if (e instanceof ApiError && e.code === "insufficient-scope" && e.requiredScope) {
         this.set("needs-scope");
         const scope = e.requiredScope.slice(0, SERVER_LINE_MAX);
@@ -367,6 +376,7 @@ export class ProfilesProvider implements vscode.TreeDataProvider<vscode.TreeItem
       const message = e instanceof ApiError ? e.message : MESSAGES.unreachable;
       return [new MessageItem(message, "error", { command: "a4sx.refreshProfiles", title: "Refresh" })];
     }
+    this.busy.settled();
     this.data = data;
     if (data.profiles.length === 0) {
       this.set("empty");
@@ -377,6 +387,7 @@ export class ProfilesProvider implements vscode.TreeDataProvider<vscode.TreeItem
   }
 
   dispose(): void {
+    this.busy.dispose();
     this.changed.dispose();
   }
 }

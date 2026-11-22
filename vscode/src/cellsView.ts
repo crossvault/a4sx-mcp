@@ -7,6 +7,7 @@
 // closes, and when the CLI's cell list changes. Without the CLI, the view is empty and its welcome text
 // offers "Install a4sx CLI". An a4sx CLI older than 0.25.0 still lists its cells, under an "update" line.
 import * as vscode from "vscode";
+import { BUSY_BACKOFF_MS, BusyRetry } from "./busyRetry";
 import { CELLS_LIST_ARGS, LocalCell, localCellDescription, localCellTooltip, showText, startableCell } from "./cells";
 import { CliGate, cliGate, IN_SESSION_MESSAGE, MeshPolicy, parseCellsAnswer, parseCliError, parseCliVersion, parsePeersAnswer, peerPresence, peersArgs, RemoteCell, VERSION_ARGS } from "./cliJson";
 import { MessageItem } from "./sessionsView";
@@ -322,6 +323,11 @@ type PeersLoad = { kind: "ok"; peers: RemoteCell[] } | { kind: "error" };
 export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Disposable {
   private readonly changed = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.changed.event;
+  /**
+   * #2309 (cell01, a deploy window): "Could not read the cells on other machines" stayed until a Refresh. A failed read
+   * is read again by itself with a back-off (5 s … 60 s, at most 10 times), and the row goes once a read works.
+   */
+  readonly peersRetry = new BusyRetry(() => this.changed.fire(), BUSY_BACKOFF_MS, 10);
   load: CellsLoad | undefined;
   private inflight: Promise<CellsLoad> | undefined;
   private peers = new Map<string, Promise<PeersLoad>>();
@@ -585,10 +591,17 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
     }
     const out = await this.deps.run(cli.path, args, 30_000);
     const peers = out.code === 0 ? parsePeersAnswer(out.stdout, meshId) : undefined;
-    return peers ? { kind: "ok", peers } : { kind: "error" };
+    if (!peers) {
+      this.peers.delete(meshId);   // not kept: the retry (or the next refresh) reads it again
+      this.peersRetry.busy();
+      return { kind: "error" };
+    }
+    this.peersRetry.settled();
+    return { kind: "ok", peers };
   }
 
   dispose(): void {
+    this.peersRetry.dispose();
     this.timers.forEach((t) => clearTimeout(t));   // #35 review: no CLI run after the extension stopped
     this.timers.clear();
     this.changed.dispose();

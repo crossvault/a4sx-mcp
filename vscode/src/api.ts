@@ -23,6 +23,8 @@ export class ApiError extends Error {
     public readonly status?: number,
     /** For "insufficient-scope": the scope the server says the route needs. */
     public readonly requiredScope?: string,
+    /** For "busy" (429/503): the server's Retry-After, in ms, when it sent one (#2309: the views retry by it). */
+    public readonly retryAfterMs?: number,
   ) {
     super(message);
   }
@@ -120,12 +122,22 @@ export function errorCode(data: any): string | undefined {
   return typeof data?.error?.code === "string" ? data.error.code : undefined;
 }
 
-export function fail(status: number): never {
+/** Retry-After (seconds, or an HTTP date) in ms, at most 5 minutes; undefined when absent or unreadable. */
+export function retryAfterToMs(raw: string | undefined, now = Date.now()): number | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const s = /^\s*(\d{1,6})\s*$/.exec(raw);
+  const ms = s ? Number(s[1]) * 1000 : Date.parse(raw) - now;
+  return Number.isFinite(ms) && ms >= 0 ? Math.min(ms, 300_000) : undefined;
+}
+
+export function fail(status: number, retryAfter?: string): never {
   if (status === 401) {
     throw new ApiError("unauthorized", MESSAGES.unauthorized, status);
   }
   if (status === 429 || status === 503) {
-    throw new ApiError("busy", MESSAGES.busy, status);
+    throw new ApiError("busy", MESSAGES.busy, status, undefined, retryAfterToMs(retryAfter));
   }
   throw new ApiError("http", MESSAGES.http(status), status);
 }
@@ -148,9 +160,9 @@ export interface SessionRow {
 }
 
 export async function listSessions(c: Client, token: string): Promise<SessionRow[]> {
-  const { status, data } = await call(c, "/library/sessions", { token });
+  const { status, data, retryAfter } = await call(c, "/library/sessions", { token });
   if (status !== 200) {
-    fail(status);
+    fail(status, retryAfter);
   }
   if (!Array.isArray(data?.sessions)) {
     throw new ApiError("bad-response", MESSAGES.badResponse, status);
@@ -283,7 +295,7 @@ export function listingWebUrl(base: string, row: { id: string; tenant?: string }
  * a 403 naming `required_scope` is "insufficient-scope" (the caller can offer a new sign-in);
  * any other 401/403, and a 404/405 for the route itself, mean the server doesn't offer it yet.
  */
-function scopedFail(status: number, data: any, notSupported: string): never {
+function scopedFail(status: number, data: any, notSupported: string, retryAfter?: string): never {
   const code = errorCode(data);
   const need = data?.error?.details?.required_scope;
   if (status === 403 && code === "insufficient_scope" && typeof need === "string" && need) {
@@ -292,7 +304,7 @@ function scopedFail(status: number, data: any, notSupported: string): never {
   if (status === 401 || status === 403 || status === 405 || (status === 404 && code !== "no_such_profile")) {
     throw new ApiError("not-supported", notSupported, status);
   }
-  fail(status);
+  fail(status, retryAfter);
 }
 
 /** The non-secret fields of a launch profile. The server never stores an API key in one. */
@@ -373,9 +385,9 @@ function profilesState(status: number, data: any): ProfilesState {
 export const PROFILE_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 export async function listProfiles(c: Client, token: string): Promise<ProfilesState> {
-  const { status, data } = await call(c, "/library/profiles", { token });
+  const { status, data, retryAfter } = await call(c, "/library/profiles", { token });
   if (status !== 200) {
-    scopedFail(status, data, MESSAGES.profilesNotSupported);
+    scopedFail(status, data, MESSAGES.profilesNotSupported, retryAfter);
   }
   return profilesState(status, data);
 }
