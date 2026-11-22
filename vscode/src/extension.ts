@@ -1220,7 +1220,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(CMD_START_CELL_HERE, (item?: RemoteCellItem) => startCellHere(cellDeps, item)),
     vscode.commands.registerCommand(CMD_CELL_MESSAGES, (item?: RemoteCellItem) => cellLastMessages(actionDeps, item)),
     vscode.commands.registerCommand(CMD_CELL_EXPLAIN, (item?: RemoteCellItem) => cellWhyMessage(actionDeps, item)),
-    vscode.commands.registerCommand(CMD_CELL_SAVE, (item?: LocalCellItem) => saveCellConversation(actionDeps, item, { saved: savedEntries(auth) })),
+    vscode.commands.registerCommand(CMD_CELL_SAVE, (item?: LocalCellItem) => saveCellConversation(actionDeps, item, { library: librarySessions(auth) })),
     vscode.commands.registerCommand(CMD_CELL_FROM_SAVED, (item?: LocalCellItem) => startCellFromSaved(actionDeps, item, { sessions: librarySessions(auth) })),
     vscode.commands.registerCommand(CMD_CELL_OPEN_AGENTS, (item?: LocalCellItem) => openCellInAgentsWindow(actionDeps, item)),
     vscode.commands.registerCommand(CMD_START_AGENT_HOST, () => startAgentHost(cellDeps)),

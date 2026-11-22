@@ -71,12 +71,29 @@ function showId(id: string): string {
   return clean.length > 80 ? `${clean.slice(0, 79)}…` : clean;
 }
 
-/** `push <transcript> [--into ID] [--dry-run]`; undefined for an entry id the CLI doesn't take. */
-export function pushArgs(file: string, o: { into?: string; preview?: boolean } = {}): string[] | undefined {
+/**
+ * `push <transcript> [--into ID | --label L --title T] [--dry-run]`; undefined for an entry id the CLI doesn't take.
+ * `label` and `title` name a new entry (a4sx #2309 (o): a cell's saves go to `<cell>-backup`, as the deck's do).
+ */
+export function pushArgs(file: string, o: { into?: string; preview?: boolean; label?: string; title?: string } = {}): string[] | undefined {
   if (o.into !== undefined && !SESSION_ID.test(o.into)) {
     return undefined;
   }
-  return ["push", file, ...(o.into === undefined ? [] : ["--into", o.into]), ...(o.preview ? ["--dry-run"] : [])];
+  const named = o.into === undefined && o.label ? ["--label", o.label, ...(o.title ? ["--title", o.title] : [])] : [];
+  return ["push", file, ...(o.into === undefined ? [] : ["--into", o.into]), ...named, ...(o.preview ? ["--dry-run"] : [])];
+}
+
+/**
+ * a4sx #2309 (o): the library entry a cell's saves go to, the name every front end uses (the herdr deck's backup).
+ * One scheme: not one `session-<id>` entry per save.
+ */
+export function cellBackupLabel(cell: string): string {
+  return `${cell}-backup`;
+}
+
+/** The title a cell's backup entry gets when the first save makes it. */
+export function cellBackupTitle(cell: string): string {
+  return `${cell}: backups`;
 }
 
 /** The entry pick's rows, for a session that is in the library more than once; the last row saves without `--into`. */
