@@ -7,6 +7,7 @@
 // closes, and when the CLI's cell list changes. Without the CLI, the view is empty and its welcome text
 // offers "Install a4sx CLI". An a4sx CLI older than 0.25.0 still lists its cells, under an "update" line.
 import * as vscode from "vscode";
+import { BUSY_BACKOFF_MS, BusyRetry } from "./busyRetry";
 import { CELLS_LIST_ARGS, LocalCell, localCellDescription, localCellTooltip, showText, startableCell } from "./cells";
 import { CliGate, cliGate, IN_SESSION_MESSAGE, MeshPolicy, parseCellsAnswer, parseCliError, parseCliVersion, parsePeersAnswer, peerPresence, peersArgs, RemoteCell, VERSION_ARGS } from "./cliJson";
 import { MessageItem } from "./sessionsView";
@@ -111,6 +112,18 @@ export interface CliOutput {
 /** Runs the CLI with an argv array (no shell); never rejects. */
 export type CliRunner = (cli: string, args: readonly string[], timeoutMs?: number) => Promise<CliOutput>;
 export type CliResolution = { kind: "found"; path: string } | { kind: "no-cli" } | { kind: "bad-config" } | { kind: "remote-local" } | { kind: "in-session" };
+
+/**
+ * #2309 review: whether a failed `mesh peers --json` looks temporary (the server busy or unreachable, a timeout), so
+ * it is worth reading again by itself; a refusal (not a member, no such mesh, an older CLI) isn't.
+ */
+export function peersErrorLooksTemporary(out: CliOutput): boolean {
+  const code = parseCliError(out.stdout)?.code ?? "";
+  if (/not_member|forbidden|no_such|unknown_mesh|unauthorized|revoked|invalid/i.test(code) || /invalid choice/i.test(out.stderr)) {
+    return false;
+  }
+  return out.code === null || !code || /busy|rate|unavailable|warm|timeout|unreachable|503|502|504|429/i.test(code + " " + out.stderr);
+}
 
 /** `a4sx --version` once per CLI path until cleared (Refresh, an update, a settings change). Never rejects. */
 export class CliVersions {
@@ -322,6 +335,12 @@ type PeersLoad = { kind: "ok"; peers: RemoteCell[] } | { kind: "error" };
 export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Disposable {
   private readonly changed = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.changed.event;
+  /**
+   * #2309 (cell01, a deploy window): "Could not read the cells on other machines" stayed until a Refresh. A failed read
+   * stays cached (redraws don't read again), and its own mesh's timer reads it again with a back-off (5 s … 60 s, at
+   * most 10 times; only errors that look temporary); the row goes once a read works. Review: one retry per mesh.
+   */
+  readonly peersRetry = new Map<string, BusyRetry>();
   load: CellsLoad | undefined;
   private inflight: Promise<CellsLoad> | undefined;
   private peers = new Map<string, Promise<PeersLoad>>();
@@ -348,6 +367,8 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
       await this.inflight.catch(() => undefined);
     }
     this.peers = new Map();
+    this.peersRetry.forEach((r) => r.dispose());   // review: a Refresh starts clean, no old timer drops a fresh result
+    this.peersRetry.clear();
     this.host = undefined;
     this.hostSeen = undefined;
     this.inflight = this.read();
@@ -568,6 +589,11 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
       ...(others.length > FOLD_OTHERS_ABOVE ? [new OtherCellsItem(group.meshId, others)] : [])];
   }
 
+  /** Tests: whether mesh `meshId`'s failed peers read is planned to be read again. */
+  peersRetryPending(meshId: string): boolean {
+    return !!this.peersRetry.get(meshId)?.pending;
+  }
+
   private peersOf(meshId: string): Promise<PeersLoad> {
     let p = this.peers.get(meshId);
     if (!p) {
@@ -585,10 +611,26 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
     }
     const out = await this.deps.run(cli.path, args, 30_000);
     const peers = out.code === 0 ? parsePeersAnswer(out.stdout, meshId) : undefined;
-    return peers ? { kind: "ok", peers } : { kind: "error" };
+    let retry = this.peersRetry.get(meshId);
+    if (!peers) {
+      if (peersErrorLooksTemporary(out)) {
+        if (!retry) {
+          retry = new BusyRetry(() => {   // this mesh only: drop its cached failure, redraw (which reads it again)
+            this.peers.delete(meshId);
+            this.changed.fire();
+          }, BUSY_BACKOFF_MS, 10);
+          this.peersRetry.set(meshId, retry);
+        }
+        retry.busy();
+      }
+      return { kind: "error" };   // kept in the cache: a redraw doesn't read again
+    }
+    retry?.settled();
+    return { kind: "ok", peers };
   }
 
   dispose(): void {
+    this.peersRetry.forEach((r) => r.dispose());
     this.timers.forEach((t) => clearTimeout(t));   // #35 review: no CLI run after the extension stopped
     this.timers.clear();
     this.changed.dispose();

@@ -5,6 +5,7 @@
 import * as vscode from "vscode";
 import { CLI_LIBRARY_TEXTS } from "./cliLibrary";
 import { ApiError, Client, listSessions, MESSAGES, SessionRow } from "./api";
+import { BusyRetry } from "./busyRetry";
 
 export const SESSION_CONTEXT = "a4sx.session";
 /** A session that sits in a folder: it also gets "Remove from folder". */
@@ -196,6 +197,9 @@ export class SessionsProvider implements vscode.TreeDataProvider<vscode.TreeItem
   /** review: the CLI's list, read once until Refresh (two process starts and two server calls each time). */
   private cliRows: Promise<SessionRow[] | undefined> | undefined;
 
+  /** #2309: a busy answer (a deploy, the server warming up) is read again by itself. */
+  readonly busy = new BusyRetry(() => this.refresh());
+
   refresh(): void {
     this.rows = undefined;
     this.cliRows = undefined;
@@ -281,6 +285,11 @@ export class SessionsProvider implements vscode.TreeDataProvider<vscode.TreeItem
       rows = this.rows ?? await listSessions(this.client(), token);
     } catch (e) {
       this.show(undefined);
+      if (e instanceof ApiError && e.code === "busy") {
+        this.busy.busy(e.retryAfterMs);
+      } else {
+        this.busy.settled();
+      }
       if (e instanceof ApiError && e.code === "unauthorized") {
         await this.auth.clear();
         this.set("signed-out");
@@ -291,6 +300,7 @@ export class SessionsProvider implements vscode.TreeDataProvider<vscode.TreeItem
       const message = e instanceof ApiError ? e.message : MESSAGES.unreachable;
       return [new MessageItem(message, "error", { command: "a4sx.refreshSessions", title: "Refresh" })];
     }
+    this.busy.settled();
     this.rows = rows;
     if (rows.length === 0) {
       this.show(undefined);
@@ -328,6 +338,7 @@ export class SessionsProvider implements vscode.TreeDataProvider<vscode.TreeItem
   }
 
   dispose(): void {
+    this.busy.dispose();
     this.changed.dispose();
   }
 }
