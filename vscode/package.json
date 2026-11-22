@@ -1026,7 +1026,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
-    "test": "mocha --require ./out/test/fakeVscode.js \"out/test/unit/**/*.test.js\"",
+    "test": "mocha --exit --require ./out/test/fakeVscode.js \"out/test/unit/**/*.test.js\"",
     "test:integration": "npm run compile && vscode-test",
     "package": "vsce package --no-dependencies",
     "ls": "vsce ls --no-dependencies"
