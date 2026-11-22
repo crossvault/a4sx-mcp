@@ -77,6 +77,22 @@ describe("#2309 (l): the Cells view reads the list again after a cell start in a
     assert.strictEqual(listReads(h.runs) - before, 2, "none after dispose");
   });
 
+  it("a second start replaces the first one's pending re-reads (no pile-up of refreshes)", async () => {
+    const h = harness();
+    await h.provider.getChildren();
+    const before = listReads(h.runs);
+    h.real([60, 70]);
+    h.real([5]);
+    await new Promise((r) => setTimeout(r, 120));
+    assert.strictEqual(listReads(h.runs) - before, 1, "only the second start's one re-read ran");
+    h.provider.dispose();
+  });
+
+  it("Run as cell and its callers (Convert, continue a saved session) ask for the re-reads too", () => {
+    const src = require("fs").readFileSync(require("path").join(__dirname, "..", "..", "..", "src", "runAsCell.ts"), "utf8");
+    assert.match(src, /deps\.terminals\.add\(terminal\);\n\s*deps\.provider\.rereadCellsSoon\(\);/);
+  });
+
   it("the delays cover a launch's sign-in and Claude Code's start (a few seconds to half a minute)", () => {
     assert.ok(CELLS_LAUNCH_REREADS_MS[0] >= 2_000 && CELLS_LAUNCH_REREADS_MS[CELLS_LAUNCH_REREADS_MS.length - 1] >= 30_000);
   });

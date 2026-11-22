@@ -354,6 +354,8 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
   private host: Promise<AgentHostStatus | { failed: string } | undefined> | undefined;
   /** #35 review: the delayed re-reads still to come (cleared on dispose), and their delay (tests shorten it). */
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
+  /** #2309 (l): the pending re-reads after a cell start from here (also in `timers`); a new start replaces them. */
+  private readonly launchTimers = new Set<ReturnType<typeof setTimeout>>();
   rereadAfterMs = CELLS_REREAD_AFTER_MS;
   /** #2309: the last host state seen (running and the open set), across refreshes: a change re-reads the cells. */
   private hostKey: string | undefined;
@@ -494,9 +496,16 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
    * status it had (no open-mark flicker). Cancelled on dispose, like the other delayed reads.
    */
   rereadCellsSoon(delays: readonly number[] = CELLS_LAUNCH_REREADS_MS): void {
+    // review: a second start replaces the first one's re-reads (each refresh also reads the other machines again)
+    this.launchTimers.forEach((t) => {
+      clearTimeout(t);
+      this.timers.delete(t);
+    });
+    this.launchTimers.clear();
     for (const ms of delays) {
       const t = setTimeout(() => {
         this.timers.delete(t);
+        this.launchTimers.delete(t);
         const keep = this.hostSeen;
         void this.refresh().then(() => {
           if (!this.hostSeen && keep) {
@@ -508,6 +517,7 @@ export class CellsProvider implements vscode.TreeDataProvider<vscode.TreeItem>, 
       }, ms);
       t.unref?.();
       this.timers.add(t);
+      this.launchTimers.add(t);
     }
   }
 
