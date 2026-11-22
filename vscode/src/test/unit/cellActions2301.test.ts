@@ -227,6 +227,30 @@ describe("#2301 E6: Save its conversation…", () => {
     assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}' '--into' 'col-lib-0a1b2c3d1111'\n`]);
   });
 
+  it("#2309 (o) review: a conversation already in an entry the person named is a new version of THAT entry, by id; nothing is renamed", async () => {
+    const h = harness();
+    const file = recordConversation(h, "docs", "ins_A2");
+    calls.modalChoices.push(CELL_ACTION_TEXTS.save);
+    await saveCellConversation(h.deps, h.local("docs"), { library: async () => [
+      { id: "col-lib-0a1b2c3d1111", label: "my-notes", title: "my own name", sessions: ["lib-0a1b2c3d1111"] },
+      { id: "col-lib-zzzzzzzzzzzz", title: "docs-backup, only in a title" }] });
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}' '--into' 'col-lib-0a1b2c3d1111'\n`]);
+    assert.ok(!calls.terminals[0].sent[0].includes("--label"), "no label: it would rename the person's entry");
+  });
+
+  it("#2309 (o) review: an entry whose title only contains «<cell>-backup» is never used, and no library read means no label", async () => {
+    const h = harness();
+    const file = recordConversation(h, "docs", "ins_A2");
+    calls.modalChoices.push(CELL_ACTION_TEXTS.save);
+    await saveCellConversation(h.deps, h.local("docs"), { library: async () => [{ id: "col-lib-zzzzzzzzzzzz", title: "docs-backup copy" }] });
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}' '--label' 'docs-backup' '--title' 'docs: backups'\n`]);
+    const h2 = harness();
+    const file2 = recordConversation(h2, "docs", "ins_A2");
+    calls.modalChoices.push(CELL_ACTION_TEXTS.save);
+    await saveCellConversation(h2.deps, h2.local("docs"));
+    assert.deepStrictEqual(calls.terminals[1].sent, [`'${CLI}' 'push' '${file2}'\n`]);
+  });
+
   it("#2309 (o): two entries named «<cell>-backup»: the person picks (newest first), and no row adds a third", async () => {
     const h = harness();
     const file = recordConversation(h, "docs", "ins_A2");
@@ -237,6 +261,7 @@ describe("#2301 E6: Save its conversation…", () => {
       { id: "col-lib-b", label: "docs-backup", updated_at: "2026-11-22T10:00:00Z" }] });
     assert.deepStrictEqual(calls.quickPicks[0].items.map((i) => i.into), ["col-lib-b", "col-lib-a"]);
     assert.strictEqual(calls.quickPicks[0].options.placeHolder, CELL_ACTION_TEXTS.savePickPlaceholder("docs-backup"));
+    assert.match(calls.quickPicks[0].items[0].description, /2026-11-22 10:00/, "each entry's date");
     assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}' '--into' 'col-lib-b'\n`]);
   });
 

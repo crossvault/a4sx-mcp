@@ -30,6 +30,7 @@ import { findLocalSession, librarySlug } from "./localSession";
 import { claudeProjectsDir } from "./nativeSeed";
 import { openCommandTerminal } from "./resume";
 import { runAsCell, RunAsCellSession } from "./runAsCell";
+import { slugOf } from "./tabSession";
 import { cellBackupLabel, cellBackupTitle, entryPickItems, LibraryUnreadable, pushArgs, SAVE_TAB_TEXTS, SavedEntry } from "./saveTab";
 
 export const CMD_CELL_MESSAGES = "a4sx.cellLastMessages";
@@ -276,10 +277,20 @@ export async function saveCellConversation(deps: CellActionDeps, item: LocalCell
   }
   let into: string | undefined;
   const label = cellBackupLabel(cell.name);
+  let named: { label: string; title: string } | undefined;
   if (options.library) {
     let entries: SavedEntry[];
     try {
-      entries = backupEntries(await options.library(), label);
+      const rows = await options.library();
+      entries = backupEntries(rows, label);
+      if (!entries.length) {
+        // review (coordinator): a push without --into lands in the entry keyed by this conversation's session id, and
+        // a label would rename it. So when the conversation is already in an entry (one the person may have named),
+        // the save is a new version of that entry, by its id, and nothing is renamed; only a conversation that is in
+        // no entry yet makes «<cell>-backup».
+        entries = heldEntries(rows, slugOf(plan.sessionId));
+        named = entries.length ? undefined : { label, title: cellBackupTitle(cell.name) };
+      }
     } catch (e) {
       const signedOut = e instanceof LibraryUnreadable && e.signedOut;
       await vscode.window.showErrorMessage(signedOut ? SAVE_TAB_TEXTS.signedOut : SAVE_TAB_TEXTS.libraryUnreadable(e instanceof Error && e.message ? e.message : "unknown error"));
@@ -290,21 +301,21 @@ export async function saveCellConversation(deps: CellActionDeps, item: LocalCell
     } else if (entries.length > 1) {
       // #2309 (o): only the entries of that name: a "new entry" row would add one more of them
       const picked = await vscode.window.showQuickPick(entryPickItems(entries).filter((i) => i.into !== undefined),
-        { title: t.savePickTitle(cell.name), placeHolder: t.savePickPlaceholder(label), matchOnDescription: true });
+        { title: t.savePickTitle(cell.name), placeHolder: named === undefined && entries.every((e) => e.label === label)
+          ? t.savePickPlaceholder(label) : SAVE_TAB_TEXTS.pickEntryPlaceholder, matchOnDescription: true });
       if (!picked) {
         return undefined;
       }
       into = picked.into;
     }
   }
-  const named = { label, title: cellBackupTitle(cell.name) };
-  let args = pushArgs(plan.transcript, into === undefined ? named : { into });
+  let args = pushArgs(plan.transcript, into !== undefined ? { into } : named ?? {});
   if (!args) {
     const again = await vscode.window.showErrorMessage(SAVE_TAB_TEXTS.badEntry((showText(into, 80) ?? "")), SAVE_TAB_TEXTS.saveAsNew);
     if (again !== SAVE_TAB_TEXTS.saveAsNew) {
       return undefined;
     }
-    args = pushArgs(plan.transcript, named)!;
+    args = pushArgs(plan.transcript)!;   // review: never a label here, it would rename the entry of this conversation
   }
   const terminal = openCommandTerminal(t.saveTerminal(cell.name), cli, CLI_NAME, args, undefined, undefined, t.saveBanner(cell.name, short, showText(plan.cwd, 300) ?? plan.cwd));
   deps.terminals.add(terminal);
@@ -316,11 +327,21 @@ export async function saveCellConversation(deps: CellActionDeps, item: LocalCell
   return terminal;
 }
 
+/** Library rows as pick entries, newest first, with each entry's last change in its title line. */
+function newestEntries(rows: readonly SessionRow[]): SavedEntry[] {
+  const when = (r: SessionRow) => (typeof r.updated_at === "string" ? r.updated_at : typeof r.created_at === "string" ? r.created_at : "");
+  return [...rows].sort((a, b) => when(b).localeCompare(when(a)))
+    .map((r) => ({ id: r.id, label: showText(r.label), title: [showText(r.title, 120), showText(when(r).replace("T", " ").slice(0, 16), 20)].filter(Boolean).join(" · ") || undefined }));
+}
+
 /** a4sx #2309 (o): the library entries labelled exactly `label`, newest first (more than one: the person picks). */
 export function backupEntries(rows: readonly SessionRow[], label: string): SavedEntry[] {
-  const when = (r: SessionRow) => (typeof r.updated_at === "string" ? r.updated_at : typeof r.created_at === "string" ? r.created_at : "");
-  return rows.filter((r) => r.label === label).sort((a, b) => when(b).localeCompare(when(a)))
-    .map((r) => ({ id: r.id, label: showText(r.label), title: [showText(r.title, 120), showText(when(r).replace("T", " ").slice(0, 16), 20)].filter(Boolean).join(" · ") || undefined }));
+  return newestEntries(rows.filter((r) => r.label === label));
+}
+
+/** The library entries that already hold the conversation with this slug (by its session member or id), newest first. */
+export function heldEntries(rows: readonly SessionRow[], slug: string): SavedEntry[] {
+  return newestEntries(rows.filter((r) => librarySlug(r) === slug));
 }
 
 /** The saved-session pick's rows: label (else title, else id); title and last change; newest first. */
