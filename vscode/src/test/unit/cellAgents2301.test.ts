@@ -159,7 +159,7 @@ describe("#2301: Open in Agents window", () => {
   it("#2309 F5: after Set up, it goes on by itself: once the host answers and is set up, the cell opens", async () => {
     const notSet = { code: 0, stdout: status({ running: false, vscode: null }), stderr: "" };
     const h = harness([notSet, notSet, { code: 0, stdout: status({}), stderr: "" }]);
-    calls.nextInfoChoice = AGENT_HOST_TEXTS.setup;
+    calls.modalAnswers.set(CELL_ACTION_TEXTS.agentsNotSetUp, AGENT_HOST_TEXTS.setup);
     assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), true);
     assert.deepStrictEqual(calls.terminals.map((t) => t.options.name), [AGENT_HOST_TEXTS.setupTerminal]);
     assert.deepStrictEqual(calls.progress.map((p) => p.title), ["Setting up the Agents window and starting the a4sx agent host, then opening «build»…"]);
@@ -170,7 +170,7 @@ describe("#2301: Open in Agents window", () => {
     const vs = require("vscode") as any;
     const make = vs.window.createTerminal;
     vs.window.createTerminal = (o: unknown) => ({ ...make(o), exitStatus: { code: 0, reason: 2 } });
-    calls.nextInfoChoice = AGENT_HOST_TEXTS.setup;
+    calls.modalAnswers.set(CELL_ACTION_TEXTS.agentsNotSetUp, AGENT_HOST_TEXTS.setup);
     try {
       assert.strictEqual(await openCellInAgentsWindow(quick.deps, quick.item), true);
     } finally {
@@ -178,7 +178,7 @@ describe("#2301: Open in Agents window", () => {
     }
     resetCalls();
     const slow = harness(notSet);   // the setup never finishes in time
-    calls.nextInfoChoice = AGENT_HOST_TEXTS.setup;
+    calls.modalAnswers.set(CELL_ACTION_TEXTS.agentsNotSetUp, AGENT_HOST_TEXTS.setup);
     assert.strictEqual(await openCellInAgentsWindow(slow.deps, slow.item), false);
     assert.deepStrictEqual(calls.errors.map((e) => e.message), [CELL_ACTION_TEXTS.agentsSetupSlow(1)]);
     assert.deepStrictEqual(calls.opened, []);
@@ -188,10 +188,10 @@ describe("#2301: Open in Agents window", () => {
     const notSet = { code: 0, stdout: status({ running: false, vscode: null }), stderr: "" };
     const h = harness(notSet);
     calls.trusted = false;
-    calls.nextInfoChoice = AGENT_HOST_TEXTS.setup;
+    calls.modalAnswers.set(CELL_ACTION_TEXTS.agentsNotSetUp, AGENT_HOST_TEXTS.setup);
     calls.modalChoices.push(CELL_CMD_TEXTS.manageTrust);
     assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), false);
-    assert.deepStrictEqual(calls.modals.map((m) => [m.message, m.items]), [[
+    assert.deepStrictEqual(calls.modals.map((m) => [m.message, m.items]), [[CELL_ACTION_TEXTS.agentsNotSetUp, [AGENT_HOST_TEXTS.setup]], [
       "VS Code's Restricted Mode doesn't let a4sx open the terminal that setting up the Agents window needs. Trust this window (Manage Workspace Trust), then choose it again; nothing was started.",
       ["Manage Workspace Trust"]]]);
     assert.deepStrictEqual(calls.executed.map((e) => e.id), ["workbench.trust.manage"]);
@@ -207,9 +207,10 @@ describe("#2301: Open in Agents window", () => {
   it("the Agents window not set up: offers Set up the Agents window first, even with the host stopped", async () => {
     const h = harness({ code: 0, stdout: status({ running: false, vscode: null }), stderr: "" });
     assert.strictEqual(await openCellInAgentsWindow(h.deps, h.item), false);   // the offer is declined
-    assert.deepStrictEqual(calls.infoPrompts, [{ message: CELL_ACTION_TEXTS.agentsNotSetUp, items: [AGENT_HOST_TEXTS.setup] }]);
+    // cell01: a modal, not a toast that vanishes before it is read
+    assert.deepStrictEqual(calls.modals.map((m) => [m.kind, m.message, m.items]), [["info", CELL_ACTION_TEXTS.agentsNotSetUp, [AGENT_HOST_TEXTS.setup]]]);
     assert.strictEqual(calls.terminals.length, 0);
-    calls.nextInfoChoice = AGENT_HOST_TEXTS.setup;
+    calls.modalAnswers.set(CELL_ACTION_TEXTS.agentsNotSetUp, AGENT_HOST_TEXTS.setup);
     await openCellInAgentsWindow(h.deps, h.item);
     // cell01 (#2309): the first click works: set up here, not through a command a notification may drop
     assert.deepStrictEqual(calls.terminals.map((t) => t.options.name), [AGENT_HOST_TEXTS.setupTerminal]);

@@ -10,7 +10,7 @@ import * as vscode from "vscode";
 import { CELLS_LIST_ARGS, LocalCell, localCellDescription, localCellTooltip, showText, startableCell } from "./cells";
 import { CliGate, cliGate, IN_SESSION_MESSAGE, MeshPolicy, parseCellsAnswer, parseCliError, parseCliVersion, parsePeersAnswer, peerPresence, peersArgs, RemoteCell, VERSION_ARGS } from "./cliJson";
 import { MessageItem } from "./sessionsView";
-import { AGENT_HOST_STATUS_ARGS, AGENT_HOST_TEXTS, AgentHostStatus, agentsWindowSetUp, isOpen, lacksAgentHost, parseAgentHostStatus } from "./agentHostStatus";
+import { AGENT_HOST_STATUS_ARGS, AGENT_HOST_TEXTS, AgentHostStatus, agentsWindowSetUp, isOpen, lacksAgentHost, parseAgentHostStatus, shortTime } from "./agentHostStatus";
 
 export const VIEW_CELLS = "a4sx.cells";
 export const CMD_REFRESH_CELLS = "a4sx.refreshCells";
@@ -245,10 +245,20 @@ export function thisComputerChildren(host: AgentHostStatus, cliCanStop = false):
     setup.tooltip = AGENT_HOST_TEXTS.setupTooltip;
     out.push(setup);
   }
+  if (!host.running && host.startedAt && !host.stoppedAt) {   // cell01: an unclean end (a restart, a kill) is said
+    const gone = new MessageItem(AGENT_HOST_TEXTS.uncleanEnd, "debug-disconnect");
+    gone.iconPath = themed("debug-disconnect", CELL_ICON_COLORS.attention);
+    gone.tooltip = AGENT_HOST_TEXTS.uncleanEndTooltip(host.startedAt);
+    out.push(gone);
+  }
   if (host.lastError) {
-    const err = new MessageItem(AGENT_HOST_TEXTS.lastError(host.lastError.text), "warning");
-    err.iconPath = themed("warning", CELL_ICON_COLORS.attention);
-    err.tooltip = AGENT_HOST_TEXTS.lastErrorTooltip(host.lastError.text, host.lastError.at);
+    const at = shortTime(host.lastError.at);
+    // cell01: an error from before a start that then ran is stale: greyed and named so (ISO times compare as text)
+    const stale = host.running && !!host.startedAt && !!host.lastError.at && host.lastError.at < host.startedAt;
+    const err = new MessageItem(stale ? AGENT_HOST_TEXTS.earlierError(host.lastError.text, at) : AGENT_HOST_TEXTS.lastError(host.lastError.text, at), "warning");
+    err.iconPath = themed("warning", stale ? "disabledForeground" : CELL_ICON_COLORS.attention);
+    err.tooltip = stale ? AGENT_HOST_TEXTS.earlierErrorTooltip(host.lastError.text, host.lastError.at)
+      : AGENT_HOST_TEXTS.lastErrorTooltip(host.lastError.text, host.lastError.at);
     out.push(err);
   }
   return out;

@@ -82,7 +82,7 @@ export const CELL_ACTION_TEXTS = {
   agentsStandalone: (name: string) => `The cell «${name}» isn't in a mesh yet, so the agent host doesn't serve it.`,
   agentsNoStatus: "This a4sx CLI can't say whether its agent host runs (it has no agent-host status command). Update a4sx, then try again.",
   agentsStatusWhat: "read the agent host's status",
-  agentsNotSetUp: "VS Code's Agents window isn't set up for the a4sx agent host on this computer yet. Set it up, then choose Open in Agents window again.",
+  agentsNotSetUp: "VS Code's Agents window isn't set up for the a4sx agent host on this computer yet. Set it up now? a4sx then starts the agent host and opens the cell; nothing is changed if you cancel.",
   agentsNotOpened: "VS Code didn't open the link to the Agents window.",
   // review: a cell running in a terminal here can't also run in the Agents window (one launch per cell)
   agentsRunningElsewhere: (name: string) =>
@@ -447,7 +447,8 @@ export async function openCellInAgentsWindow(deps: CellActionDeps, item: LocalCe
     return false;
   }
   if (!agentsWindowSetUp(host, vscode.env.uriScheme)) {
-    if ((await vscode.window.showInformationMessage(t.agentsNotSetUp, AGENT_HOST_TEXTS.setup)) !== AGENT_HOST_TEXTS.setup) {
+    // cell01: a modal, not a toast that vanishes after a few seconds with the only way forward on it
+    if ((await vscode.window.showInformationMessage(t.agentsNotSetUp, { modal: true }, AGENT_HOST_TEXTS.setup)) !== AGENT_HOST_TEXTS.setup) {
       return false;
     }
     // F5 (cell01): after the setup it goes on by itself: setup-vscode starts the host too; the cell opens once the host
