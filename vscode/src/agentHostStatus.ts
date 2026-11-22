@@ -167,7 +167,7 @@ export const AGENT_HOST_TEXTS = {
   running: (address: string) => `agent host running · ${address.replace(/^ws:\/\//, "").replace(/\/$/, "")}`,
   stopped: "agent host not running",
   /** the CLI's `ended_why`: the host recorded that its terminal went away, the usual case being VS Code closed. */
-  endedClosed: "agent host ended when VS Code was closed",
+  endedClosed: "agent host ended when its terminal or VS Code was closed",
   runningTooltip: (address: string) => `The a4sx agent host runs on this computer at ${address}. VS Code's Agents window reaches your cells through it.`,
   stoppedTooltip: "The a4sx agent host doesn't run on this computer, so VS Code's Agents window can't reach your cells. Start it in a terminal: it runs until you stop it (Ctrl+C) or close that terminal.",
   start: "Start agent host",

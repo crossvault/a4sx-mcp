@@ -5,12 +5,12 @@ import { thisComputerChildren } from "../../cellsView";
 
 const stopped = (extra: Record<string, unknown>) => parseAgentHostStatus(JSON.stringify({ running: false, open: [], ...extra }))!;
 
-describe("agent host ended when VS Code was closed", () => {
+describe("agent host ended when its terminal or VS Code was closed", () => {
   it("reads ended_why \"terminal closed\" while the host doesn't run, and shows it on the host row", () => {
     const s = stopped({ ended_why: "terminal closed", stopped_at: "2026-11-22T19:00:00Z" });
     assert.strictEqual(s.endedWhy, "terminal closed");
-    assert.strictEqual(String(thisComputerChildren(s)[0].label), "agent host ended when VS Code was closed");
-    assert.strictEqual(AGENT_HOST_TEXTS.endedClosed, "agent host ended when VS Code was closed");
+    assert.strictEqual(String(thisComputerChildren(s)[0].label), "agent host ended when its terminal or VS Code was closed");
+    assert.strictEqual(AGENT_HOST_TEXTS.endedClosed, "agent host ended when its terminal or VS Code was closed");
   });
 
   it("a closed host whose stop Windows cut short (no stop time) isn't also called an unclean end", () => {
