@@ -165,6 +165,18 @@ describe("#2301: Open in Agents window", () => {
     assert.deepStrictEqual(calls.progress.map((p) => p.title), ["Setting up the Agents window and starting the a4sx agent host, then opening «build»…"]);
     assert.deepStrictEqual(calls.opened, [`vscode://agents/agent-host-session/ahp-session/a4sx-cell-${INS}`], "no second click");
     resetCalls();
+    // review: a setup that ended at once (the host already ran) and worked: the last look opens the cell
+    const quick = harness([notSet, { code: 0, stdout: status({}), stderr: "" }]);
+    const vs = require("vscode") as any;
+    const make = vs.window.createTerminal;
+    vs.window.createTerminal = (o: unknown) => ({ ...make(o), exitStatus: { code: 0, reason: 2 } });
+    calls.nextInfoChoice = AGENT_HOST_TEXTS.setup;
+    try {
+      assert.strictEqual(await openCellInAgentsWindow(quick.deps, quick.item), true);
+    } finally {
+      vs.window.createTerminal = make;
+    }
+    resetCalls();
     const slow = harness(notSet);   // the setup never finishes in time
     calls.nextInfoChoice = AGENT_HOST_TEXTS.setup;
     assert.strictEqual(await openCellInAgentsWindow(slow.deps, slow.item), false);

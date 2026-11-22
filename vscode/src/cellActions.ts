@@ -463,7 +463,13 @@ export async function openCellInAgentsWindow(deps: CellActionDeps, item: LocalCe
         // review: a setup that ended (its terminal's process) stops the wait too; its terminal says why
         const up = await waitForHost(deps, cli, deps.agentsWait?.ms ?? AGENTS_WAIT_MS, deps.agentsWait?.pollMs,
           () => token.isCancellationRequested || term.exitStatus !== undefined, (s) => agentsWindowSetUp(s, scheme));
-        return up ?? (token.isCancellationRequested ? "cancelled" as const : undefined);
+        if (up || token.isCancellationRequested) {
+          return up ?? "cancelled" as const;
+        }
+        // review: a setup that ended at once (the host already ran) may have worked: one last look before giving up
+        const last = await deps.run(cli, AGENT_HOST_STATUS_ARGS, 10_000);
+        const s = last.code === 0 ? parseAgentHostStatus(last.stdout) : undefined;
+        return s?.running && s.answering !== false && agentsWindowSetUp(s, scheme) ? s : undefined;
       });
     if (got === "none") {
       return false;
