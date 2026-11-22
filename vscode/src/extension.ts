@@ -11,7 +11,7 @@ import { ApiError, Client, DEFAULT_SERVER, FetchLike, listingWebUrl, listSession
 import { A4sxAuthProvider, AUTH_ID, AUTH_LABEL, LoginCancelled, LoginRequest, SECRET_KEY, vscodeLogin } from "./auth";
 import { CLAUDE_EXTENSION_ID, claudeResumeUri } from "./claudeResume";
 import { CLI_NAME, findClaude, findCli, CliLookup, LookupEnv } from "./cli";
-import { CLI_SIGN_IN_FILE, cellsListDir, cliSignInDirs, showText } from "./cells";
+import { CLI_SIGN_IN_GLOB, cellsListDir, cliConfigRoot, showText } from "./cells";
 import { cliLibrary } from "./cliLibrary";
 import {
   CellActionDeps, cellLastMessages, cellWhyMessage, CMD_CELL_EXPLAIN, CMD_CELL_FROM_SAVED, CMD_CELL_MESSAGES, CMD_CELL_OPEN_AGENTS, CMD_CELL_SAVE, openCellInAgentsWindow, saveCellConversation, startCellFromSaved,
@@ -1129,10 +1129,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // a4sx #2309 F10 (cell01): Launch profiles still said "no a4sx sign-in" after `a4sx login` in a terminal. A change of
   // the CLI's sign-in file (watched, never read) reads Cells and Launch profiles again.
   if (typeof vscode.workspace.createFileSystemWatcher === "function" && typeof vscode.RelativePattern === "function") {
-    for (const dir of cliSignInDirs()) {
-      const w = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(dir), CLI_SIGN_IN_FILE));
-      context.subscriptions.push(w, w.onDidChange(refreshAll), w.onDidCreate(refreshAll), w.onDidDelete(refreshAll));
-    }
+    const w = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(cliConfigRoot()), CLI_SIGN_IN_GLOB));
+    context.subscriptions.push(w, w.onDidChange(refreshAll), w.onDidCreate(refreshAll), w.onDidDelete(refreshAll));
   }
   const syncSignedIn = () => void auth.current().then((s) => vscode.commands.executeCommand("setContext", "a4sx.signedIn", !!s));
   syncSignedIn();

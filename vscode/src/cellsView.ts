@@ -255,7 +255,7 @@ export function thisComputerChildren(host: AgentHostStatus, cliCanStop = false):
     state.description = stale ? AGENT_HOST_TEXTS.earlierError(host.lastError.text, at) : AGENT_HOST_TEXTS.lastError(host.lastError.text, at);
     tips.push(stale ? AGENT_HOST_TEXTS.earlierErrorTooltip(host.lastError.text, host.lastError.at)
       : AGENT_HOST_TEXTS.lastErrorTooltip(host.lastError.text, host.lastError.at));
-    if (!stale && !host.running && !unclean) {
+    if (!stale && !unclean) {   // review: a fresh error stands out, also while the host runs (its row was yellow)
       state.iconPath = themed("warning", CELL_ICON_COLORS.attention);
     }
   }

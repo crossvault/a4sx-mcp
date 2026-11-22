@@ -65,20 +65,20 @@ describe("#2309 (p): This computer always has two rows, so the cell rows below n
   });
 });
 
-describe("#2309 F10: the CLI's sign-in file is watched, never read", () => {
-  it("its folders are the CLI's config folders (new and old), per platform", () => {
-    const { cliSignInDirs, CLI_SIGN_IN_FILE } = require("../../cells");
-    assert.deepStrictEqual(cliSignInDirs("linux", "/home/me"), ["/home/me/.config/a4sx", "/home/me/.config/agent-mdx"]);
-    assert.deepStrictEqual(cliSignInDirs("win32", "C:\\Users\\me"), ["C:\\Users\\me\\.config\\a4sx", "C:\\Users\\me\\.config\\agent-mdx"]);
-    assert.strictEqual(CLI_SIGN_IN_FILE, "session");
+describe("#2309 F10: the CLI's sign-in files are watched, never read", () => {
+  it("from ~/.config, the CLI's config folders (new and old) and both sign-in files, per platform", () => {
+    const { cliConfigRoot, CLI_SIGN_IN_GLOB } = require("../../cells");
+    assert.strictEqual(cliConfigRoot("linux", "/home/me"), "/home/me/.config");
+    assert.strictEqual(cliConfigRoot("win32", "C:\\Users\\me"), "C:\\Users\\me\\.config");
+    assert.strictEqual(CLI_SIGN_IN_GLOB, "{a4sx,agent-mdx}/{session,apikey}");
   });
-  it("activate watches it and reads Cells and Launch profiles again on a change; the file is never opened", () => {
+  it("activate watches them and reads Cells and Launch profiles again on a change; they are never opened", () => {
     const fs = require("fs");
     const src = fs.readFileSync(require("path").join(__dirname, "..", "..", "..", "src", "extension.ts"), "utf8");
-    assert.match(src, /for \(const dir of cliSignInDirs\(\)\) \{\n\s*const w = vscode\.workspace\.createFileSystemWatcher\(new vscode\.RelativePattern\(vscode\.Uri\.file\(dir\), CLI_SIGN_IN_FILE\)\);\n\s*context\.subscriptions\.push\(w, w\.onDidChange\(refreshAll\), w\.onDidCreate\(refreshAll\), w\.onDidDelete\(refreshAll\)\);/);
+    assert.match(src, /const w = vscode\.workspace\.createFileSystemWatcher\(new vscode\.RelativePattern\(vscode\.Uri\.file\(cliConfigRoot\(\)\), CLI_SIGN_IN_GLOB\)\);\n\s*context\.subscriptions\.push\(w, w\.onDidChange\(refreshAll\), w\.onDidCreate\(refreshAll\), w\.onDidDelete\(refreshAll\)\);/);
     for (const f of fs.readdirSync(require("path").join(__dirname, "..", "..", "..", "src")).filter((n: string) => n.endsWith(".ts"))) {
       const t = fs.readFileSync(require("path").join(__dirname, "..", "..", "..", "src", f), "utf8");
-      assert.ok(!/readFile[^\n]*CLI_SIGN_IN_FILE|CLI_SIGN_IN_FILE[^\n]*readFile/.test(t), f);
+      assert.ok(!/readFile[^\n]*(CLI_SIGN_IN_GLOB|cliConfigRoot)|(CLI_SIGN_IN_GLOB|cliConfigRoot)[^\n]*readFile/.test(t), f);
     }
   });
 });
