@@ -195,13 +195,13 @@ describe("#2301 E6: Save its conversation…", () => {
     assert.ok(!h.runs.some((r) => r.startsWith("push")), "nothing is uploaded without a terminal the person sees");
   });
 
-  it("a first save is a plain `a4sx push <transcript>` in a terminal", async () => {
+  it("#2309 (o): a first save makes the cell's backup entry «<cell>-backup», the deck's name, in a terminal", async () => {
     const h = harness();
     const file = recordConversation(h, "docs", "ins_A2");
     calls.modalChoices.push(CELL_ACTION_TEXTS.save);
-    const t = await saveCellConversation(h.deps, h.local("docs"), { saved: async () => [] });
+    const t = await saveCellConversation(h.deps, h.local("docs"), { library: async () => [{ id: "col-lib-other", label: "docs-notes" }] });
     assert.ok(t);
-    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}'\n`]);
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}' '--label' 'docs-backup' '--title' 'docs: backups'\n`]);
     assert.ok(h.deps.terminals.has(t as any), "the view reads the cells again when it closes");
   });
 
@@ -211,35 +211,92 @@ describe("#2301 E6: Save its conversation…", () => {
     calls.modalChoices.push(CELL_ACTION_TEXTS.save);
     let n = 0;
     const deps = { ...h.deps, refreshSessions: () => { n++; }, saveRereads: [1, 5] };
-    assert.ok(await saveCellConversation(deps, h.local("docs"), { saved: async () => [] }));
+    assert.ok(await saveCellConversation(deps, h.local("docs"), { library: async () => [] }));
     await new Promise((r) => setTimeout(r, 30));
     assert.strictEqual(n, 2);
     assert.deepStrictEqual(SAVE_REREADS_MS, [8_000, 20_000, 45_000]);
   });
 
-  it("a later save becomes a new version of the entry that holds this conversation", async () => {
+  it("#2309 (o): a later save is a new version of «<cell>-backup», by its id (never the label: the server would match a title that only contains it)", async () => {
     const h = harness();
     const file = recordConversation(h, "docs", "ins_A2");
     calls.modalChoices.push(CELL_ACTION_TEXTS.save);
-    const asked: string[] = [];
-    await saveCellConversation(h.deps, h.local("docs"), { saved: async (slug) => { asked.push(slug); return [{ id: "col-lib-0a1b2c3d1111" }]; } });
-    assert.deepStrictEqual(asked, ["0a1b2c3d1111"]);
+    await saveCellConversation(h.deps, h.local("docs"), { library: async () => [
+      { id: "col-lib-notes", title: "about docs-backup" }, { id: "col-lib-0a1b2c3d1111", label: "docs-backup", title: "docs: backups" },
+      { id: "col-lib-x", label: "docs-backup-old" }] });
     assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}' '--into' 'col-lib-0a1b2c3d1111'\n`]);
+  });
+
+  it("#2309 (o) review: a conversation already in an entry the person named is a new version of THAT entry, by id; nothing is renamed", async () => {
+    const h = harness();
+    const file = recordConversation(h, "docs", "ins_A2");
+    calls.modalChoices.push(CELL_ACTION_TEXTS.save);
+    await saveCellConversation(h.deps, h.local("docs"), { library: async () => [
+      { id: "col-lib-0a1b2c3d1111", label: "my-notes", title: "my own name", sessions: ["lib-0a1b2c3d1111"] },
+      { id: "col-lib-zzzzzzzzzzzz", title: "docs-backup, only in a title" }] });
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}' '--into' 'col-lib-0a1b2c3d1111'\n`]);
+    assert.ok(!calls.terminals[0].sent[0].includes("--label"), "no label: it would rename the person's entry");
+  });
+
+  it("#2309 (o) review: an entry whose title only contains «<cell>-backup» is never used, and no library read means no label", async () => {
+    const h = harness();
+    const file = recordConversation(h, "docs", "ins_A2");
+    calls.modalChoices.push(CELL_ACTION_TEXTS.save);
+    await saveCellConversation(h.deps, h.local("docs"), { library: async () => [{ id: "col-lib-zzzzzzzzzzzz", title: "docs-backup copy" }] });
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}' '--label' 'docs-backup' '--title' 'docs: backups'\n`]);
+    const h2 = harness();
+    recordConversation(h2, "docs", "ins_A2");
+    calls.modalChoices.push(CELL_ACTION_TEXTS.save);
+    assert.strictEqual(await saveCellConversation(h2.deps, h2.local("docs")), undefined, "no library lookup: nothing is pushed");
+    assert.strictEqual(calls.terminals.length, 1);
+  });
+
+  it("#2309 (o) review: the entry is found by the transcript's first sessionId, as the server files it", async () => {
+    const h = harness();
+    const file = recordConversation(h, "docs", "ins_A2");
+    fs.writeFileSync(file, '{"type":"summary"}\n{"type":"user","sessionId":"ffffeeee-0000-1111-2222-333344445555"}\n'
+      + '{"type":"user","sessionId":"' + SID + '"}\n');
+    calls.modalChoices.push(CELL_ACTION_TEXTS.save);
+    await saveCellConversation(h.deps, h.local("docs"), { library: async () => [{ id: "col-lib-ffffeeee0000", label: "seeded-from" }] });
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}' '--into' 'col-lib-ffffeeee0000'\n`]);
+  });
+
+  it("#2309 (o) review: an entry id the CLI doesn't take saves nothing (no plain-push fallback)", async () => {
+    const h = harness();
+    recordConversation(h, "docs", "ins_A2");
+    calls.modalChoices.push(CELL_ACTION_TEXTS.save);
+    assert.strictEqual(await saveCellConversation(h.deps, h.local("docs"), { library: async () => [{ id: "bad id; rm", label: "docs-backup" }] }), undefined);
+    assert.strictEqual(calls.terminals.length, 0);
+    assert.strictEqual(calls.errors[0].message, CELL_ACTION_TEXTS.saveBadEntry("bad id; rm"));
+  });
+
+  it("#2309 (o): two entries named «<cell>-backup»: the person picks (newest first), and no row adds a third", async () => {
+    const h = harness();
+    const file = recordConversation(h, "docs", "ins_A2");
+    calls.modalChoices.push(CELL_ACTION_TEXTS.save);
+    calls.nextPick = 0;
+    await saveCellConversation(h.deps, h.local("docs"), { library: async () => [
+      { id: "col-lib-a", label: "docs-backup", updated_at: "2026-11-20T10:00:00Z" },
+      { id: "col-lib-b", label: "docs-backup", updated_at: "2026-11-22T10:00:00Z" }] });
+    assert.deepStrictEqual(calls.quickPicks[0].items.map((i) => i.into), ["col-lib-b", "col-lib-a"]);
+    assert.strictEqual(calls.quickPicks[0].options.placeHolder, CELL_ACTION_TEXTS.savePickPlaceholder("docs-backup"));
+    assert.match(calls.quickPicks[0].items[0].description, /2026-11-22 10:00/, "each entry's date");
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}' '--into' 'col-lib-b'\n`]);
   });
 
   it("a running cell's conversation can be saved too", async () => {
     const h = harness({ cells: [row("build", "ins_A1", "running")] });
     const file = recordConversation(h, "build", "ins_A1");
     calls.modalChoices.push(CELL_ACTION_TEXTS.save);
-    await saveCellConversation(h.deps, h.local("build"), { saved: async () => [] });
-    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}'\n`]);
+    await saveCellConversation(h.deps, h.local("build"), { library: async () => [] });
+    assert.deepStrictEqual(calls.terminals[0].sent, [`'${CLI}' 'push' '${file}' '--label' 'build-backup' '--title' 'build: backups'\n`]);
   });
 
   it("an unreadable library saves nothing (a plain push could add the conversation a second time)", async () => {
     const h = harness();
     recordConversation(h, "docs", "ins_A2");
     calls.modalChoices.push(CELL_ACTION_TEXTS.save);
-    assert.strictEqual(await saveCellConversation(h.deps, h.local("docs"), { saved: async () => { throw new LibraryUnreadable(true); } }), undefined);
+    assert.strictEqual(await saveCellConversation(h.deps, h.local("docs"), { library: async () => { throw new LibraryUnreadable(true); } }), undefined);
     assert.strictEqual(calls.terminals.length, 0);
     assert.strictEqual(calls.errors[0].message, SAVE_TAB_TEXTS.signedOut);
   });

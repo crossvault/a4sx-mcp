@@ -8,15 +8,16 @@
 //                                     no server for them, and "no delivery results" is an answer, not a failure)
 //     "Why can or can't I message it" a4sx mesh policy <mesh id> --explain <a cell here> <that cell>
 //   on a cell stored on this computer:
-//     "Save its conversation"         a4sx push <the cell's last transcript> [--into <library entry>], in a terminal.
-//                                     The copy the CLI uploads is scrubbed; the confirmation says so before anything
-//                                     runs. A later save of the same conversation becomes a new version of its entry,
-//                                     found as "Save session to a4sx" finds it (saveTab.ts).
+//     "Save its conversation"         a4sx push <the cell's last transcript> --into <id of «<cell>-backup»>, or
+//                                     --label <cell>-backup --title "<cell>: backups" for the first save, in a
+//                                     terminal. The copy the CLI uploads is scrubbed; the confirmation says so before
+//                                     anything runs. #2309 (o): one entry per cell, the name the herdr deck uses too.
 //     "Start from a saved session…"   pick a library entry, then Run as cell in terminal with this cell preselected
 //                                     (runAsCell.ts): the CLI's own questions are asked in the terminal as always.
 // There is no "Hand off" here on purpose: a scrubbed copy is not an exact copy, so a cell continued from it on
 // another computer may not read what really happened. It waits for the CLI's as-is mode (a4sx #2292).
 // Every CLI call is an argv array; what is read back is only shown, never run.
+import * as fs from "fs";
 import * as vscode from "vscode";
 import { SessionRow } from "./api";
 import { CELL_CMD_TEXTS, CellCommandDeps, cliErrorText, ensureCli, setupAgentsWindow, startAgentHost } from "./cellCommands";
@@ -30,8 +31,8 @@ import { findLocalSession, librarySlug } from "./localSession";
 import { claudeProjectsDir } from "./nativeSeed";
 import { openCommandTerminal } from "./resume";
 import { runAsCell, RunAsCellSession } from "./runAsCell";
-import { entryPickItems, LibraryUnreadable, pushArgs, SAVE_TAB_TEXTS, SavedEntry, SavedLookup } from "./saveTab";
 import { slugOf } from "./tabSession";
+import { cellBackupLabel, cellBackupTitle, entryPickItems, LibraryUnreadable, pushArgs, SAVE_TAB_TEXTS, SavedEntry } from "./saveTab";
 
 export const CMD_CELL_MESSAGES = "a4sx.cellLastMessages";
 export const CMD_CELL_EXPLAIN = "a4sx.cellWhyMessage";
@@ -61,6 +62,10 @@ export const CELL_ACTION_TEXTS = {
   saveGone: (name: string, short: string) =>
     `«${name}»'s last conversation (session ${short}) can't be found on this computer any more, so it can't be saved.`,
   saveTitle: (name: string) => `Save «${name}»'s conversation to your a4sx library?`,
+  saveBadEntry: (id: string) =>
+    `The library entry for this save has an id the a4sx CLI doesn't take ("${id}"), so nothing was saved. Update the a4sx CLI, then choose Save its conversation again.`,
+  savePickTitle: (name: string) => `Save «${name}»'s conversation: which library entry?`,
+  savePickPlaceholder: (label: string) => `Your library has more than one entry named «${label}». Choose the one that gets the new version`,
   saveDetail:
     "The saved copy is scrubbed: before it uploads, the a4sx CLI removes secrets and replaces e-mail addresses, host " +
     "names, IP addresses and your home folder in paths. The conversation on this computer stays as it is. A cell " +
@@ -234,8 +239,13 @@ export async function cellWhyMessage(deps: CellActionDeps, item: RemoteCellItem 
 }
 
 export interface SaveCellOptions {
-  /** Finds the conversation in the library, so a later save becomes a new version of its entry (saveTab.SavedLookup). */
-  saved?: SavedLookup;
+  /**
+   * The library's entries (as My sessions reads them): a save goes to the cell's backup entry `<cell>-backup` as a new
+   * version when it exists (by its id: the server would also take a label, but it falls back to a title that only
+   * contains it), else it makes that entry (a4sx #2309 (o), the deck's scheme). Rejects (LibraryUnreadable) when the
+   * library can't be read: then nothing is saved.
+   */
+  library?: () => Promise<SessionRow[]>;
 }
 
 /**
@@ -269,10 +279,25 @@ export async function saveCellConversation(deps: CellActionDeps, item: LocalCell
     return undefined;
   }
   let into: string | undefined;
-  if (options.saved) {
+  const label = cellBackupLabel(cell.name);
+  let named: { label: string; title: string } | undefined;
+  if (!options.library) {   // review: never a push without knowing which entry it lands in (it could rename one)
+    await vscode.window.showErrorMessage(SAVE_TAB_TEXTS.libraryUnreadable("no library lookup"));
+    return undefined;
+  }
+  {
     let entries: SavedEntry[];
     try {
-      entries = await options.saved(slugOf(plan.sessionId));
+      const rows = await options.library();
+      entries = backupEntries(rows, label);
+      if (!entries.length) {
+        // review (coordinator): a push without --into lands in the entry keyed by this conversation's session id, and
+        // a label would rename it. So when the conversation is already in an entry (one the person may have named),
+        // the save is a new version of that entry, by its id, and nothing is renamed; only a conversation that is in
+        // no entry yet makes «<cell>-backup».
+        entries = heldEntries(rows, transcriptSlug(plan.transcript) ?? slugOf(plan.sessionId));
+        named = entries.length ? undefined : { label, title: cellBackupTitle(cell.name) };
+      }
     } catch (e) {
       const signedOut = e instanceof LibraryUnreadable && e.signedOut;
       await vscode.window.showErrorMessage(signedOut ? SAVE_TAB_TEXTS.signedOut : SAVE_TAB_TEXTS.libraryUnreadable(e instanceof Error && e.message ? e.message : "unknown error"));
@@ -281,20 +306,20 @@ export async function saveCellConversation(deps: CellActionDeps, item: LocalCell
     if (entries.length === 1) {
       into = entries[0].id;
     } else if (entries.length > 1) {
-      const picked = await vscode.window.showQuickPick(entryPickItems(entries), { title: SAVE_TAB_TEXTS.pickEntryTitle, placeHolder: SAVE_TAB_TEXTS.pickEntryPlaceholder, matchOnDescription: true });
+      // #2309 (o): only the entries of that name: a "new entry" row would add one more of them
+      const picked = await vscode.window.showQuickPick(entryPickItems(entries).filter((i) => i.into !== undefined),
+        { title: t.savePickTitle(cell.name), placeHolder: named === undefined && entries.every((e) => e.label === label)
+          ? t.savePickPlaceholder(label) : SAVE_TAB_TEXTS.pickEntryPlaceholder, matchOnDescription: true });
       if (!picked) {
         return undefined;
       }
       into = picked.into;
     }
   }
-  let args = pushArgs(plan.transcript, into === undefined ? {} : { into });
-  if (!args) {
-    const again = await vscode.window.showErrorMessage(SAVE_TAB_TEXTS.badEntry((showText(into, 80) ?? "")), SAVE_TAB_TEXTS.saveAsNew);
-    if (again !== SAVE_TAB_TEXTS.saveAsNew) {
-      return undefined;
-    }
-    args = pushArgs(plan.transcript)!;
+  let args = pushArgs(plan.transcript, into !== undefined ? { into } : named ?? {});
+  if (!args) {   // review: no "Save as a new entry" here: a push without --into could rename this conversation's entry
+    await vscode.window.showErrorMessage(t.saveBadEntry(showText(into, 80) ?? ""));
+    return undefined;
   }
   const terminal = openCommandTerminal(t.saveTerminal(cell.name), cli, CLI_NAME, args, undefined, undefined, t.saveBanner(cell.name, short, showText(plan.cwd, 300) ?? plan.cwd));
   deps.terminals.add(terminal);
@@ -304,6 +329,53 @@ export async function saveCellConversation(deps: CellActionDeps, item: LocalCell
     }
   }
   return terminal;
+}
+
+/** Library rows as pick entries, newest first, with each entry's last change in its title line. */
+function newestEntries(rows: readonly SessionRow[]): SavedEntry[] {
+  const when = (r: SessionRow) => (typeof r.updated_at === "string" ? r.updated_at : typeof r.created_at === "string" ? r.created_at : "");
+  return [...rows].sort((a, b) => when(b).localeCompare(when(a)))
+    .map((r) => ({ id: r.id, label: showText(r.label), title: [showText(r.title, 120), showText(when(r).replace("T", " ").slice(0, 16), 20)].filter(Boolean).join(" · ") || undefined }));
+}
+
+/**
+ * review: the slug the server files a push under: the first `sessionId` in the transcript (a seeded or forked
+ * transcript can start with another session's lines). Undefined when none is found in its first 256 KB.
+ */
+export function transcriptSlug(file: string): string | undefined {
+  let head: string;
+  try {
+    const fd = fs.openSync(file, "r");
+    try {
+      const buf = Buffer.alloc(256 * 1024);
+      head = buf.toString("utf8", 0, fs.readSync(fd, buf, 0, buf.length, 0));
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return undefined;
+  }
+  for (const line of head.split("\n")) {
+    try {
+      const sid = (JSON.parse(line) as { sessionId?: unknown })?.sessionId;
+      if (typeof sid === "string" && sid) {
+        return slugOf(sid);
+      }
+    } catch {
+      // a partial last line or a non-JSON line: the next one
+    }
+  }
+  return undefined;
+}
+
+/** a4sx #2309 (o): the library entries labelled exactly `label`, newest first (more than one: the person picks). */
+export function backupEntries(rows: readonly SessionRow[], label: string): SavedEntry[] {
+  return newestEntries(rows.filter((r) => r.label === label));
+}
+
+/** The library entries that already hold the conversation with this slug (by its session member or id), newest first. */
+export function heldEntries(rows: readonly SessionRow[], slug: string): SavedEntry[] {
+  return newestEntries(rows.filter((r) => librarySlug(r) === slug));
 }
 
 /** The saved-session pick's rows: label (else title, else id); title and last change; newest first. */
