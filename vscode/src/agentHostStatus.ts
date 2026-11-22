@@ -22,6 +22,9 @@ export interface AgentHostStatus {
   /** Per editor (code, code-insiders, …): "ok" or what is wrong; undefined when setup-vscode never ran. */
   editors?: Record<string, string>;
   lastError?: { at?: string; text: string };
+  /** cell01 (#2309): when the last start began, and when it stopped cleanly (null/absent: it didn't, or never ran). */
+  startedAt?: string;
+  stoppedAt?: string;
   /** CLI 0.40.1+: false while the host process runs but didn't answer the CLI's probe in time (null/absent: unknown). */
   answering?: boolean;
   /**
@@ -34,6 +37,28 @@ export interface AgentHostStatus {
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+/** An ISO time the CLI writes ("2026-11-21T16:00:00Z", with or without fractions): nothing else is shown. */
+function isoTime(v: unknown): v is string {
+  return typeof v === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,6})?(Z|[+-]\d\d:\d\d)$/.test(v);
+}
+
+/** "11-21 16:00 UTC" from an ISO time (any offset), for short rows; the tooltip has the whole time. */
+export function shortTime(iso: string | undefined): string | undefined {
+  const t = iso ? Date.parse(iso) : NaN;
+  if (Number.isNaN(t)) {
+    return undefined;
+  }
+  const d = new Date(t).toISOString();   // review: labelled UTC, so nobody reads it as local time
+  return `${d.slice(5, 10)} ${d.slice(11, 16)} UTC`;
+}
+
+/** Whether ISO time `a` is before `b` (parsed, not compared as text: offsets and fractions differ). */
+export function isBefore(a: string | undefined, b: string | undefined): boolean {
+  const x = a ? Date.parse(a) : NaN;
+  const y = b ? Date.parse(b) : NaN;
+  return !Number.isNaN(x) && !Number.isNaN(y) && x < y;
 }
 
 /** The status answer, or undefined when it isn't one (an older CLI, an error). */
@@ -70,7 +95,10 @@ export function parseAgentHostStatus(stdout: string): AgentHostStatus | undefine
   const at = e ? showText(e.at, 40) : undefined;
   const running = raw.running && !!address;   // running without an address it can name: not shown as running
   return { running, address: running ? address : undefined, open: running ? open : [], editors,
-    lastError: text ? { at, text } : undefined, ...(running && typeof raw.answering === "boolean" ? { answering: raw.answering } : {}),
+    lastError: text ? { at, text } : undefined,
+    ...(isoTime(raw.started_at) ? { startedAt: raw.started_at as string } : {}),
+    ...(isoTime(raw.stopped_at) ? { stoppedAt: raw.stopped_at as string } : {}),
+    ...(running && typeof raw.answering === "boolean" ? { answering: raw.answering } : {}),
     ...(running && raw.stop_request !== undefined ? { stopRequest: Number.isInteger(raw.stop_request) && (raw.stop_request as number) >= 0
       && (raw.stop_request as number) <= 9 ? raw.stop_request as number : 0 } : {}) };
 }
@@ -155,8 +183,15 @@ export const AGENT_HOST_TEXTS = {
   openMark: "open in the Agents window",
   openTooltip: "Open in VS Code's Agents window now.",
   // cell01: the row is cut at the default width: a short label, the whole text in its tooltip
-  lastError: (text: string) => `Last error: ${text.length > 48 ? `${text.slice(0, 47)}…` : text}`,
+  lastError: (text: string, at?: string) => `Last error${at ? ` ${at}` : ""}: ${text.length > 48 ? `${text.slice(0, 47)}…` : text}`,
   lastErrorTooltip: (text: string, at?: string) => `Last error of the agent host${at ? ` (${at})` : ""}: ${text}`,
+  // cell01: an error from before the host's last start is old news: shown greyed, and said so
+  earlierError: (text: string, at?: string) => `Earlier error${at ? ` ${at}` : ""}: ${text.length > 40 ? `${text.slice(0, 39)}…` : text}`,
+  earlierErrorTooltip: (text: string, at?: string) =>
+    `An error of the agent host from before its last start${at ? ` (${at})` : ""}, which started fine after it: ${text}`,
+  uncleanEnd: "agent host ended without a clean stop (e.g. a restart)",
+  uncleanEndTooltip: (since?: string) =>
+    `The agent host${since ? ` started ${since}` : ""} ended without a clean stop, for example when this computer restarted or the host was killed. Its cells stopped with it. Start it again to use them in the Agents window.`,
   startTerminal: "a4sx: agent host",
   setupTerminal: "a4sx: set up the Agents window",
 };

@@ -166,10 +166,27 @@ describe("#2301 E2: This computer", () => {
     }))!);
     // review: not set up and stopped: only Set up (it starts the host too), never two terminals
     assert.deepStrictEqual(down.map((i) => i.label), [AGENT_HOST_TEXTS.stopped, AGENT_HOST_TEXTS.setup,
-      "Last error: port 8765 is taken"]);
+      "Last error 11-21 16:00 UTC: port 8765 is taken"]);
     assert.strictEqual(down[2].tooltip, "Last error of the agent host (2026-11-21T16:00:00Z): port 8765 is taken");
     const long = "x".repeat(250);
     assert.strictEqual(AGENT_HOST_TEXTS.lastError(long).length, "Last error: ".length + 48, "cell01: short at the default width");
+    // cell01 (#2309): an unclean end is said; an error from before a start that ran is greyed as earlier
+    const unclean = thisComputerChildren(parseAgentHostStatus(JSON.stringify({ running: false, address: null, open: [],
+      vscode: { editors: { stable: "ok" } }, started_at: "2026-11-21T08:00:00Z", stopped_at: null, last_error: null }))!);
+    assert.ok(unclean.some((i) => i.label === "agent host ended without a clean stop (e.g. a restart)"));
+    const clean = thisComputerChildren(parseAgentHostStatus(JSON.stringify({ running: false, address: null, open: [],
+      vscode: { editors: { stable: "ok" } }, started_at: "2026-11-21T08:00:00Z", stopped_at: "2026-11-21T09:00:00Z" }))!);
+    assert.ok(!clean.some((i) => String(i.label).includes("without a clean stop")));
+    const later = thisComputerChildren(parseAgentHostStatus(JSON.stringify({ ...RUNNING, started_at: "2026-11-22T08:00:00Z",
+      last_error: { at: "2026-11-21T16:00:00Z", text: "port 8765 is taken" } }))!);
+    const old = later.find((i) => String(i.label).startsWith("Earlier error"))!;
+    assert.strictEqual(old.label, "Earlier error 11-21 16:00 UTC: port 8765 is taken");
+    // review: parsed times, any offset; a missing fraction compares right too
+    const off = thisComputerChildren(parseAgentHostStatus(JSON.stringify({ ...RUNNING, started_at: "2026-11-22T09:00:00+01:00",
+      last_error: { at: "2026-11-22T08:30:00.5Z", text: "x" } }))!);
+    assert.ok(off.some((i) => String(i.label) === "Last error 11-22 08:30 UTC: x"), "08:30Z is after 08:00Z: not earlier");
+    assert.strictEqual((old.iconPath as any).color?.id, "disabledForeground");
+    assert.ok(!later.some((i) => String(i.label).startsWith("Last error")));
     assert.strictEqual(down[1].command!.command, "a4sx.setupAgentsWindow");
     const setUpStopped = thisComputerChildren(parseAgentHostStatus(JSON.stringify({
       running: false, address: null, open: [], vscode: { editors: { stable: "ok" } }, last_error: null }))!);
