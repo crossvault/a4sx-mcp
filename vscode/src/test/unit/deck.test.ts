@@ -10,7 +10,7 @@ import { calls, fakeMemento, resetCalls } from "../fakeVscode";
 import { CellCommandDeps, startDeckRequest } from "../../cellCommands";
 import { CellsProvider, CliOutput } from "../../cellsView";
 import {
-  checkDeckRequest, closeStaleDecks, Deck, DECK_SHA256, DECK_TEXTS, DeckDeps, DeckRequest, deckEnv, deckFolderOk, deckLaunchArgs, RateLimit,
+  checkDeckRequest, closeStaleDecks, Deck, removeStaleChannels, DECK_SHA256, DECK_TEXTS, DeckDeps, DeckRequest, deckEnv, deckFolderOk, deckLaunchArgs, RateLimit,
   sha256File, takeRequests,
 } from "../../deck";
 
@@ -104,7 +104,7 @@ describe("Open deck: the real deck.py and this check agree", () => {
     const chan = tmp();
     const out = deckPy(py!, "m.run = m.jrun = None\n"
       + "print(m.new_tab('bob-cell', sys.argv[2], [*m.A4SX_ARGV, 'launch', '--cell', 'bob-cell', '--new-session'], cell='bob-cell'))",
-    [WORK], { ...process.env, A4SX_DECK_HOST: "vscode", A4SX_DECK_CHANNEL: chan, A4SX_DECK_NONCE: NONCE });
+    [WORK], { ...process.env, HOME, USERPROFILE: HOME, A4SX_DECK_HOST: "vscode", A4SX_DECK_CHANNEL: chan, A4SX_DECK_NONCE: NONCE });
     assert.ok(out.includes("asked VS Code to open the terminal «a4sx: bob-cell»"), out);
     const got = takeRequests(chan);
     assert.strictEqual(got.length, 1);
@@ -148,6 +148,47 @@ describe("Open deck: a request", () => {
     assert.ok(deckFolderOk(HOME, WHERE));                     // the home folder itself: the CLI decides about it
     assert.ok(!deckFolderOk("\\\\host\\share\\x", { ...WHERE, platform: "win32" }));
     assert.ok(!deckFolderOk("//host/share/x", { ...WHERE, platform: "win32" }));
+  });
+
+  it("follow-up: a folder in one of the window's workspace folders is taken too; others still refuse it", () => {
+    const ws = fs.realpathSync(tmp());
+    const proj = path.join(ws, "srv-proj");
+    fs.mkdirSync(proj);
+    assert.ok(!deckFolderOk(proj, WHERE));
+    assert.ok(deckFolderOk(proj, { ...WHERE, folders: [ws] }));
+    assert.ok(deckFolderOk(ws, { ...WHERE, folders: [ws] }));
+    assert.ok(!deckFolderOk(tmp(), { ...WHERE, folders: [ws] }));
+    assert.ok(!deckFolderOk(proj, { ...WHERE, folders: [path.join(ws, "nope")] }));
+    if (process.platform !== "win32") {
+      fs.chmodSync(proj, 0o777);
+      assert.ok(!deckFolderOk(proj, { ...WHERE, folders: [ws] }));   // writable by every user: never
+    }
+  });
+
+  it("and deck.py's own check agrees on every case (home, workspace folder, outside, a link out, every user's)", function () {
+    const py = findPython();
+    if (!py) {
+      this.skip();
+    }
+    const ws = fs.realpathSync(tmp());
+    const cases = [WORK, HOME, path.join(ws), path.join(ws, "a"), tmp(), path.join(HOME, "lnk"), path.join(HOME, "open"), path.join(HOME, "gone")];
+    fs.mkdirSync(path.join(ws, "a"));
+    try {
+      fs.symlinkSync(tmp(), path.join(HOME, "lnk"));
+    } catch {
+      // there already from an earlier case, or no links here
+    }
+    try {
+      fs.mkdirSync(path.join(HOME, "open"));
+    } catch {
+      // there already
+    }
+    if (process.platform !== "win32") {
+      fs.chmodSync(path.join(HOME, "open"), 0o777);
+    }
+    const out = JSON.parse(deckPy(py!, "print(json.dumps([m.vscode_folder_ok(c) for c in json.loads(sys.argv[2])]))", [JSON.stringify(cases)],
+      { ...process.env, HOME, USERPROFILE: HOME, A4SX_DECK_FOLDERS: ws }));
+    assert.deepStrictEqual(out, cases.map((c) => deckFolderOk(c, { home: HOME, folders: [ws] })), JSON.stringify(cases));
   });
 
   it("at most 10 in a minute", () => {
@@ -222,6 +263,19 @@ describe("Open deck: the deck's environment", () => {
     assert.strictEqual(deckEnv("/c", NONCE, "/opt/x/a4sx", { Path: "C:\\w" }).Path, "/opt/x" + path.delimiter + "C:\\w");
     assert.strictEqual(deckEnv("/c", NONCE, "/opt/x/a4sx", {}).DECK_A4SX_PY, undefined);
     assert.ok(!("PATH" in deckEnv("/c", NONCE, "bin/a4sx", { PATH: "/usr/bin" })));   // a relative CLI path: PATH as it is
+    assert.strictEqual(deckEnv("/c", NONCE, "/x/a4sx", {}, ["/w1", "/w2"]).A4SX_DECK_FOLDERS, ["/w1", "/w2"].join(path.delimiter));
+  });
+
+  it("follow-up: the folders of decks that ended without a clean stop are removed at the start, nothing else", () => {
+    const root = tmp();
+    for (const n of ["a4sx-deck-Ab12Cd", "a4sx-deck-zzzzzz", "a4sx-deck-toolong1", "other", "a4sx-deck-"]) {
+      fs.mkdirSync(path.join(root, n));
+    }
+    fs.writeFileSync(path.join(root, "a4sx-deck-Ab12Cd", "req-1-1.json"), "x");
+    assert.strictEqual(removeStaleChannels(root), 2);
+    assert.deepStrictEqual(fs.readdirSync(root).sort(), ["a4sx-deck-", "a4sx-deck-toolong1", "other"]);
+    assert.strictEqual(removeStaleChannels(path.join(root, "nope")), 0);
+    assert.strictEqual(removeStaleChannels(undefined), 0);
   });
 });
 

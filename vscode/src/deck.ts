@@ -9,6 +9,13 @@
  * A forged request is possible: a program of the same user can read the deck's environment, and so its nonce. The
  * allow-list is why that is harmless: a forged request can only start a stored cell or a saved conversation, in a
  * folder, visibly. Nothing on it deletes, signs in or changes a mesh.
+ *
+ * Why no question before each start (coordinator, 11-26): a process of the same user that can run programs itself can
+ * run `a4sx launch` in any folder without the deck, so the channel gives it nothing but visibility. That rests on an
+ * assumption, checked against the CLI's cell settings (cli/amdx.py, the cell's "sandbox" block): a cell's sandboxed
+ * commands can't write into VS Code's globalStorage, where the channel folders are (the sandbox writes only in its
+ * folder, and a4sx adds no write root). Claude Code's Write and Edit tools outside the folder go through the person's
+ * permission mode (and a4sx's ask hook). If a cell's sandbox ever can write there, ask before each start instead.
  */
 import * as crypto from "crypto";
 import * as fs from "fs";
@@ -18,7 +25,7 @@ import * as vscode from "vscode";
 
 export const CMD_OPEN_DECK = "a4sx.openDeck";
 /** deck.py as bundled (a4sx-herdr-plugin 0.5.0); a file that isn't this one is not started. */
-export const DECK_SHA256 = "c2045efd6105fb5e7e0d6fb7219f909d6470366e776d24cd0d0cd60d72782897";
+export const DECK_SHA256 = "7729e9ad573a266d1e9a65960b6a409425b827286dd3a33d7f1553da5586f7f6";
 export const DECK_FILE = path.join("deck", "deck.py");
 /** At most this many terminals for the deck in a minute. */
 export const DECK_MAX_PER_MINUTE = 10;
@@ -35,7 +42,7 @@ export const DECK_TEXTS = {
   changed: "The deck that comes with the a4sx extension was changed on this computer, so it wasn't started. Reinstall the a4sx extension.",
   refused: (what: string) => `The deck asked for something the extension doesn't run, so nothing was started: ${what}.`,
   unreadable: "a request it can't read",
-  outsideHome: "a4sx launch in a folder outside your home folder (or one every user can write to)",
+  outsideHome: "a4sx launch in a folder outside your home folder and this window's workspace folders (or one every user can write to)",
   tooMany: `The deck asked for more than ${DECK_MAX_PER_MINUTE} terminals within a minute, so this one wasn't opened.`,
   logOpened: (time: string, label: string) => `${time} deck: opened the terminal «a4sx: ${label}»`,
   logRefused: (time: string, why: string) => `${time} deck: refused ${why}`,
@@ -101,13 +108,20 @@ function shownWhat(args: unknown): string {
 
 export interface DeckWhere {
   platform?: NodeJS.Platform;
-  /** The home folder a start's folder must be in (default: this user's). */
+  /** The home folder a start's folder may be in (default: this user's). */
   home?: string;
+  /** The window's workspace folders, which a start's folder may be in too (the person chose them). */
+  folders?: readonly string[];
 }
 
 /**
- * Review (a forged request picks the folder too): a start's folder is an existing folder inside the home folder (links
- * resolved), that other users can't write to, and on Windows not on a network share.
+ * Review (a forged request picks the folder too): a start's folder is an existing folder inside the home folder or a
+ * workspace folder (links resolved), that other users can't write to, and on Windows not on a network share. deck.py's
+ * vscode_folder_ok is the same check, so the deck shows such a start as a command instead of asking.
+ *
+ * The check and the start's terminal are apart in time (the CLI check and a consent dialog may come between): a process
+ * of the same user could swap the folder for a link meanwhile. Under this module's threat model that gains it nothing,
+ * as it can run `a4sx launch` there itself.
  */
 export function deckFolderOk(cwd: string, where: DeckWhere = {}): boolean {
   const platform = where.platform ?? process.platform;
@@ -117,10 +131,19 @@ export function deckFolderOk(cwd: string, where: DeckWhere = {}): boolean {
   }
   try {
     const real = fs.realpathSync(cwd);
-    const home = fs.realpathSync(where.home ?? os.homedir());
-    const rel = path.relative(home, real);
     const st = fs.statSync(real);
-    return st.isDirectory() && rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel) && (platform === "win32" || (st.mode & 0o002) === 0);
+    if (!st.isDirectory() || (platform !== "win32" && (st.mode & 0o002) !== 0)) {
+      return false;
+    }
+    const inside = (root: string) => {
+      try {
+        const rel = path.relative(fs.realpathSync(root), real);
+        return rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel);
+      } catch {
+        return false;
+      }
+    };
+    return [where.home ?? os.homedir(), ...(where.folders ?? [])].some(inside);
   } catch {
     return false;
   }
@@ -251,10 +274,13 @@ function pathKey(env: NodeJS.ProcessEnv): string {
  * and its a4sx.py when there is one beside it), and herdr's variables removed (VS Code started from a herdr pane passes
  * them on; the deck would think it is in herdr).
  */
-export function deckEnv(channel: string, nonce: string, cli: string, env: NodeJS.ProcessEnv = process.env): Record<string, string | null> {
+export function deckEnv(
+  channel: string, nonce: string, cli: string, env: NodeJS.ProcessEnv = process.env, folders: readonly string[] = [],
+): Record<string, string | null> {
   const out: Record<string, string | null> = {
     A4SX_DECK_HOST: "vscode", A4SX_DECK_CHANNEL: channel, A4SX_DECK_NONCE: nonce,
     HERDR_SOCKET_PATH: null, HERDR_PANE_ID: null,
+    ...(folders.length ? { A4SX_DECK_FOLDERS: folders.join(path.delimiter) } : {}),
   };
   if (path.isAbsolute(cli)) {   // review: a relative a4sx.cliPath would be a relative PATH entry
     const key = pathKey(env);
@@ -288,8 +314,33 @@ export interface DeckDeps {
   now?(): number;
   /** Where the deck's private folders are made (the extension's own storage; default the temp folder). */
   channelRoot?: string;
-  /** The home folder a start's folder must be in (tests). */
+  /** The home folder a start's folder may be in (tests). */
   home?: string;
+  /** The window's workspace folders (file system paths). */
+  folders?(): readonly string[];
+}
+
+/** Follow-up (b): the folders of decks that ended without a clean stop (a crash of VS Code), at activation. */
+export function removeStaleChannels(root: string | undefined): number {
+  if (!root) {
+    return 0;
+  }
+  let n = 0;
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(root);
+  } catch {
+    return 0;
+  }
+  for (const name of names.filter((x) => /^a4sx-deck-[A-Za-z0-9]{6}$/.test(x))) {
+    try {
+      fs.rmSync(path.join(root, name), { recursive: true, force: true });
+      n++;
+    } catch {
+      // the next activation tries again
+    }
+  }
+  return n;
 }
 
 /** Review: a deck left from before an extension host restart has a dead folder; it is closed, not left as a second deck. */
@@ -354,7 +405,7 @@ export class Deck {
     const location = (vscode as { TerminalLocation?: { Editor: number } }).TerminalLocation;
     this.terminal = vscode.window.createTerminal({
       name: DECK_TEXTS.terminal, shellPath: python, shellArgs: ["-I", file], cwd: os.homedir(),
-      env: deckEnv(dir, this.nonce, cli), isTransient: true, ...(location ? { location: location.Editor } : {}),
+      env: deckEnv(dir, this.nonce, cli, process.env, this.deps.folders?.() ?? []), isTransient: true, ...(location ? { location: location.Editor } : {}),
     } as vscode.TerminalOptions);
     this.terminal.show();
     try {
@@ -399,7 +450,7 @@ export class Deck {
       if (dir !== this.dir) {
         return;   // the deck closed while a start ran: the rest of this batch is dropped with its folder
       }
-      const c = checkDeckRequest(text, nonce, { platform: this.deps.platform, home: this.deps.home });
+      const c = checkDeckRequest(text, nonce, { platform: this.deps.platform, home: this.deps.home, folders: this.deps.folders?.() });
       const say = (line: string, toast: string) => {
         this.deps.log(line);
         if (this.refusalToasts.allow(now())) {

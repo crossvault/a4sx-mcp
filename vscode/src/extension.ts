@@ -33,7 +33,7 @@ import { findLocalSession, librarySlug } from "./localSession";
 import { runAsCell, RunAsCellSession } from "./runAsCell";
 import { LibraryUnreadable, SavedLookup, saveTabSession } from "./saveTab";
 import { execSpec, Fetch, findPython, installedLauncher, Runner } from "./provision";
-import { closeStaleDecks, CMD_OPEN_DECK, Deck, DECK_TEXTS } from "./deck";
+import { closeStaleDecks, CMD_OPEN_DECK, Deck, DECK_TEXTS, removeStaleChannels } from "./deck";
 import { clearFilter, filterSessions, moveToFolder, removeFromFolder } from "./folderCommands";
 import { CMD_OPEN_LISTING, ListingItem, MarketplaceProvider } from "./marketplaceView";
 import {
@@ -1103,10 +1103,14 @@ export function activate(context: vscode.ExtensionContext): void {
   ownCliDeps = cellDeps;
   // "Open deck" (11-21 backlog): the herdr plugin's deck in a VS Code terminal; its starts are checked and logged here
   closeStaleDecks();   // review: a deck from before this extension host has no folder any more
+  // review: the deck's private folders are in the extension's own storage, not the shared temp folder
+  const deckRoot = context.globalStorageUri ? path.join(context.globalStorageUri.fsPath, "deck") : undefined;
+  removeStaleChannels(deckRoot);   // follow-up (b): left by a crash
   const deck = new Deck({
     extensionPath: (context as { extensionPath?: string }).extensionPath ?? path.join(__dirname, ".."),
-    // review: the deck's private folders are in the extension's own storage, not the shared temp folder
-    channelRoot: context.globalStorageUri ? path.join(context.globalStorageUri.fsPath, "deck") : undefined,
+    channelRoot: deckRoot,
+    // coordinator 11-26: a start may also be in a workspace folder of this window (the person chose it)
+    folders: () => (vscode.workspace.workspaceFolders ?? []).filter((f) => f.uri.scheme === "file").map((f) => f.uri.fsPath),
     trusted: () => ensureTrusted(DECK_TEXTS.whatDeck),
     cli: () => ensureCli(cellDeps),
     python: () => findPython(runPython),

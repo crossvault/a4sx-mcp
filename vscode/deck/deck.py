@@ -44,6 +44,8 @@ HERDR = os.environ.get("HERDR_BIN_PATH") or "herdr"
 _VSC_CHANNEL = os.environ.pop("A4SX_DECK_CHANNEL", "")
 _VSC_NONCE = os.environ.pop("A4SX_DECK_NONCE", "")
 VSCODE = os.environ.get("A4SX_DECK_HOST") == "vscode" and bool(_VSC_CHANNEL) and bool(_VSC_NONCE)
+#: the VS Code window's workspace folders: a start in one of them goes to VS Code, as one in the home folder does
+_VSC_FOLDERS = [f for f in os.environ.pop("A4SX_DECK_FOLDERS", "").split(os.pathsep) if f]
 #: VS Code started from a herdr pane passes herdr's variables on to its terminals; the extension's deck is not in herdr
 IN_HERDR = not VSCODE and bool(os.environ.get("HERDR_SOCKET_PATH") or os.environ.get("HERDR_PANE_ID"))
 FRONT = "herdr" if IN_HERDR else ("VS Code" if VSCODE else ("Windows terminal" if WIN else "terminal"))
@@ -474,6 +476,28 @@ def vscode_plain_folder(cwd):
     return not any(unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp", "Co") for ch in cwd)
 
 
+def vscode_folder_ok(cwd):
+    """A folder VS Code starts a cell in for the deck (the extension checks the same): plain, inside the home folder or
+    one of the window's workspace folders (links resolved), not writable by every user, not on a network share."""
+    if not vscode_plain_folder(cwd) or not os.path.isabs(cwd) or (WIN and cwd[:2] in ("\\\\", "//")):
+        return False
+    try:
+        real = os.path.realpath(cwd)
+        st = os.stat(real)
+    except OSError:
+        return False
+    if not stat.S_ISDIR(st.st_mode) or (not WIN and st.st_mode & 0o002):
+        return False
+
+    def inside(root):
+        try:
+            r = os.path.realpath(root)
+            return os.path.normcase(os.path.commonpath([r, real])) == os.path.normcase(r)
+        except (OSError, ValueError):   # another drive
+            return False
+    return any(inside(r) for r in [os.path.expanduser("~"), *_VSC_FOLDERS])
+
+
 def vscode_request(label, cwd, rest):
     """One request file in the extension's channel folder, written whole before it appears (the extension reads,
     deletes and checks it)."""
@@ -501,7 +525,7 @@ def new_tab(label, cwd, argv, cell=None, reuse=None, own=False):
     shown = ("a4sx " + " ".join(argv[len(A4SX_ARGV):])) if argv[:len(A4SX_ARGV)] == A4SX_ARGV else " ".join(argv)
     if VSCODE:   # 0.5.0: a VS Code terminal, opened by the extension; anything else is shown to run by hand
         rest = vscode_request_args(argv[len(A4SX_ARGV):]) if argv[:len(A4SX_ARGV)] == A4SX_ARGV else None
-        if rest is None or not vscode_plain_folder(cwd):
+        if rest is None or not vscode_folder_ok(cwd):   # follow-up (c): what VS Code would refuse is shown here
             return f"run this in a terminal, in {cwd}:  {shown}"
         try:
             label = vscode_request(label, cwd, rest)
