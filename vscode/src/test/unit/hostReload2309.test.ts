@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 crossVault GmbH
 /**
  * #2309 H1 (cell01): Developer: Reload Window ended the agent host the extension had started in its terminal, and the
  * cell with it. The host's terminal is now a normal (not transient) shell terminal, which VS Code's persistent terminal

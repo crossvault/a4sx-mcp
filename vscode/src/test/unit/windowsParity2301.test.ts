@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 crossVault GmbH
 /** #2301 (cell01 on Windows, signed in to a second account): E3 the registry states in words, E7 the layout. */
 import * as assert from "assert";
 import * as fs from "fs";

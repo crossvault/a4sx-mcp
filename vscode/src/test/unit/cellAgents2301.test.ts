@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 crossVault GmbH
 /**
  * a4sx #2301 (the owner, 2026-11-21: "would it make sense to add operations to resume/start it in ahp as well?"):
  * "Open in Agents window" on a cell stored on this computer. It opens the Agents window's own link to the cell's

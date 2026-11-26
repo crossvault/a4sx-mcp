@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 crossVault GmbH
 /** a4sx #2309 (m), cell01: terminal → Agents window took three steps; "Move it into the Agents window" is one. */
 import * as assert from "assert";
 import { calls, fakeMemento, resetCalls } from "../fakeVscode";

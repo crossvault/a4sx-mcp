@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 crossVault GmbH
 /**
  * #2309 (cell01, during a deploy): My sessions and Launch profiles kept "a4sx is busy right now…" for minutes, and
  * Cells kept "Could not read the cells on other machines": no retry. A busy answer is read again by itself, by the
