@@ -150,6 +150,17 @@ describe("Open deck: a request", () => {
     assert.ok(!deckFolderOk("//host/share/x", { ...WHERE, platform: "win32" }));
   });
 
+  it("review: never a folder that is the decks' channel folder or holds it (a cell's sandbox could write into it)", () => {
+    const store = path.join(HOME, ".config", "Code", "User", "globalStorage", "crossvaultgmbh.a4sx", "deck");
+    fs.mkdirSync(store, { recursive: true });
+    for (const f of [HOME, path.join(HOME, ".config"), path.join(HOME, ".config", "Code"), store]) {
+      assert.ok(!deckFolderOk(f, { ...WHERE, channelRoot: store }), f);
+    }
+    assert.ok(deckFolderOk(WORK, { ...WHERE, channelRoot: store }));
+    assert.ok(deckFolderOk(HOME, WHERE));                             // without a channel folder: the CLI decides
+    assert.ok(deckFolderOk(WORK, { ...WHERE, channelRoot: path.join(HOME, "not-made-yet") }));
+  });
+
   it("follow-up: a folder in one of the window's workspace folders is taken too; others still refuse it", () => {
     const ws = fs.realpathSync(tmp());
     const proj = path.join(ws, "srv-proj");
@@ -186,9 +197,12 @@ describe("Open deck: a request", () => {
     if (process.platform !== "win32") {
       fs.chmodSync(path.join(HOME, "open"), 0o777);
     }
+    const store = path.join(HOME, ".store", "deck");
+    fs.mkdirSync(store, { recursive: true });
+    cases.push(path.join(HOME, ".store"), store);
     const out = JSON.parse(deckPy(py!, "print(json.dumps([m.vscode_folder_ok(c) for c in json.loads(sys.argv[2])]))", [JSON.stringify(cases)],
-      { ...process.env, HOME, USERPROFILE: HOME, A4SX_DECK_FOLDERS: ws }));
-    assert.deepStrictEqual(out, cases.map((c) => deckFolderOk(c, { home: HOME, folders: [ws] })), JSON.stringify(cases));
+      { ...process.env, HOME, USERPROFILE: HOME, A4SX_DECK_FOLDERS: JSON.stringify([ws]), A4SX_DECK_ROOT: store }));
+    assert.deepStrictEqual(out, cases.map((c) => deckFolderOk(c, { home: HOME, folders: [ws], channelRoot: store })), JSON.stringify(cases));
   });
 
   it("at most 10 in a minute", () => {
@@ -263,17 +277,21 @@ describe("Open deck: the deck's environment", () => {
     assert.strictEqual(deckEnv("/c", NONCE, "/opt/x/a4sx", { Path: "C:\\w" }).Path, "/opt/x" + path.delimiter + "C:\\w");
     assert.strictEqual(deckEnv("/c", NONCE, "/opt/x/a4sx", {}).DECK_A4SX_PY, undefined);
     assert.ok(!("PATH" in deckEnv("/c", NONCE, "bin/a4sx", { PATH: "/usr/bin" })));   // a relative CLI path: PATH as it is
-    assert.strictEqual(deckEnv("/c", NONCE, "/x/a4sx", {}, ["/w1", "/w2"]).A4SX_DECK_FOLDERS, ["/w1", "/w2"].join(path.delimiter));
+    assert.strictEqual(deckEnv("/c", NONCE, "/x/a4sx", {}, ["/w1", "/w:2"]).A4SX_DECK_FOLDERS, JSON.stringify(["/w1", "/w:2"]));
+    assert.strictEqual(deckEnv("/c", NONCE, "/x/a4sx", {}, [], "/store/deck").A4SX_DECK_ROOT, "/store/deck");
   });
 
-  it("follow-up: the folders of decks that ended without a clean stop are removed at the start, nothing else", () => {
+  it("follow-up: only the folders of decks whose extension host is gone are removed at the start", () => {
     const root = tmp();
-    for (const n of ["a4sx-deck-Ab12Cd", "a4sx-deck-zzzzzz", "a4sx-deck-toolong1", "other", "a4sx-deck-"]) {
+    const dead = 999_999_999;
+    for (const n of [`a4sx-deck-${dead}-Ab12Cd`, `a4sx-deck-${dead}-zzzzzz`, `a4sx-deck-${process.pid}-Live01`, "a4sx-deck-1-toolong1",
+      "other", "a4sx-deck-Ab12Cd"]) {
       fs.mkdirSync(path.join(root, n));
     }
-    fs.writeFileSync(path.join(root, "a4sx-deck-Ab12Cd", "req-1-1.json"), "x");
-    assert.strictEqual(removeStaleChannels(root), 2);
-    assert.deepStrictEqual(fs.readdirSync(root).sort(), ["a4sx-deck-", "a4sx-deck-toolong1", "other"]);
+    fs.writeFileSync(path.join(root, `a4sx-deck-${dead}-Ab12Cd`, "req-1-1.json"), "x");
+    assert.strictEqual(removeStaleChannels(root, (pid) => pid !== dead), 2);
+    assert.deepStrictEqual(fs.readdirSync(root).sort(), ["a4sx-deck-1-toolong1", `a4sx-deck-${process.pid}-Live01`, "a4sx-deck-Ab12Cd", "other"].sort());
+    assert.strictEqual(removeStaleChannels(root), 0);   // the real check: this process runs
     assert.strictEqual(removeStaleChannels(path.join(root, "nope")), 0);
     assert.strictEqual(removeStaleChannels(undefined), 0);
   });
@@ -386,6 +404,19 @@ describe("Open deck: the terminal", () => {
     assert.strictEqual(calls.terminals.length, 2);   // a new deck, with a new folder and nonce
     assert.notStrictEqual(env(1).A4SX_DECK_CHANNEL, dir);
     assert.notStrictEqual(env(1).A4SX_DECK_NONCE, nonce);
+  });
+
+  it("review: two windows share one storage folder; a second window's start leaves the first deck's folder alone", async () => {
+    const root = path.join(tmp(), "deck");
+    const a = deck({ channelRoot: root });
+    await a.open();
+    const dirA = env(0).A4SX_DECK_CHANNEL;
+    assert.ok(path.basename(dirA).startsWith(`a4sx-deck-${process.pid}-`));
+    assert.strictEqual(removeStaleChannels(root), 0);               // what window B's activation runs
+    assert.ok(fs.existsSync(dirA));
+    put("req-1-1.json", req(env(0).A4SX_DECK_NONCE, "bob-cell"));
+    await a.drain();
+    assert.deepStrictEqual(started.map((r) => r.label), ["bob-cell"]);
   });
 
   it("a deck closed while a start runs drops the rest of that batch", async () => {

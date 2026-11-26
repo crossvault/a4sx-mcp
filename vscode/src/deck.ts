@@ -11,10 +11,12 @@
  * folder, visibly. Nothing on it deletes, signs in or changes a mesh.
  *
  * Why no question before each start (coordinator, 11-26): a process of the same user that can run programs itself can
- * run `a4sx launch` in any folder without the deck, so the channel gives it nothing but visibility. That rests on an
- * assumption, checked against the CLI's cell settings (cli/amdx.py, the cell's "sandbox" block): a cell's sandboxed
- * commands can't write into VS Code's globalStorage, where the channel folders are (the sandbox writes only in its
- * folder, and a4sx adds no write root). Claude Code's Write and Edit tools outside the folder go through the person's
+ * run `a4sx launch` in any folder without the deck, so the channel gives it nothing but visibility. That rests on a
+ * condition, checked against the CLI's cell settings (cli/amdx.py, the cell's "sandbox" block): a cell's sandboxed
+ * commands can't write into VS Code's globalStorage, where the channel folders are. The sandbox writes only inside the
+ * cell's folder and a4sx adds no write root, so this holds unless the cell's folder holds globalStorage (the home
+ * folder itself, ~/.config, %APPDATA%). The deck never starts a cell there: deckFolderOk refuses the channels' folder
+ * and every folder above it (review). Claude Code's Write and Edit tools outside the folder go through the person's
  * permission mode (and a4sx's ask hook). If a cell's sandbox ever can write there, ask before each start instead.
  */
 import * as crypto from "crypto";
@@ -25,7 +27,7 @@ import * as vscode from "vscode";
 
 export const CMD_OPEN_DECK = "a4sx.openDeck";
 /** deck.py as bundled (a4sx-herdr-plugin 0.5.0); a file that isn't this one is not started. */
-export const DECK_SHA256 = "7729e9ad573a266d1e9a65960b6a409425b827286dd3a33d7f1553da5586f7f6";
+export const DECK_SHA256 = "2512e29b96cfba7ebd4c5426dc622df22855690a546c8b44d0d4b194ff384582";
 export const DECK_FILE = path.join("deck", "deck.py");
 /** At most this many terminals for the deck in a minute. */
 export const DECK_MAX_PER_MINUTE = 10;
@@ -112,6 +114,8 @@ export interface DeckWhere {
   home?: string;
   /** The window's workspace folders, which a start's folder may be in too (the person chose them). */
   folders?: readonly string[];
+  /** The decks' channel folder: never a start's folder, nor inside one (a cell's sandbox could write into it). */
+  channelRoot?: string;
 }
 
 /**
@@ -134,6 +138,16 @@ export function deckFolderOk(cwd: string, where: DeckWhere = {}): boolean {
     const st = fs.statSync(real);
     if (!st.isDirectory() || (platform !== "win32" && (st.mode & 0o002) !== 0)) {
       return false;
+    }
+    if (where.channelRoot) {
+      try {
+        const up = path.relative(real, fs.realpathSync(where.channelRoot));
+        if (up === "" || (up !== ".." && !up.startsWith(".." + path.sep) && !path.isAbsolute(up))) {
+          return false;   // the channels' folder is this folder or inside it
+        }
+      } catch {
+        // not made yet: nothing of ours in it
+      }
     }
     const inside = (root: string) => {
       try {
@@ -275,12 +289,13 @@ function pathKey(env: NodeJS.ProcessEnv): string {
  * them on; the deck would think it is in herdr).
  */
 export function deckEnv(
-  channel: string, nonce: string, cli: string, env: NodeJS.ProcessEnv = process.env, folders: readonly string[] = [],
+  channel: string, nonce: string, cli: string, env: NodeJS.ProcessEnv = process.env, folders: readonly string[] = [], root = "",
 ): Record<string, string | null> {
   const out: Record<string, string | null> = {
     A4SX_DECK_HOST: "vscode", A4SX_DECK_CHANNEL: channel, A4SX_DECK_NONCE: nonce,
     HERDR_SOCKET_PATH: null, HERDR_PANE_ID: null,
-    ...(folders.length ? { A4SX_DECK_FOLDERS: folders.join(path.delimiter) } : {}),
+    ...(folders.length ? { A4SX_DECK_FOLDERS: JSON.stringify(folders) } : {}),   // review: a ':' can be in a path
+    ...(root ? { A4SX_DECK_ROOT: root } : {}),
   };
   if (path.isAbsolute(cli)) {   // review: a relative a4sx.cliPath would be a relative PATH entry
     const key = pathKey(env);
@@ -316,12 +331,29 @@ export interface DeckDeps {
   channelRoot?: string;
   /** The home folder a start's folder may be in (tests). */
   home?: string;
-  /** The window's workspace folders (file system paths). */
+  /** The window's workspace folders (file system paths). Read again for each request; the deck has them as they were when
+   * it opened, so a folder added later is shown there as a command until the deck is opened again (review, a nit). */
   folders?(): readonly string[];
 }
 
-/** Follow-up (b): the folders of decks that ended without a clean stop (a crash of VS Code), at activation. */
-export function removeStaleChannels(root: string | undefined): number {
+/** A deck's channel folder carries the pid of the extension host that made it (every window has its own host). */
+const CHANNEL_NAME = /^a4sx-deck-(\d{1,10})-[A-Za-z0-9]{6}$/;
+
+function hostAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== "ESRCH";   // EPERM: it runs, as someone else
+  }
+}
+
+/**
+ * Follow-up (b): the folders of decks whose extension host is gone (a crash of VS Code), at activation. Review: the
+ * storage folder is shared by every window, so another window's live deck is never touched: only a folder whose host's
+ * pid no longer runs goes.
+ */
+export function removeStaleChannels(root: string | undefined, alive: (pid: number) => boolean = hostAlive): number {
   if (!root) {
     return 0;
   }
@@ -332,7 +364,11 @@ export function removeStaleChannels(root: string | undefined): number {
   } catch {
     return 0;
   }
-  for (const name of names.filter((x) => /^a4sx-deck-[A-Za-z0-9]{6}$/.test(x))) {
+  for (const name of names) {
+    const m = CHANNEL_NAME.exec(name);
+    if (!m || Number(m[1]) === process.pid || alive(Number(m[1]))) {
+      continue;
+    }
     try {
       fs.rmSync(path.join(root, name), { recursive: true, force: true });
       n++;
@@ -399,13 +435,13 @@ export class Deck {
     }
     const root = this.deps.channelRoot ?? os.tmpdir();
     fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-    const dir = fs.mkdtempSync(path.join(root, "a4sx-deck-"));   // 0700
+    const dir = fs.mkdtempSync(path.join(root, `a4sx-deck-${process.pid}-`));   // 0700
     this.dir = dir;
     this.nonce = crypto.randomBytes(16).toString("hex");
     const location = (vscode as { TerminalLocation?: { Editor: number } }).TerminalLocation;
     this.terminal = vscode.window.createTerminal({
       name: DECK_TEXTS.terminal, shellPath: python, shellArgs: ["-I", file], cwd: os.homedir(),
-      env: deckEnv(dir, this.nonce, cli, process.env, this.deps.folders?.() ?? []), isTransient: true, ...(location ? { location: location.Editor } : {}),
+      env: deckEnv(dir, this.nonce, cli, process.env, this.deps.folders?.() ?? [], root), isTransient: true, ...(location ? { location: location.Editor } : {}),
     } as vscode.TerminalOptions);
     this.terminal.show();
     try {
@@ -450,7 +486,9 @@ export class Deck {
       if (dir !== this.dir) {
         return;   // the deck closed while a start ran: the rest of this batch is dropped with its folder
       }
-      const c = checkDeckRequest(text, nonce, { platform: this.deps.platform, home: this.deps.home, folders: this.deps.folders?.() });
+      const c = checkDeckRequest(text, nonce, {
+        platform: this.deps.platform, home: this.deps.home, folders: this.deps.folders?.(), channelRoot: this.deps.channelRoot ?? os.tmpdir(),
+      });
       const say = (line: string, toast: string) => {
         this.deps.log(line);
         if (this.refusalToasts.allow(now())) {

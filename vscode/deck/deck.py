@@ -44,8 +44,15 @@ HERDR = os.environ.get("HERDR_BIN_PATH") or "herdr"
 _VSC_CHANNEL = os.environ.pop("A4SX_DECK_CHANNEL", "")
 _VSC_NONCE = os.environ.pop("A4SX_DECK_NONCE", "")
 VSCODE = os.environ.get("A4SX_DECK_HOST") == "vscode" and bool(_VSC_CHANNEL) and bool(_VSC_NONCE)
-#: the VS Code window's workspace folders: a start in one of them goes to VS Code, as one in the home folder does
-_VSC_FOLDERS = [f for f in os.environ.pop("A4SX_DECK_FOLDERS", "").split(os.pathsep) if f]
+#: the VS Code window's workspace folders (a JSON list, as they were when the deck opened): a start in one of them goes to
+#: VS Code, as one in the home folder does
+try:
+    _VSC_FOLDERS = [f for f in json.loads(os.environ.pop("A4SX_DECK_FOLDERS", "") or "[]") if isinstance(f, str) and f]
+except ValueError:
+    _VSC_FOLDERS = []
+#: the folder the extension keeps the decks' channels in: a cell never starts in it or above it (its sandbox could write
+#: into the channel then)
+_VSC_ROOT = os.environ.pop("A4SX_DECK_ROOT", "")
 #: VS Code started from a herdr pane passes herdr's variables on to its terminals; the extension's deck is not in herdr
 IN_HERDR = not VSCODE and bool(os.environ.get("HERDR_SOCKET_PATH") or os.environ.get("HERDR_PANE_ID"))
 FRONT = "herdr" if IN_HERDR else ("VS Code" if VSCODE else ("Windows terminal" if WIN else "terminal"))
@@ -488,6 +495,13 @@ def vscode_folder_ok(cwd):
         return False
     if not stat.S_ISDIR(st.st_mode) or (not WIN and st.st_mode & 0o002):
         return False
+
+    if _VSC_ROOT:
+        try:
+            if os.path.normcase(os.path.commonpath([real, os.path.realpath(_VSC_ROOT)])) == os.path.normcase(real):
+                return False   # the channels' folder is in it
+        except (OSError, ValueError):
+            pass
 
     def inside(root):
         try:
