@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 crossVault GmbH
 /** #2309 (l), cell01: a cell started in a terminal from the Cells view stayed "stored" until a Refresh. */
 import * as assert from "assert";
 import * as fs from "fs";

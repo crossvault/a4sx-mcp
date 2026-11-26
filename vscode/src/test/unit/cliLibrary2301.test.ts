@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 crossVault GmbH
 /** #2301 E4: one sign-in. Without the extension's own, My sessions lists the library through the a4sx CLI's. */
 import * as assert from "assert";
 import { resetCalls } from "../fakeVscode";

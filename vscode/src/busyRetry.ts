@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 crossVault GmbH
 // #2309 (cell01, during a deploy): after the server came back, My sessions and Launch profiles kept showing "a4sx is
 // busy right now…" for minutes, with no retry. A view that got a busy answer (429/503) reads again by itself: after
 // the server's Retry-After when it sent one, else after a growing wait (5 s, 10 s, 20 s, 40 s, then every 60 s), and

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 crossVault GmbH
 /**
  * a4sx #2301, the looks (the owner, 2026-11-21: "could we make the plugin a bit prettier and sleeker?"):
  * a row's state as its icon's colour, other members' cells folded into one row, and one status bar item that shows

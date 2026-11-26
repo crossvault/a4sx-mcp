@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 crossVault GmbH
 /** a4sx CLI `ended_why`: an agent host whose terminal went away (VS Code closed with it) says so on This computer. */
 import * as assert from "assert";
 import { AGENT_HOST_TEXTS, parseAgentHostStatus } from "../../agentHostStatus";

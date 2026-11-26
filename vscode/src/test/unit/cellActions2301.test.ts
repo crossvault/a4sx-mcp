@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 crossVault GmbH
 /**
  * a4sx #2301 E5/E6 (cell01): four more actions on the rows of the Cells view: Last messages and Why can or can't I
  * message it on a cell on another machine; Save its conversation… and Start from a saved session… on a cell stored on

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 crossVault GmbH
 /** a4sx #2326 (CLI 0.59.15): Stop agent host on This computer runs `a4sx agent-host stop`, the same stop as Ctrl+C. */
 import * as assert from "assert";
 import * as fs from "fs";
