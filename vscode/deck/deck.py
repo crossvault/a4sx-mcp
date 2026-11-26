@@ -467,10 +467,18 @@ def vscode_request_args(rest):
     return list(rest) if frozenset(seen) in VSC_SHAPES else None
 
 
+def vscode_plain_folder(cwd):
+    """A folder VS Code may start in for the deck: no control, format or line-separator characters (the extension's
+    own check refuses the same, and says so instead of showing the command)."""
+    import unicodedata
+    return not any(unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp", "Co") for ch in cwd)
+
+
 def vscode_request(label, cwd, rest):
     """One request file in the extension's channel folder, written whole before it appears (the extension reads,
     deletes and checks it)."""
-    label = "".join(ch for ch in ANSI.sub("", str(label)) if ch.isprintable())[:40] or "a4sx"
+    # review: plain ASCII only (a terminal's name; no right-to-left or zero-width characters), as the extension takes
+    label = "".join(ch for ch in ANSI.sub("", str(label)) if " " <= ch <= "~")[:40].strip() or "a4sx"
     req = {"v": 1, "nonce": _VSC_NONCE, "label": label, "cwd": os.path.abspath(cwd), "args": rest}
     name = f"req-{time.time_ns()}-{os.getpid()}.json"
     tmp = os.path.join(_VSC_CHANNEL, "." + name + ".tmp")
@@ -493,7 +501,7 @@ def new_tab(label, cwd, argv, cell=None, reuse=None, own=False):
     shown = ("a4sx " + " ".join(argv[len(A4SX_ARGV):])) if argv[:len(A4SX_ARGV)] == A4SX_ARGV else " ".join(argv)
     if VSCODE:   # 0.5.0: a VS Code terminal, opened by the extension; anything else is shown to run by hand
         rest = vscode_request_args(argv[len(A4SX_ARGV):]) if argv[:len(A4SX_ARGV)] == A4SX_ARGV else None
-        if rest is None or any(c in cwd for c in "\0\n\r"):
+        if rest is None or not vscode_plain_folder(cwd):
             return f"run this in a terminal, in {cwd}:  {shown}"
         try:
             label = vscode_request(label, cwd, rest)

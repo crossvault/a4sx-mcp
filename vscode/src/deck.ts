@@ -18,7 +18,7 @@ import * as vscode from "vscode";
 
 export const CMD_OPEN_DECK = "a4sx.openDeck";
 /** deck.py as bundled (a4sx-herdr-plugin 0.5.0); a file that isn't this one is not started. */
-export const DECK_SHA256 = "220088e0079fc8c9a1630e4305e514f1e2d563490e73ab5dc7d018fab37fbf0b";
+export const DECK_SHA256 = "c2045efd6105fb5e7e0d6fb7219f909d6470366e776d24cd0d0cd60d72782897";
 export const DECK_FILE = path.join("deck", "deck.py");
 /** At most this many terminals for the deck in a minute. */
 export const DECK_MAX_PER_MINUTE = 10;
@@ -35,9 +35,12 @@ export const DECK_TEXTS = {
   changed: "The deck that comes with the a4sx extension was changed on this computer, so it wasn't started. Reinstall the a4sx extension.",
   refused: (what: string) => `The deck asked for something the extension doesn't run, so nothing was started: ${what}.`,
   unreadable: "a request it can't read",
+  outsideHome: "a4sx launch in a folder outside your home folder (or one every user can write to)",
   tooMany: `The deck asked for more than ${DECK_MAX_PER_MINUTE} terminals within a minute, so this one wasn't opened.`,
-  logOpened: (time: string, label: string, cwd: string, args: readonly string[]) => `${time} deck: opened «${label}» in ${cwd}: a4sx ${args.join(" ")}`,
+  logOpened: (time: string, label: string) => `${time} deck: opened the terminal «a4sx: ${label}»`,
   logRefused: (time: string, why: string) => `${time} deck: refused ${why}`,
+  logAccepted: (time: string, label: string, cwd: string, args: readonly string[]) => `${time} deck: accepted «${label}» in ${cwd}: a4sx ${args.join(" ")}`,
+  logNotOpened: (time: string, label: string) => `${time} deck: «${label}» was not opened (the message before says why)`,
 };
 
 // --- the check (the same shapes as deck.py's vscode_request_args) ----------------------------------
@@ -47,8 +50,10 @@ const SAVED = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const FLAGS = ["--cell", "--new-session", "--a4sx-session"];
 /** The flag sets of `a4sx launch` the deck sends, sorted and joined. */
 const SHAPES = new Set(["--cell", "--cell --new-session", "--a4sx-session --cell", "--a4sx-session"]);
-// eslint-disable-next-line no-control-regex
-const CONTROL = /[\x00-\x1f\x7f-\x9f\u2028\u2029]/;
+/** A terminal's name: plain ASCII (review: no right-to-left or zero-width characters that would show another name). */
+const LABEL = /^[\x20-\x7e]{1,40}$/;
+/** A folder: no control, format, line-separator or private-use characters (deck.py's vscode_plain_folder refuses the same). */
+const FOLDER_BAD = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}]/u;
 
 /** The arguments when they are a start the deck may ask for: `launch` with --cell [<cell>], --new-session, --a4sx-session <saved>. */
 export function deckLaunchArgs(args: unknown): string[] | undefined {
@@ -94,10 +99,35 @@ function shownWhat(args: unknown): string {
   return plain ? `a4sx ${plain}` : DECK_TEXTS.unreadable;
 }
 
-/** One request file's text, checked: its nonce, a plain label, an existing absolute folder and a start on the allow-list. */
-export function checkDeckRequest(
-  text: string, nonce: string, isDir: (p: string) => boolean = isDirectory, platform: NodeJS.Platform = process.platform,
-): DeckCheck {
+export interface DeckWhere {
+  platform?: NodeJS.Platform;
+  /** The home folder a start's folder must be in (default: this user's). */
+  home?: string;
+}
+
+/**
+ * Review (a forged request picks the folder too): a start's folder is an existing folder inside the home folder (links
+ * resolved), that other users can't write to, and on Windows not on a network share.
+ */
+export function deckFolderOk(cwd: string, where: DeckWhere = {}): boolean {
+  const platform = where.platform ?? process.platform;
+  const abs = platform === "win32" ? path.win32.isAbsolute : path.posix.isAbsolute;
+  if (cwd.length > 4096 || FOLDER_BAD.test(cwd) || !abs(cwd) || (platform === "win32" && /^[\\/]{2}/.test(cwd))) {
+    return false;
+  }
+  try {
+    const real = fs.realpathSync(cwd);
+    const home = fs.realpathSync(where.home ?? os.homedir());
+    const rel = path.relative(home, real);
+    const st = fs.statSync(real);
+    return st.isDirectory() && rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel) && (platform === "win32" || (st.mode & 0o002) === 0);
+  } catch {
+    return false;
+  }
+}
+
+/** One request file's text, checked: its nonce, a plain label, a folder deckFolderOk takes and a start on the allow-list. */
+export function checkDeckRequest(text: string, nonce: string, where: DeckWhere = {}): DeckCheck {
   let v: unknown;
   try {
     v = JSON.parse(text);
@@ -114,10 +144,11 @@ export function checkDeckRequest(
   const args = deckLaunchArgs(r.args);
   const label = r.label;
   const cwd = r.cwd;
-  const abs = platform === "win32" ? path.win32.isAbsolute : path.posix.isAbsolute;
-  if (!args || typeof label !== "string" || !label || label.length > 40 || CONTROL.test(label)
-      || typeof cwd !== "string" || cwd.length > 4096 || CONTROL.test(cwd) || !abs(cwd) || !isDir(cwd)) {
+  if (!args || typeof label !== "string" || !LABEL.test(label) || typeof cwd !== "string") {
     return { ok: false, why: shownWhat(r.args) };
+  }
+  if (!deckFolderOk(cwd, where)) {
+    return { ok: false, why: DECK_TEXTS.outsideHome };
   }
   return { ok: true, req: { label, cwd, args } };
 }
@@ -154,10 +185,7 @@ export function takeRequests(dir: string, uid: number | undefined = typeof proce
     const p = path.join(dir, n);
     let text = "";
     try {
-      const st = fs.lstatSync(p);
-      if (st.isFile() && st.size <= DECK_MAX_REQUEST_BYTES && (uid === undefined || st.uid === uid)) {
-        text = fs.readFileSync(p, "utf8");
-      }
+      text = readRequest(p, uid);
     } catch {
       continue;   // gone already
     }
@@ -171,11 +199,37 @@ export function takeRequests(dir: string, uid: number | undefined = typeof proce
   return out;
 }
 
-function isDirectory(p: string): boolean {
+/**
+ * Review (a file swapped after a check): opened once, never following a link and never waiting (a FIFO would block
+ * the extension host), then checked on the open file: a plain file of this user, at most DECK_MAX_REQUEST_BYTES.
+ * "" when it isn't one. Throws when it is gone.
+ */
+function readRequest(p: string, uid: number | undefined): string {
+  const c = fs.constants;
+  const flags = process.platform === "win32" ? c.O_RDONLY : c.O_RDONLY | (c.O_NOFOLLOW ?? 0) | (c.O_NONBLOCK ?? 0);
+  let fd: number;
   try {
-    return fs.statSync(p).isDirectory();
-  } catch {
-    return false;
+    fd = fs.openSync(p, flags);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      throw e;
+    }
+    return "";   // a link (ELOOP), or anything else it can't open plainly
+  }
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.size > DECK_MAX_REQUEST_BYTES || (uid !== undefined && st.uid !== uid)) {
+      return "";
+    }
+    const buf = Buffer.alloc(DECK_MAX_REQUEST_BYTES + 1);
+    let n = 0;
+    for (let got = -1; got !== 0 && n < buf.length;) {
+      got = fs.readSync(fd, buf, n, buf.length - n, null);
+      n += got;
+    }
+    return n > DECK_MAX_REQUEST_BYTES ? "" : buf.subarray(0, n).toString("utf8");
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
@@ -202,8 +256,10 @@ export function deckEnv(channel: string, nonce: string, cli: string, env: NodeJS
     A4SX_DECK_HOST: "vscode", A4SX_DECK_CHANNEL: channel, A4SX_DECK_NONCE: nonce,
     HERDR_SOCKET_PATH: null, HERDR_PANE_ID: null,
   };
-  const key = pathKey(env);
-  out[key] = path.dirname(cli) + path.delimiter + (env[key] ?? "");
+  if (path.isAbsolute(cli)) {   // review: a relative a4sx.cliPath would be a relative PATH entry
+    const key = pathKey(env);
+    out[key] = path.dirname(cli) + path.delimiter + (env[key] ?? "");
+  }
   const py = path.join(path.dirname(cli), "a4sx.py");
   try {
     if (fs.statSync(py).isFile()) {
@@ -230,7 +286,23 @@ export interface DeckDeps {
   log(line: string): void;
   platform?: NodeJS.Platform;
   now?(): number;
-  tmpdir?: string;
+  /** Where the deck's private folders are made (the extension's own storage; default the temp folder). */
+  channelRoot?: string;
+  /** The home folder a start's folder must be in (tests). */
+  home?: string;
+}
+
+/** Review: a deck left from before an extension host restart has a dead folder; it is closed, not left as a second deck. */
+export function closeStaleDecks(terminals: readonly vscode.Terminal[] = vscode.window.terminals ?? []): number {
+  let n = 0;
+  for (const t of terminals) {
+    const env = (t.creationOptions as vscode.TerminalOptions | undefined)?.env;
+    if (env && env.A4SX_DECK_HOST === "vscode" && env.A4SX_DECK_CHANNEL) {
+      t.dispose();
+      n++;
+    }
+  }
+  return n;
 }
 
 export class Deck {
@@ -241,6 +313,8 @@ export class Deck {
   private timer: ReturnType<typeof setInterval> | undefined;
   private chain: Promise<void> = Promise.resolve();
   private readonly limit = new RateLimit();
+  /** Review: refusals are logged each, but shown at most once a minute. */
+  private readonly refusalToasts = new RateLimit(1);
 
   constructor(private readonly deps: DeckDeps) {}
 
@@ -272,7 +346,9 @@ export class Deck {
       this.terminal.show();
       return this.terminal;
     }
-    const dir = fs.mkdtempSync(path.join(this.deps.tmpdir ?? os.tmpdir(), "a4sx-deck-"));   // 0700
+    const root = this.deps.channelRoot ?? os.tmpdir();
+    fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+    const dir = fs.mkdtempSync(path.join(root, "a4sx-deck-"));   // 0700
     this.dir = dir;
     this.nonce = crypto.randomBytes(16).toString("hex");
     const location = (vscode as { TerminalLocation?: { Editor: number } }).TerminalLocation;
@@ -287,7 +363,13 @@ export class Deck {
     } catch {
       // the scan below still finds them
     }
-    this.timer = setInterval(() => this.drain(), DECK_SCAN_MS);
+    this.timer = setInterval(() => {
+      if (this.terminal && this.terminal.exitStatus !== undefined) {   // review: the deck ended (q), its tab stays
+        this.close();
+        return;
+      }
+      void this.drain();
+    }, DECK_SCAN_MS);
     (this.timer as { unref?: () => void }).unref?.();
     return this.terminal;
   }
@@ -310,25 +392,32 @@ export class Deck {
     if (!dir) {
       return;
     }
-    const time = () => new Date(this.deps.now?.() ?? Date.now()).toISOString().slice(0, 19) + "Z";
+    const now = () => this.deps.now?.() ?? Date.now();
+    const time = () => new Date(now()).toISOString().slice(0, 19) + "Z";
+    const nonce = this.nonce;
     for (const text of takeRequests(dir)) {
       if (dir !== this.dir) {
-        return;
+        return;   // the deck closed while a start ran: the rest of this batch is dropped with its folder
       }
-      const c = checkDeckRequest(text, this.nonce, undefined, this.deps.platform);
+      const c = checkDeckRequest(text, nonce, { platform: this.deps.platform, home: this.deps.home });
+      const say = (line: string, toast: string) => {
+        this.deps.log(line);
+        if (this.refusalToasts.allow(now())) {
+          void vscode.window.showWarningMessage(toast);
+        }
+      };
       if (!c.ok) {
-        this.deps.log(DECK_TEXTS.logRefused(time(), c.why));
-        void vscode.window.showWarningMessage(DECK_TEXTS.refused(c.why));
+        say(DECK_TEXTS.logRefused(time(), c.why), DECK_TEXTS.refused(c.why));
         continue;
       }
-      if (!this.limit.allow(this.deps.now?.() ?? Date.now())) {
-        this.deps.log(DECK_TEXTS.logRefused(time(), `«${c.req.label}»: ${DECK_TEXTS.tooMany}`));
-        void vscode.window.showWarningMessage(DECK_TEXTS.tooMany);
+      if (!this.limit.allow(now())) {
+        say(DECK_TEXTS.logRefused(time(), `«${c.req.label}»: ${DECK_TEXTS.tooMany}`), DECK_TEXTS.tooMany);
         continue;
       }
-      this.deps.log(DECK_TEXTS.logOpened(time(), c.req.label, c.req.cwd, c.req.args));
+      this.deps.log(DECK_TEXTS.logAccepted(time(), c.req.label, c.req.cwd, c.req.args));
       try {
-        await this.deps.start(c.req);
+        const opened = await this.deps.start(c.req);
+        this.deps.log(opened ? DECK_TEXTS.logOpened(time(), c.req.label) : DECK_TEXTS.logNotOpened(time(), c.req.label));
       } catch (e) {
         this.deps.log(`${time()} deck: «${c.req.label}» didn't start: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -354,7 +443,10 @@ export class Deck {
     this.terminal = undefined;
   }
 
+  /** The extension stops (an update, a restart of its host): the deck goes with it, never left without its folder. */
   dispose(): void {
+    const t = this.terminal;
     this.close();
+    t?.dispose();
   }
 }

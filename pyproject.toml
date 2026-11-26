@@ -60,6 +60,8 @@ addopts = "-ra"
 
 [tool.ruff]
 line-length = 120
+# the herdr plugin's deck, bundled byte for byte (its sha256 is pinned in vscode/src/deck.ts); linted in its own repo
+extend-exclude = ["vscode/deck"]
 target-version = "py310"
 src = ["src", "tests"]
 

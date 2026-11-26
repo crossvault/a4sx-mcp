@@ -308,7 +308,7 @@ const fake = {
       },
     },
     createTerminal(options: unknown) {
-      const t = { options, shown: false, sent: [] as string[], show() { this.shown = true; }, sendText(text: string, addNewLine?: boolean) { this.sent.push(addNewLine === false ? text : `${text}\n`); } };
+      const t = { options, shown: false, sent: [] as string[], show() { this.shown = true; }, disposed: false, dispose() { this.disposed = true; }, sendText(text: string, addNewLine?: boolean) { this.sent.push(addNewLine === false ? text : `${text}\n`); } };
       calls.terminals.push(t);
       return t;
     },
