@@ -684,6 +684,22 @@ export async function startCellHere(deps: CellCommandDeps, item: RemoteCellItem 
 }
 
 /**
+ * "Open deck": a start the deck asked for and the deck module checked (`a4sx launch` with --cell, --new-session or
+ * --a4sx-session): in a terminal named after it, as a start from the Cells view is (the CLI, its version, Claude Code).
+ */
+export async function startDeckRequest(deps: CellCommandDeps, terminalName: string, cwd: string, args: readonly string[]): Promise<vscode.Terminal | undefined> {
+  const cli = await ensureCli(deps);
+  if (!cli || !(await cliAsksConsent(deps, cli))) {
+    return undefined;
+  }
+  const claude = await cellClaudeEnv(deps);
+  if (!claude) {
+    return undefined;
+  }
+  return launched(deps, openCommandTerminal(terminalName, cli, CLI_NAME, args, cwd, claude.env, undefined, true));
+}
+
+/**
  * #2309 F4 (cell01, Restricted Mode): VS Code refuses a terminal in an untrusted window, and from a notification it did
  * so silently (no trust question, no terminal). Asked here first, on every path, so it is never silent.
  */
