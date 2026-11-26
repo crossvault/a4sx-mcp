@@ -17,7 +17,7 @@ import {
   CellActionDeps, cellLastMessages, cellWhyMessage, CMD_CELL_EXPLAIN, CMD_CELL_FROM_SAVED, CMD_CELL_MESSAGES, CMD_CELL_OPEN_AGENTS, CMD_CELL_SAVE, openCellInAgentsWindow, saveCellConversation, startCellFromSaved,
 } from "./cellActions";
 import {
-  CellCommandDeps, copyCellLaunch, dailyUpdate, forgetCell, installCli, newCell, openCellOnWeb, openCellPolicy, ownCliCheck, ownCliUsable, renameCell, repairOwnCli, setCellProfile, setDefaultCell, setupAgentsWindow, startAgentHost, startCell, stopAgentHost, startCellHere, stopCell,
+  CellCommandDeps, copyCellLaunch, dailyUpdate, ensureCli, ensureTrusted, startDeckRequest, forgetCell, installCli, newCell, openCellOnWeb, openCellPolicy, ownCliCheck, ownCliUsable, renameCell, repairOwnCli, setCellProfile, setDefaultCell, setupAgentsWindow, startAgentHost, startCell, stopAgentHost, startCellHere, stopCell,
   updateCliInTerminal,
 } from "./cellCommands";
 import {
@@ -32,7 +32,8 @@ import { convertTabToCell, MeshListing } from "./convertTab";
 import { findLocalSession, librarySlug } from "./localSession";
 import { runAsCell, RunAsCellSession } from "./runAsCell";
 import { LibraryUnreadable, SavedLookup, saveTabSession } from "./saveTab";
-import { execSpec, Fetch, installedLauncher, Runner } from "./provision";
+import { execSpec, Fetch, findPython, installedLauncher, Runner } from "./provision";
+import { CMD_OPEN_DECK, Deck, DECK_TEXTS } from "./deck";
 import { clearFilter, filterSessions, moveToFolder, removeFromFolder } from "./folderCommands";
 import { CMD_OPEN_LISTING, ListingItem, MarketplaceProvider } from "./marketplaceView";
 import {
@@ -99,6 +100,7 @@ export {
   CMD_REFRESH_CELLS, CMD_NEW_CELL, CMD_START_CELL, CMD_START_CELL_HERE, CMD_START_AGENT_HOST, CMD_STOP_AGENT_HOST, CMD_SETUP_AGENTS_WINDOW, CMD_DEFAULT_CELL, CMD_FORGET_CELL, CMD_OPEN_CELL, CMD_INSTALL_CLI, CMD_UPDATE_CLI, CMD_STOP_CELL, CMD_RENAME_CELL,
   CMD_COPY_CELL_LAUNCH, CMD_SET_CELL_PROFILE, CMD_OPEN_CELL_POLICY, VIEW_CELLS,
 };
+export { CMD_OPEN_DECK };
 export const VIEW_SESSIONS = "a4sx.sessions";
 export const VIEW_PROFILES = "a4sx.profiles";
 export const VIEW_MARKETPLACE = "a4sx.marketplace";
@@ -1081,21 +1083,34 @@ export function activate(context: vscode.ExtensionContext): void {
   };
   // a4sx #2301 E5/E6: the cell-row actions print the CLI's answers into one output channel, made when first needed
   let output: vscode.OutputChannel | undefined;
+  const outputChannel = (): vscode.OutputChannel => {
+    if (!output) {
+      output = vscode.window.createOutputChannel(OUTPUT_CHANNEL);
+      context.subscriptions.push(output);
+    }
+    return output;
+  };
   const actionDeps: CellActionDeps = {
     ...cellDeps,
     show: (title, text) => {
-      if (!output) {
-        output = vscode.window.createOutputChannel(OUTPUT_CHANNEL);
-        context.subscriptions.push(output);
-      }
-      output.appendLine(`== ${title}`);
-      output.appendLine(text);
-      output.appendLine("");
-      output.show(true);
+      outputChannel().appendLine(`== ${title}`);
+      outputChannel().appendLine(text);
+      outputChannel().appendLine("");
+      outputChannel().show(true);
     },
     refreshSessions: () => sessions.refresh(),
   };
   ownCliDeps = cellDeps;
+  // "Open deck" (11-21 backlog): the herdr plugin's deck in a VS Code terminal; its starts are checked and logged here
+  const deck = new Deck({
+    extensionPath: (context as { extensionPath?: string }).extensionPath ?? path.join(__dirname, ".."),
+    trusted: () => ensureTrusted(DECK_TEXTS.whatDeck),
+    cli: () => ensureCli(cellDeps),
+    python: () => findPython(runPython),
+    start: (req) => startDeckRequest(cellDeps, DECK_TEXTS.requestTerminal(req.label), req.cwd, req.args),
+    log: (line) => outputChannel().appendLine(line),
+  });
+  context.subscriptions.push(deck);
   const cellsView = vscode.window.createTreeView(VIEW_CELLS, { treeDataProvider: cells });
   // cell01 (#2301 E2): the agent host can stop in its terminal (Ctrl+C) without the view knowing: its status is
   // read again while the Cells view is visible and VS Code has focus, and when the window gets focus again
@@ -1115,6 +1130,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // A terminal the view started closed (a new cell may be stored, or the CLI was updated): read again.
   if (typeof vscode.window.onDidCloseTerminal === "function") {
     context.subscriptions.push(vscode.window.onDidCloseTerminal((t) => {
+      deck.closed(t);
       if (cellTerminals.delete(t)) {
         refreshAll();   // the terminal may have been an update or a new cell
       }
@@ -1216,6 +1232,7 @@ export function activate(context: vscode.ExtensionContext): void {
     cellsView,
     vscode.commands.registerCommand(CMD_REFRESH_CELLS, () => { cells.versions.clear(); return cells.refresh(); }),
     vscode.commands.registerCommand(CMD_NEW_CELL, () => newCell(cellDeps)),
+    vscode.commands.registerCommand(CMD_OPEN_DECK, () => deck.open()),
     vscode.commands.registerCommand(CMD_START_CELL, (item?: LocalCellItem) => startCell(cellDeps, item)),
     vscode.commands.registerCommand(CMD_START_CELL_HERE, (item?: RemoteCellItem) => startCellHere(cellDeps, item)),
     vscode.commands.registerCommand(CMD_CELL_MESSAGES, (item?: RemoteCellItem) => cellLastMessages(actionDeps, item)),

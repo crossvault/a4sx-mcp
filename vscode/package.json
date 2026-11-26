@@ -223,6 +223,12 @@
         "icon": "$(add)"
       },
       {
+        "command": "a4sx.openDeck",
+        "title": "Open deck",
+        "category": "a4sx",
+        "icon": "$(dashboard)"
+      },
+      {
         "command": "a4sx.startCell",
         "title": "Start in terminal",
         "category": "a4sx",
@@ -526,6 +532,11 @@
           "group": "navigation@2"
         },
         {
+          "command": "a4sx.openDeck",
+          "when": "view == a4sx.meshes",
+          "group": "navigation@3"
+        },
+        {
           "command": "a4sx.redeemMeshInvite",
           "when": "view == a4sx.meshes",
           "group": "more@1"
@@ -544,6 +555,11 @@
           "command": "a4sx.refreshCells",
           "when": "view == a4sx.cells",
           "group": "navigation@2"
+        },
+        {
+          "command": "a4sx.openDeck",
+          "when": "view == a4sx.cells",
+          "group": "navigation@3"
         },
         {
           "command": "a4sx.installCli",

@@ -10,3 +10,4 @@ node_modules/**
 .gitignore
 tsconfig.json
 **/*.ts
+**/__pycache__/**
